@@ -3,6 +3,7 @@ export {
   ZigmaFlowError,
   UserInputError,
   ValidationError,
+  WorkflowError,
   ConfigError,
   FilesystemError,
   SkillPackError,

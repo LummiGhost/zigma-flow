@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import { parseDocument } from "yaml";
 import { z } from "zod";
 
-import { FilesystemError, ValidationError } from "../utils/index.js";
+import { FilesystemError, ValidationError, WorkflowError } from "../utils/index.js";
 
 // ---------------------------------------------------------------------------
 // RouterAction schema
@@ -167,7 +167,7 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
           break;
         }
       }
-      throw new ValidationError(`Duplicate job id: ${dupKey}`, {
+      throw new WorkflowError(`Duplicate job id: ${dupKey}`, {
         details: { duplicateKey: dupKey },
       });
     }
@@ -184,7 +184,7 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
   if (dupWarning) {
     const match = /Duplicate key: (.+)/.exec(dupWarning.message);
     const dupKey = match?.[1] ?? "unknown";
-    throw new ValidationError(`Duplicate job id: ${dupKey}`, {
+    throw new WorkflowError(`Duplicate job id: ${dupKey}`, {
       details: { duplicateKey: dupKey },
     });
   }
@@ -211,7 +211,7 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
     const seenStepIds = new Set<string>();
     for (const step of job.steps) {
       if (seenStepIds.has(step.id)) {
-        throw new ValidationError(
+        throw new WorkflowError(
           `Duplicate step id "${step.id}" in job "${jobName}"`,
           {
             details: { job: jobName, duplicateStepId: step.id },

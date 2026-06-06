@@ -75,3 +75,9 @@ export class SkillPackError extends ZigmaFlowError {
     super("SkillPackError", message, 3, options);
   }
 }
+
+export class WorkflowError extends ZigmaFlowError {
+  public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
+    super("WorkflowError", message, 3, options);
+  }
+}

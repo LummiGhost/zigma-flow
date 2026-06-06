@@ -8,7 +8,8 @@ import { main } from "../../src/cli.js";
 import { loadWorkflow, loadWorkflowFile } from "../../src/workflow/index.js";
 import {
   FilesystemError,
-  ValidationError
+  ValidationError,
+  WorkflowError
 } from "../../src/utils/index.js";
 
 /**
@@ -315,8 +316,8 @@ describe("workflow semantic checks (FP-WF-SEM)", () => {
       thrown = error;
     }
 
-    expect(thrown).toBeInstanceOf(ValidationError);
-    const err = thrown as ValidationError;
+    expect(thrown).toBeInstanceOf(WorkflowError);
+    const err = thrown as WorkflowError;
     expect(JSON.stringify(err.details ?? {}).toLowerCase()).toContain("intake");
   });
 
@@ -344,8 +345,8 @@ describe("workflow semantic checks (FP-WF-SEM)", () => {
       thrown = error;
     }
 
-    expect(thrown).toBeInstanceOf(ValidationError);
-    const err = thrown as ValidationError;
+    expect(thrown).toBeInstanceOf(WorkflowError);
+    const err = thrown as WorkflowError;
     expect(JSON.stringify(err.details ?? {}).toLowerCase()).toContain("analyze");
   });
 

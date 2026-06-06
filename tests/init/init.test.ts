@@ -220,10 +220,10 @@ describe("runInit integration", () => {
 
     expect(parsed.skills).toBeDefined();
     const entry = parsed.skills?.["zigma.code-change"] as
-      | { path?: string; version?: string; hash?: string }
+      | { resolved?: string; version?: string; hash?: string }
       | undefined;
     expect(entry).toBeDefined();
-    expect(typeof entry?.path).toBe("string");
+    expect(typeof entry?.resolved).toBe("string");
     expect(typeof entry?.version).toBe("string");
     expect(typeof entry?.hash).toBe("string");
     expect((entry?.hash ?? "").length).toBeGreaterThan(0);

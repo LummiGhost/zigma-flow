@@ -240,9 +240,12 @@ export async function resolveSkillLock(baseDir: string, skillId: string): Promis
     throw new FilesystemError(`skill-lock.json not found at ${lockPath}`, { cause: e });
   }
 
-  const parsed = JSON.parse(raw) as {
-    skills?: Record<string, { resolved?: string; path?: string }>;
-  };
+  let parsed: { skills?: Record<string, { resolved?: string; path?: string }> };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch (e) {
+    throw new FilesystemError(`skill-lock.json is not valid JSON: ${lockPath}`, { cause: e });
+  }
 
   const entry = parsed.skills?.[skillId];
   if (entry === undefined) {

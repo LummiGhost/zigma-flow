@@ -116,7 +116,8 @@ jobs:
 // ---------------------------------------------------------------------------
 
 export function skillYml(): string {
-  return `kind: skill-pack
+  return `id: zigma.code-change
+kind: skill-pack
 name: zigma.code-change
 version: 1.0.0
 description: >
@@ -148,7 +149,11 @@ checks:
 functions: []
 
 policies:
-  - checks/forbidden-paths.yml
+  default_permissions:
+    contents: read
+    edits: none
+    commands: none
+    workflow_state: none
 `;
 }
 

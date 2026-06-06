@@ -5,6 +5,7 @@ export {
   ValidationError,
   ConfigError,
   FilesystemError,
+  SkillPackError,
   type ZigmaFlowErrorKind,
   type ZigmaFlowErrorOptions
 } from "./errors.js";

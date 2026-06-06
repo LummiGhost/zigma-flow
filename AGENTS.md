@@ -31,7 +31,7 @@ Default workflow:
 1. Start from `origin/main`.
 2. Create an independent git worktree as the working directory.
 3. Use a meaningful branch prefix such as `feature/`, `doc/`, `hotfix/`, `test/`, or another prefix that matches the task.
-4. Make all changes only inside the task worktree. Do not modify or disturb the main workspace.
+4. Make all changes only inside the task worktree. Do not modify or disturb the main workspace. Follow the atomic commit principle: each commit should represent a complete, self-contained change that can be reviewed and tested independently.
 5. Before opening the PR, run the necessary test or validation gates for the change.
 6. Submit the PR directly when the task is complete. Do not wait for additional confirmation unless the user explicitly asks for review before PR creation.
 7. After the PR is submitted, clean up the local worktree.

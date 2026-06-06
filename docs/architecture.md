@@ -686,3 +686,9 @@ MVP 架构验收条件：
 - `events` 不得只保存人类可读文本，必须保存结构化字段。
 - `utils` 不得成为业务规则堆放区。
 - 每个新 step type 必须先定义 schema、result contract、event contract 和 gate 行为。
+
+## 19. P0 Contract Freeze
+
+P0 的 MVP 边界和架构约束以 `docs/mvp-contracts.md` 为实现前置契约。后续 P1 及之后的叶子任务必须满足其中的公共契约、out-of-scope 清单、DoD、模块依赖、端口清单和错误分类。
+
+本文第 5 章和第 18 章仍是架构边界的主文档；`docs/mvp-contracts.md` 将这些边界转换成 Project 执行和验收时可逐项核对的 P0 冻结规则。

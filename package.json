@@ -1,0 +1,29 @@
+{
+  "name": "zigma-flow",
+  "version": "0.1.0",
+  "description": "Local Agent Workflow Runtime / Workflow Harness.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "zigma-flow": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.42",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

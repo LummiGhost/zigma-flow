@@ -15,6 +15,7 @@ import { Command } from "commander";
 import { ZigmaFlowError, getPackageInfo } from "./utils/index.js";
 import { initAction } from "./commands/init.js";
 import { validateAction } from "./commands/validate.js";
+import { runAction } from "./commands/run.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
   const packageInfo = getPackageInfo();
@@ -51,6 +52,15 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (filePath: string) => {
       await validateAction(filePath);
+    });
+
+  program
+    .command("run <workflow>")
+    .description("Create a new workflow run.")
+    .requiredOption("--task <task>", "Task description for this run.")
+    .exitOverride()
+    .action(async (workflowPath: string, options: { task: string }) => {
+      await runAction(workflowPath, options);
     });
 
   try {

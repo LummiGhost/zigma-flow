@@ -422,3 +422,70 @@ describe("validate CLI (workflow)", () => {
     expect(failureSignaled).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// DAG integration tests (WF-P3-DAG)
+// ---------------------------------------------------------------------------
+
+describe("validate — DAG validation (WF-P3-DAG integration)", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "zigma-dag-"));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reports a WorkflowError when needs references a non-existent job", async () => {
+    const yaml = `name: bad-needs
+version: 0.1.0
+jobs:
+  intake:
+    needs:
+      - nonexistent-job
+    steps:
+      - id: step1
+        type: script
+        run: echo ok
+`;
+    const file = join(tmpDir, "bad-needs.yml");
+    await writeFile(file, yaml);
+
+    const result = await runMain(["validate", file]);
+
+    expect(result.exitCode).not.toBe(0);
+    const combined = result.stderr + (result.error ? String(result.error) : "");
+    expect(combined.toLowerCase()).toMatch(/nonexistent-job|unresolved/);
+  });
+
+  it("reports a WorkflowError when the workflow DAG has a cycle", async () => {
+    const yaml = `name: cycle-wf
+version: 0.1.0
+jobs:
+  a:
+    needs:
+      - b
+    steps:
+      - id: step-a
+        type: script
+        run: echo a
+  b:
+    needs:
+      - a
+    steps:
+      - id: step-b
+        type: script
+        run: echo b
+`;
+    const file = join(tmpDir, "cycle.yml");
+    await writeFile(file, yaml);
+
+    const result = await runMain(["validate", file]);
+
+    expect(result.exitCode).not.toBe(0);
+    const combined = result.stderr + (result.error ? String(result.error) : "");
+    expect(combined.toLowerCase()).toMatch(/cycle|circular/);
+  });
+});

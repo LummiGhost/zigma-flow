@@ -18,6 +18,7 @@ import {
   snapshotSkillLock,
   writeRunYaml,
 } from "../run/index.js";
+import { nextEventId as formatEventId } from "../events/index.js";
 
 export interface CreateRunInputs {
   workflowPath: string;
@@ -81,7 +82,7 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
   // RC-R09/R10: Event counter — sequential evt-NNN ids
   let eventCounter = 1;
   function nextEventId(): string {
-    return `evt-${String(eventCounter++).padStart(3, "0")}`;
+    return formatEventId(eventCounter++);
   }
 
   // RC-R09: Append run_created event (evt-001)

@@ -81,3 +81,15 @@ export class WorkflowError extends ZigmaFlowError {
     super("WorkflowError", message, 3, options);
   }
 }
+
+export class ArtifactError extends ZigmaFlowError {
+  public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
+    super("ArtifactError", message, 1, options);
+  }
+}
+
+export class StateError extends ZigmaFlowError {
+  public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
+    super("StateError", message, 1, options);
+  }
+}

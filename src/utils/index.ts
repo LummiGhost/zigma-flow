@@ -7,6 +7,8 @@ export {
   ConfigError,
   FilesystemError,
   SkillPackError,
+  ArtifactError,
+  StateError,
   type ZigmaFlowErrorKind,
   type ZigmaFlowErrorOptions
 } from "./errors.js";

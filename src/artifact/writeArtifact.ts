@@ -9,7 +9,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { posix, join, relative } from "node:path";
 
 import { artifactId } from "./artifactMetadata.js";
-import { artifactStepDir } from "./artifactPaths.js";
+import { artifactStepDir, assertPathSafe } from "./artifactPaths.js";
 import type { ArtifactMetadata } from "./artifactMetadata.js";
 
 // ---------------------------------------------------------------------------
@@ -54,9 +54,14 @@ export async function writeArtifact(opts: WriteArtifactOpts): Promise<ArtifactMe
   const summary = opts.summary ?? "";
 
   const stepDir = artifactStepDir(runDir, job, attempt, step);
-  await mkdir(stepDir, { recursive: true });
 
+  // F-01: Validate the computed relative path before any filesystem operations.
+  // This prevents job/step/filename values containing ".." from escaping runDir.
   const fullPath = join(stepDir, filename);
+  const relPath = relative(runDir, fullPath).split("\\").join(posix.sep);
+  assertPathSafe(runDir, relPath);
+
+  await mkdir(stepDir, { recursive: true });
 
   if (typeof content === "string") {
     await writeFile(fullPath, content, "utf-8");
@@ -69,11 +74,6 @@ export async function writeArtifact(opts: WriteArtifactOpts): Promise<ArtifactMe
     typeof content === "string"
       ? Buffer.byteLength(content, "utf-8")
       : content.byteLength;
-
-  // Relative path from runDir, normalized to POSIX forward-slashes.
-  const absRelPath = relative(runDir, fullPath);
-  // Convert OS-specific separators to POSIX forward-slashes.
-  const relPath = absRelPath.split("\\").join(posix.sep);
 
   const id = artifactId(runId, job, attempt, step, filename);
   const createdAt = clock.now();

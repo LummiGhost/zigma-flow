@@ -11,6 +11,7 @@ import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { FilesystemError } from "../utils/index.js";
+import type { ZigmaFlowEvent } from "./eventTypes.js";
 
 // ---------------------------------------------------------------------------
 // WorkflowEvent — legacy event shape (retained for backward compatibility)
@@ -33,7 +34,7 @@ export interface WorkflowEvent {
 // ---------------------------------------------------------------------------
 
 export interface EventWriter {
-  appendEvent(runDir: string, event: WorkflowEvent): Promise<void>;
+  appendEvent(runDir: string, event: ZigmaFlowEvent): Promise<void>;
   readLastEventId(runDir: string): Promise<string | null>;
 }
 
@@ -42,7 +43,7 @@ export interface EventWriter {
 // ---------------------------------------------------------------------------
 
 export class JsonlEventWriter implements EventWriter {
-  async appendEvent(runDir: string, event: WorkflowEvent): Promise<void> {
+  async appendEvent(runDir: string, event: ZigmaFlowEvent): Promise<void> {
     const eventsPath = join(runDir, "events.jsonl");
     await appendFile(eventsPath, JSON.stringify(event) + "\n", "utf-8");
   }
@@ -65,7 +66,15 @@ export class JsonlEventWriter implements EventWriter {
     }
 
     const lastLine = lines[lines.length - 1]!;
-    const parsed = JSON.parse(lastLine) as WorkflowEvent;
+    let parsed: { id: string };
+    try {
+      parsed = JSON.parse(lastLine) as { id: string };
+    } catch (e: unknown) {
+      throw new FilesystemError(
+        `events.jsonl contains unparseable last line: ${e instanceof Error ? e.message : String(e)}`,
+        { cause: e }
+      );
+    }
     return parsed.id;
   }
 }

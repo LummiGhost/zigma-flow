@@ -82,7 +82,7 @@ export interface StepFailedPayload {
   job_id: string;
   step_id: string;
   attempt: number;
-  reason?: string;
+  reason: string;
 }
 
 export interface PromptGeneratedPayload {
@@ -149,7 +149,7 @@ export interface RunFailedPayload {
 export type RunCompletedPayload = Record<string, never>;
 
 export interface RunCancelledPayload {
-  reason?: string;
+  reason: string;
 }
 
 // ---------------------------------------------------------------------------

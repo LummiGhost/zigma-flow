@@ -119,7 +119,10 @@ export function renderRunStatus(
   const readyJobs: string[] = [];
   const waitingJobs: string[] = [];
   const inactiveJobs: string[] = [];
-  const fulfilledStatuses = new Set(["done", "ready"]);
+  const runningJobs: string[] = [];
+  const failedJobs: string[] = [];
+  // Only "done" satisfies a dependency — "ready" jobs are still pending execution.
+  const fulfilledStatuses = new Set(["done"]);
 
   for (const [jobId, job] of Object.entries(state.jobs)) {
     if (job.status === "ready") {
@@ -128,6 +131,10 @@ export function renderRunStatus(
       waitingJobs.push(jobId);
     } else if (job.status === "inactive") {
       inactiveJobs.push(jobId);
+    } else if (job.status === "running") {
+      runningJobs.push(jobId);
+    } else if (job.status === "failed") {
+      failedJobs.push(jobId);
     }
   }
 
@@ -138,11 +145,16 @@ export function renderRunStatus(
     lines.push("Ready:    (none)");
   }
 
+  // --- Running section ---
+  if (runningJobs.length > 0) {
+    lines.push(`Running:  ${runningJobs.join(", ")}`);
+  }
+
   // --- Waiting section (RC-S04) ---
   for (const jobId of waitingJobs) {
     const jobDef = workflowJobs[jobId];
     const needs = jobDef?.needs ?? [];
-    // Unfulfilled: needs entries NOT in a done/ready state in state.jobs
+    // Unfulfilled: needs entries NOT yet done in state.jobs
     const unfulfilled = needs.filter((dep) => {
       const depJob = state.jobs[dep];
       return depJob === undefined || !fulfilledStatuses.has(depJob.status);
@@ -159,11 +171,20 @@ export function renderRunStatus(
     lines.push(`Inactive: ${inactiveJobs.join(", ")}`);
   }
 
+  // --- Failed section ---
+  if (failedJobs.length > 0) {
+    lines.push(`Failed:   ${failedJobs.join(", ")}`);
+  }
+
   lines.push("");
 
   // --- Next section (RC-S05) ---
-  if (readyJobs.length > 0) {
+  if (failedJobs.length > 0) {
+    lines.push(`Next: zigma-flow prompt --job ${failedJobs[0]}  (retry failed job)`);
+  } else if (readyJobs.length > 0) {
     lines.push(`Next: zigma-flow prompt --job ${readyJobs[0]}`);
+  } else if (runningJobs.length > 0) {
+    lines.push(`Next: waiting for running jobs (zigma-flow status)`);
   } else if (waitingJobs.length > 0) {
     lines.push(`Next: waiting for jobs to become ready (zigma-flow status)`);
   } else if (inactiveJobs.length > 0) {

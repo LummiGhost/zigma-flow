@@ -291,19 +291,21 @@ MVP 只为外部、易变或难测依赖定义端口：
 
 MVP 错误类型用于 exit code、测试断言和用户提示。最小分类：
 
-| 错误类型 | 触发场景 | 默认处理 |
-| --- | --- | --- |
-| `ValidationError` | YAML、schema、字段、DAG、router action、report schema 不合法 | 命令返回非零，不创建或推进 run |
-| `WorkflowError` | workflow 定义内部不一致或引用缺失 | 命令返回非零，提示引用路径或 job/step id |
-| `SkillPackError` | manifest、exports、lockfile、pack 内路径错误 | 命令返回非零，提示 skill id 和导出项 |
-| `StateError` | state 损坏、非法转换、event/state 不一致 | 停止推进 run，提示恢复建议 |
-| `FilesystemError` | 文件不存在、写入失败、路径越界、原子替换失败 | 停止当前命令，不删除已有产物 |
-| `ScriptError` | exit_code 非零、timeout、进程启动失败 | 写入 ScriptResult，由 Engine/Gate 决定状态 |
-| `CheckError` | deterministic check 失败或 check 输入缺失 | 写入 CheckResult，由 Engine/Gate 决定状态 |
-| `PermissionError` | read-only job 修改工作区、禁止路径被修改、state 文件被触碰 | 阻止推进或标记 check failed |
-| `ArtifactError` | artifact path 非法、metadata 写入失败、retry 覆盖风险 | 停止当前 step，不推进状态 |
-| `ConfigError` | active run 缺失、config 损坏、工具配置不合法 | 命令返回非零，提示修复配置 |
-| `UserInputError` | CLI 参数缺失、job id 不存在、ready jobs 多于一个但未指定 | 命令返回非零，提示明确参数 |
+| 错误类型 | 触发场景 | 默认处理 | exit_code |
+| --- | --- | --- | --- |
+| `ValidationError` | YAML、schema、字段、DAG、router action、report schema 不合法 | 命令返回非零，不创建或推进 run | 3 |
+| `WorkflowError` | workflow 定义内部不一致或引用缺失 | 命令返回非零，提示引用路径或 job/step id | 3 |
+| `SkillPackError` | manifest、exports、lockfile、pack 内路径错误 | 命令返回非零，提示 skill id 和导出项 | 3 |
+| `StateError` | state 损坏、非法转换、event/state 不一致 | 停止推进 run，提示恢复建议 | 1 |
+| `FilesystemError` | 文件不存在、写入失败、路径越界、原子替换失败 | 停止当前命令，不删除已有产物 | 5 |
+| `ScriptError` | exit_code 非零、timeout、进程启动失败 | 写入 ScriptResult，由 Engine/Gate 决定状态 | 1 |
+| `CheckError` | deterministic check 失败或 check 输入缺失 | 写入 CheckResult，由 Engine/Gate 决定状态 | 1 |
+| `PermissionError` | read-only job 修改工作区、禁止路径被修改、state 文件被触碰 | 阻止推进或标记 check failed | 1 |
+| `ArtifactError` | artifact path 非法、metadata 写入失败、retry 覆盖风险 | 停止当前 step，不推进状态 | 1 |
+| `ConfigError` | active run 缺失、config 损坏、工具配置不合法 | 命令返回非零，提示修复配置 | 4 |
+| `UserInputError` | CLI 参数缺失、job id 不存在、ready jobs 多于一个但未指定 | 命令返回非零，提示明确参数 | 2 |
+
+> **设计说明**：`ValidationError`、`WorkflowError` 和 `SkillPackError` 故意共用 exit code 3，因为三者都表示"无效的定义输入"。调用方可通过错误对象的 `kind` 字段区分具体错误类型，而不是依赖 exit code。这是明确的设计决策，不是疏漏。对于尚未在 `src/utils/errors.ts` 中实现的错误类型（`StateError`、`ScriptError`、`CheckError`、`PermissionError`、`ArtifactError`），exit code 1 为计划默认值，待对应实现任务时最终确认。
 
 错误对象至少包含：
 

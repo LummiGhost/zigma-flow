@@ -22,7 +22,7 @@ const RouterActionObjectSchema = z.union([
   z.object({ retry_job: z.string() }),
   z.object({ activate_job: z.string() }),
   z.object({ goto_job: z.string() }),
-  z.object({ status: z.string() }),
+  z.object({ status: z.enum(["blocked", "failed"]) }),
 ]);
 
 const RouterActionSchema = z.union([RouterActionLiteralSchema, RouterActionObjectSchema]);
@@ -34,7 +34,7 @@ export type RouterAction =
   | { retry_job: string }
   | { activate_job: string }
   | { goto_job: string }
-  | { status: string };
+  | { status: "blocked" | "failed" };
 
 // ---------------------------------------------------------------------------
 // Step schemas

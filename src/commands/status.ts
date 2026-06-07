@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { parse as parseYaml } from "yaml";
 
-import { FilesystemError } from "../utils/index.js";
+import { FilesystemError, StateError } from "../utils/index.js";
 import { LocalStateStore, type RunState } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 
@@ -210,7 +210,17 @@ export async function statusAction(options: StatusOptions, runsDir?: string): Pr
   const runDir = await findRun(dir, options.run);
 
   const store = new LocalStateStore();
-  const state = await store.readSnapshot(runDir);
+  let state: RunState | null;
+  try {
+    state = await store.readSnapshot(runDir);
+  } catch (e: unknown) {
+    if (e instanceof StateError) {
+      // Re-throw as FilesystemError so that the status command surfaces it as a
+      // filesystem/data corruption failure (P3 behavior contract).
+      throw new FilesystemError(e.message, { cause: e });
+    }
+    throw e;
+  }
 
   if (state === null) {
     throw new FilesystemError(`state.json not found in run: ${runDir}`);

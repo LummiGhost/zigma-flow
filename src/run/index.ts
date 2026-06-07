@@ -2,16 +2,20 @@
  * Run creation infrastructure — adapters, types, and filesystem helpers.
  *
  * Reference: docs/mvp-contracts.md §2.3, §2.4
- * WF-P3-RUN Step 2.
+ * WF-P3-RUN Step 2 / WF-P4-STATE Step 2.
  */
 
-import { appendFile, copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { stringify } from "yaml";
 
-import { FilesystemError, WorkflowError } from "../utils/index.js";
+import { FilesystemError, StateError, WorkflowError } from "../utils/index.js";
+
+// Re-export event types from events/ for backward compatibility.
+export type { EventWriter, WorkflowEvent } from "../events/index.js";
+export { JsonlEventWriter } from "../events/index.js";
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -28,12 +32,17 @@ export interface IdGenerator {
 export interface StateStore {
   readSnapshot(runDir: string): Promise<RunState | null>;
   writeSnapshot(runDir: string, state: RunState): Promise<void>;
-  validateLastEventId(runDir: string, expectedEventId: string): Promise<void>;
-}
-
-export interface EventWriter {
-  appendEvent(runDir: string, event: WorkflowEvent): Promise<void>;
-  readLastEventId(runDir: string): Promise<string | null>;
+  /**
+   * Validate last event id consistency.
+   *
+   * Overloads:
+   * - `validateLastEventId(runDir)` — reads events.jsonl tail and compares to
+   *   snapshot.last_event_id; throws StateError on mismatch (WF-P4-STATE).
+   * - `validateLastEventId(runDir, expectedEventId)` — compares snapshot
+   *   last_event_id to the supplied string; throws WorkflowError on mismatch
+   *   (backward compat with P3 callers).
+   */
+  validateLastEventId(runDir: string, expectedEventId?: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -51,16 +60,9 @@ export interface RunState {
   workflow: string;      // workflow name (NOT path)
   task: string;
   created_at: string;    // ISO 8601
+  status?: "running" | "blocked" | "failed" | "completed" | "cancelled"; // mvp-contracts §2.3
   last_event_id: string; // id of tail event in events.jsonl
   jobs: Record<string, JobState>;
-}
-
-export interface WorkflowEvent {
-  id: string;            // "evt-001", "evt-002", ...
-  type: string;          // "run_created" | "job_ready"
-  run_id: string;
-  timestamp: string;     // ISO 8601
-  payload: Record<string, unknown>;
 }
 
 export interface RunYamlMeta {
@@ -111,18 +113,53 @@ export class LocalRunIdGenerator implements IdGenerator {
   }
 }
 
+/**
+ * Minimal shape check for RunState — verifies all required string/object fields
+ * are present and non-null. Throws StateError if invalid.
+ */
+function isValidRunState(value: unknown): value is RunState {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj["run_id"] === "string" &&
+    typeof obj["workflow"] === "string" &&
+    typeof obj["task"] === "string" &&
+    typeof obj["created_at"] === "string" &&
+    typeof obj["last_event_id"] === "string" &&
+    typeof obj["jobs"] === "object" &&
+    obj["jobs"] !== null
+  );
+}
+
 export class LocalStateStore implements StateStore {
   async readSnapshot(runDir: string): Promise<RunState | null> {
     const statePath = join(runDir, "state.json");
+    let text: string;
     try {
-      const text = await readFile(statePath, "utf-8");
-      return JSON.parse(text) as RunState;
+      text = await readFile(statePath, "utf-8");
     } catch (e: unknown) {
       if (isEnoent(e)) {
         return null;
       }
       throw new FilesystemError(`Cannot read state.json in: ${runDir}`, { cause: e });
     }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e: unknown) {
+      throw new StateError(`state.json contains invalid JSON in: ${runDir}`, { cause: e });
+    }
+
+    if (!isValidRunState(parsed)) {
+      throw new StateError(`state.json is missing required fields in: ${runDir}`, {
+        details: { runDir },
+      });
+    }
+
+    return parsed;
   }
 
   async writeSnapshot(runDir: string, state: RunState): Promise<void> {
@@ -133,44 +170,55 @@ export class LocalStateStore implements StateStore {
     await rename(tmpPath, statePath);
   }
 
-  async validateLastEventId(runDir: string, expectedEventId: string): Promise<void> {
+  /**
+   * Validate event/state consistency.
+   *
+   * - If `expectedEventId` is provided: compares snapshot.last_event_id to
+   *   it and throws WorkflowError on mismatch (legacy P3 behavior).
+   * - If `expectedEventId` is omitted: reads events.jsonl tail and compares
+   *   to snapshot.last_event_id; throws StateError on mismatch or missing log.
+   */
+  async validateLastEventId(runDir: string, expectedEventId?: string): Promise<void> {
+    if (expectedEventId !== undefined) {
+      // Legacy path: compare snapshot against the caller-supplied id.
+      const snap = await this.readSnapshot(runDir);
+      const actual = snap?.last_event_id;
+      if (actual !== expectedEventId) {
+        throw new WorkflowError(
+          `Event id mismatch: expected "${expectedEventId}", got "${actual ?? "null"}"`,
+          { details: { expected: expectedEventId, actual: actual ?? null } }
+        );
+      }
+      return;
+    }
+
+    // New path: read events.jsonl tail and compare to snapshot.
+    const { JsonlEventWriter } = await import("../events/index.js");
+    const eventWriter = new JsonlEventWriter();
+    const eventsTailId = await eventWriter.readLastEventId(runDir);
+
     const snap = await this.readSnapshot(runDir);
-    const actual = snap?.last_event_id;
-    if (actual !== expectedEventId) {
-      throw new WorkflowError(
-        `Event id mismatch: expected "${expectedEventId}", got "${actual ?? "null"}"`,
-        { details: { expected: expectedEventId, actual: actual ?? null } }
+    const snapshotLastEventId = snap?.last_event_id ?? null;
+
+    if (eventsTailId === null) {
+      // events.jsonl is missing or empty but snapshot records an event id.
+      throw new StateError(
+        `events.jsonl is missing or empty but snapshot.last_event_id is "${snapshotLastEventId ?? "null"}"`,
+        { details: { snapshot_last_event_id: snapshotLastEventId, events_tail_id: null } }
       );
     }
-  }
-}
 
-export class JsonlEventWriter implements EventWriter {
-  async appendEvent(runDir: string, event: WorkflowEvent): Promise<void> {
-    const eventsPath = join(runDir, "events.jsonl");
-    await appendFile(eventsPath, JSON.stringify(event) + "\n", "utf-8");
-  }
-
-  async readLastEventId(runDir: string): Promise<string | null> {
-    const eventsPath = join(runDir, "events.jsonl");
-    let text: string;
-    try {
-      text = await readFile(eventsPath, "utf-8");
-    } catch (e: unknown) {
-      if (isEnoent(e)) {
-        return null;
-      }
-      throw new FilesystemError(`Cannot read events.jsonl in: ${runDir}`, { cause: e });
+    if (snapshotLastEventId !== eventsTailId) {
+      throw new StateError(
+        `Event/state divergence: snapshot.last_event_id="${snapshotLastEventId ?? "null"}", events.jsonl tail="${eventsTailId}"`,
+        {
+          details: {
+            snapshot_last_event_id: snapshotLastEventId,
+            events_tail_id: eventsTailId,
+          },
+        }
+      );
     }
-
-    const lines = text.split("\n").filter((line) => line.trim().length > 0);
-    if (lines.length === 0) {
-      return null;
-    }
-
-    const lastLine = lines[lines.length - 1]!;
-    const parsed = JSON.parse(lastLine) as WorkflowEvent;
-    return parsed.id;
   }
 }
 

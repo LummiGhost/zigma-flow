@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import type { Clock, RunState, RunYamlMeta, WorkflowEvent } from "../../src/run/index.js";
+import type { ZigmaFlowEvent } from "../../src/events/index.js";
 import {
   JsonlEventWriter,
   LocalRunIdGenerator,
@@ -181,12 +182,16 @@ describe("JsonlEventWriter", () => {
 
   it("appendEvent then readLastEventId returns the single appended id (T-EVENT-1, UC-EVENT-1)", async () => {
     const writer = new JsonlEventWriter();
-    const event: WorkflowEvent = {
+    const event: ZigmaFlowEvent = {
       id: "evt-001",
       type: "run_created",
       run_id: "20260607-0001",
       timestamp: FIXED_ISO,
-      payload: {},
+      producer: "engine",
+      job: null,
+      step: null,
+      attempt: null,
+      payload: { workflow: "code-change", task: "test" },
     };
     await writer.appendEvent(runDir, event);
     const lastId = await writer.readLastEventId(runDir);
@@ -195,18 +200,26 @@ describe("JsonlEventWriter", () => {
 
   it("appendEvent twice and readLastEventId returns the second id (T-EVENT-2, UC-EVENT-2)", async () => {
     const writer = new JsonlEventWriter();
-    const ev1: WorkflowEvent = {
+    const ev1: ZigmaFlowEvent = {
       id: "evt-001",
       type: "run_created",
       run_id: "20260607-0001",
       timestamp: FIXED_ISO,
-      payload: {},
+      producer: "engine",
+      job: null,
+      step: null,
+      attempt: null,
+      payload: { workflow: "code-change", task: "test" },
     };
-    const ev2: WorkflowEvent = {
+    const ev2: ZigmaFlowEvent = {
       id: "evt-002",
       type: "job_ready",
       run_id: "20260607-0001",
       timestamp: FIXED_ISO,
+      producer: "engine",
+      job: null,
+      step: null,
+      attempt: null,
       payload: { job_id: "intake" },
     };
     await writer.appendEvent(runDir, ev1);

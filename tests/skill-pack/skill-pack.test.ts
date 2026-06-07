@@ -397,7 +397,8 @@ describe("validate CLI (skill pack)", () => {
       (typeof result.exitCode === "number" && result.exitCode !== 0) ||
       result.error !== undefined;
     expect(failureSignaled).toBe(true);
-    // Field-level message must surface the offending field name.
-    expect(result.stderr.toLowerCase()).toContain("kind");
+    // With content-based dispatch (Issue #5), kind != "skill-pack" routes to workflow loader.
+    // The workflow loader reports a validation error because the file lacks required workflow fields.
+    expect(result.stderr.toLowerCase()).toContain("validation");
   });
 });

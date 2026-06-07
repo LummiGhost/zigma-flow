@@ -16,6 +16,7 @@ import { ZigmaFlowError, getPackageInfo } from "./utils/index.js";
 import { initAction } from "./commands/init.js";
 import { validateAction } from "./commands/validate.js";
 import { runAction } from "./commands/run.js";
+import { statusAction } from "./commands/status.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
   const packageInfo = getPackageInfo();
@@ -61,6 +62,15 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (workflowPath: string, options: { task: string }) => {
       await runAction(workflowPath, options);
+    });
+
+  program
+    .command("status")
+    .description("Show the status of a workflow run.")
+    .option("--run <run_id>", "Specific run id to show (defaults to latest).")
+    .exitOverride()
+    .action(async (options: { run?: string }) => {
+      await statusAction(options);
     });
 
   try {

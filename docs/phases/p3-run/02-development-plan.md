@@ -76,7 +76,7 @@
 
 **预研：** 无。DFS 循环检测算法已知，无需预研。
 
-**状态：** `planned`
+**状态：** `done` — 验收通过 2026-06-07（Step 3 Round 3）；PR #10；Issue #7 已关闭
 
 ---
 
@@ -227,6 +227,6 @@ WF-P3-DAG  →  WF-P3-RUN  →  WF-P3-STATUS
 
 | 工作流 | 状态 | 下一动作 |
 |---|---|---|
-| WF-P3-DAG | `blocked` | Step 1 完成（commit 6b7f15a）；等待 PR #9 (fix/p2-cleanup) 合并后派发 Step 2 subagent（sonnet） |
-| WF-P3-RUN | `planned` | 等待 WF-P3-DAG 完成后启动 |
+| WF-P3-DAG | `done` | 验收通过（2026-06-07，Round 3）；PR #10；Issue #7 已关闭 |
+| WF-P3-RUN | `in-dev` | Step 1 启动中 |
 | WF-P3-STATUS | `planned` | 等待 WF-P3-RUN 完成后启动 |

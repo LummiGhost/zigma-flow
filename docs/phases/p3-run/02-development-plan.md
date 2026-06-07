@@ -227,6 +227,6 @@ WF-P3-DAG  →  WF-P3-RUN  →  WF-P3-STATUS
 
 | 工作流 | 状态 | 下一动作 |
 |---|---|---|
-| WF-P3-DAG | `planned` | 等待 fix/p2-cleanup 合并后，派发 Step 1 subagent（opus） |
+| WF-P3-DAG | `blocked` | Step 1 完成（commit 6b7f15a）；等待 PR #9 (fix/p2-cleanup) 合并后派发 Step 2 subagent（sonnet） |
 | WF-P3-RUN | `planned` | 等待 WF-P3-DAG 完成后启动 |
 | WF-P3-STATUS | `planned` | 等待 WF-P3-RUN 完成后启动 |

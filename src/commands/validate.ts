@@ -15,11 +15,12 @@ import { dirname } from "node:path";
 import { parse } from "yaml";
 
 import { loadSkillPack } from "../skill-pack/index.js";
+import { FilesystemError } from "../utils/index.js";
 import { loadWorkflow } from "../workflow/index.js";
 
 export async function validateAction(filePath: string): Promise<void> {
   const text = await readFile(filePath, "utf-8").catch((e: unknown) => {
-    throw Object.assign(new Error(`Cannot read file: ${filePath}`), { cause: e });
+    throw new FilesystemError(`Cannot read file: ${filePath}`, { cause: e });
   });
 
   let kind: unknown;

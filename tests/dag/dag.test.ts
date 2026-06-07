@@ -15,9 +15,6 @@ import {
  * importing the full `JobDefinition` from `src/workflow/index.ts`, to keep the
  * test layer decoupled from non-DAG schema concerns.
  *
- * These tests will not compile until Step 2 supplies `src/dag/index.ts` and
- * exports the three functions used below. That red state is expected.
- *
  * Reference:
  *   - docs/prd.md FR-002 (RC-07, RC-08)
  *   - docs/architecture.md §5.2 (dag module boundary), §6.2 (WorkflowDefinition invariants)

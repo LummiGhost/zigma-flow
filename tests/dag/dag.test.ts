@@ -40,11 +40,10 @@ type JobMap = Record<string, DagJob>;
 const STEPS_EMPTY: unknown[] = [];
 
 function job(needs?: string[], optional_needs?: string[]): DagJob {
-  return {
-    needs,
-    optional_needs,
-    steps: STEPS_EMPTY,
-  };
+  const j: DagJob = { steps: STEPS_EMPTY };
+  if (needs !== undefined) j.needs = needs;
+  if (optional_needs !== undefined) j.optional_needs = optional_needs;
+  return j;
 }
 
 // ---------------------------------------------------------------------------

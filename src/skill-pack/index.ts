@@ -240,21 +240,29 @@ export async function resolveSkillLock(baseDir: string, skillId: string): Promis
     throw new FilesystemError(`skill-lock.json not found at ${lockPath}`, { cause: e });
   }
 
-  let parsed: { skills?: Record<string, { resolved?: string; path?: string }> };
+  let rawParsed: unknown;
   try {
-    parsed = JSON.parse(raw) as typeof parsed;
+    rawParsed = JSON.parse(raw);
   } catch (e) {
-    throw new FilesystemError(`skill-lock.json is not valid JSON: ${lockPath}`, { cause: e });
+    throw new ValidationError(`skill-lock.json is not valid JSON: ${lockPath}`, { cause: e });
   }
 
-  const entry = parsed.skills?.[skillId];
+  const lockResult = SkillLockSchema.safeParse(rawParsed);
+  if (!lockResult.success) {
+    const paths = lockResult.error.issues.map((i) => i.path.join("."));
+    throw new ValidationError(`skill-lock.json failed schema validation at: ${paths[0] ?? "root"}`, {
+      details: { fields: paths },
+    });
+  }
+
+  const entry = lockResult.data.skills[skillId];
   if (entry === undefined) {
     throw new SkillPackError(`Skill "${skillId}" not found in skill-lock.json`, {
       details: { skillId, lockPath },
     });
   }
 
-  // Support both "resolved" (new) and "path" (legacy) fields
+  // Support both "resolved" (canonical) and "path" (legacy) fields
   const resolvedUri = entry.resolved ?? entry.path;
 
   if (!resolvedUri?.startsWith("local://")) {
@@ -268,3 +276,19 @@ export async function resolveSkillLock(baseDir: string, skillId: string): Promis
   const localPath = resolvedUri.slice("local://".length);
   return join(baseDir, ".zigma-flow", localPath);
 }
+
+// ---------------------------------------------------------------------------
+// SkillLockSchema — validates the canonical skill-lock.json structure
+// Reference: docs/prd.md §9, architecture.md §6.2 (SkillPack invariants)
+// ---------------------------------------------------------------------------
+
+const SkillLockEntrySchema = z.object({
+  resolved: z.string().optional(),
+  path: z.string().optional(), // legacy alias for resolved
+  version: z.string(),
+  hash: z.string(),
+});
+
+export const SkillLockSchema = z.object({
+  skills: z.record(z.string(), SkillLockEntrySchema),
+});

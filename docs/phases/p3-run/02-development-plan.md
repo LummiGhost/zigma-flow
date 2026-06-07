@@ -172,7 +172,7 @@
 
 **预研：** 无。
 
-**状态：** `planned`
+**状态：** `done` — 验收通过 2026-06-07（Step 3 Round 2）；PR #10
 
 ---
 
@@ -229,4 +229,4 @@ WF-P3-DAG  →  WF-P3-RUN  →  WF-P3-STATUS
 |---|---|---|
 | WF-P3-DAG | `done` | 验收通过（2026-06-07，Round 3）；PR #10；Issue #7 已关闭 |
 | WF-P3-RUN | `done` | 验收通过 2026-06-07（Step 3 Round 2）；PR #10 |
-| WF-P3-STATUS | `in-dev` | Step 1 启动中 |
+| WF-P3-STATUS | `done` | 验收通过 2026-06-07（Step 3 Round 2）；PR #10 |

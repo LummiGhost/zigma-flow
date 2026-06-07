@@ -10,6 +10,7 @@ import { readFile } from "node:fs/promises";
 import { parseDocument } from "yaml";
 import { z } from "zod";
 
+import { detectCycles, validateNeedsReferences } from "../dag/index.js";
 import { FilesystemError, ValidationError, WorkflowError } from "../utils/index.js";
 
 // ---------------------------------------------------------------------------
@@ -243,6 +244,25 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
         }
       }
     }
+  }
+
+  // 7. DAG: needs/optional_needs reference validation (RC-07, TD-P2-001)
+  const needsResult = validateNeedsReferences(wf.jobs);
+  if (!needsResult.valid) {
+    throw new WorkflowError(
+      `Workflow has unresolved job references: ${needsResult.errors[0]}`,
+      { details: { errors: needsResult.errors } }
+    );
+  }
+
+  // 8. DAG: cycle detection (RC-08, TD-P2-001)
+  const cycles = detectCycles(wf.jobs);
+  if (cycles !== null) {
+    const path = cycles[0]?.join(" -> ") ?? "unknown";
+    throw new WorkflowError(
+      `Workflow DAG contains a cycle: ${path}`,
+      { details: { cycles } }
+    );
   }
 
   return wf;

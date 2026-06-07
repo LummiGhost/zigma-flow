@@ -69,3 +69,15 @@ export class FilesystemError extends ZigmaFlowError {
     super("FilesystemError", message, 5, options);
   }
 }
+
+export class SkillPackError extends ZigmaFlowError {
+  public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
+    super("SkillPackError", message, 3, options);
+  }
+}
+
+export class WorkflowError extends ZigmaFlowError {
+  public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
+    super("WorkflowError", message, 3, options);
+  }
+}

@@ -31,7 +31,7 @@ export function skillLockJsonTemplate(skillManifestContent: string): string {
     {
       skills: {
         "zigma.code-change": {
-          path: "local://skills/code-change",
+          resolved: "local://skills/code-change",
           version: "1.0.0",
           hash
         }

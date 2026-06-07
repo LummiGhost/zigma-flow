@@ -14,6 +14,7 @@ import { Command } from "commander";
 
 import { ZigmaFlowError, getPackageInfo } from "./utils/index.js";
 import { initAction } from "./commands/init.js";
+import { validateAction } from "./commands/validate.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
   const packageInfo = getPackageInfo();
@@ -42,6 +43,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async () => {
       await initAction();
+    });
+
+  program
+    .command("validate <path>")
+    .description("Validate a workflow YAML or Skill Pack manifest.")
+    .exitOverride()
+    .action(async (filePath: string) => {
+      await validateAction(filePath);
     });
 
   try {

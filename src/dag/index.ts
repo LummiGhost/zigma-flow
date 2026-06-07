@@ -97,7 +97,10 @@ export function detectCycles(jobs: DagJobs): string[][] | null {
       const neighborColor = color.get(neighborId);
 
       if (neighborColor === "grey") {
-        // Found a cycle — extract the cycle path from the stack
+        // Found a cycle — extract the cycle path from the stack.
+        // We break after recording the first back-edge per frame; the normal
+        // cleanup (pop + blacken) still runs after the loop.  This is sufficient
+        // for the binary cycle/no-cycle signal that loadWorkflow requires.
         const cycleStart = stack.indexOf(neighborId);
         const cyclePath =
           cycleStart >= 0

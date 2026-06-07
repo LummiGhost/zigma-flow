@@ -2,7 +2,7 @@
  * Workflow loader — parses and validates YAML workflow definitions.
  *
  * Reference: docs/prd.md FR-002, §12 (workflow schema).
- * WF-P2-VALIDATE Step 2.
+ * WF-P2-VALIDATE Step 2; DAG integration added in WF-P3-DAG Step 2.
  */
 
 import { readFile } from "node:fs/promises";

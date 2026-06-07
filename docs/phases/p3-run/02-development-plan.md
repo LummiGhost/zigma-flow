@@ -134,7 +134,7 @@
 
 **预研：** 无。端口/适配器模式已在 architecture.md 中定义，无需预研。
 
-**状态：** `planned`
+**状态：** `done` — 验收通过 2026-06-07（Step 3 Round 2）；PR #10
 
 ---
 
@@ -228,5 +228,5 @@ WF-P3-DAG  →  WF-P3-RUN  →  WF-P3-STATUS
 | 工作流 | 状态 | 下一动作 |
 |---|---|---|
 | WF-P3-DAG | `done` | 验收通过（2026-06-07，Round 3）；PR #10；Issue #7 已关闭 |
-| WF-P3-RUN | `in-dev` | Step 1 启动中 |
-| WF-P3-STATUS | `planned` | 等待 WF-P3-RUN 完成后启动 |
+| WF-P3-RUN | `done` | 验收通过 2026-06-07（Step 3 Round 2）；PR #10 |
+| WF-P3-STATUS | `in-dev` | Step 1 启动中 |

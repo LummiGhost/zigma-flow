@@ -15,17 +15,19 @@ import { dirname } from "node:path";
 import { parse } from "yaml";
 
 import { loadSkillPack } from "../skill-pack/index.js";
-import { loadWorkflowFile } from "../workflow/index.js";
+import { loadWorkflow } from "../workflow/index.js";
 
 export async function validateAction(filePath: string): Promise<void> {
-  // Peek-parse to determine kind before routing (content is authoritative over filename).
+  const text = await readFile(filePath, "utf-8").catch((e: unknown) => {
+    throw Object.assign(new Error(`Cannot read file: ${filePath}`), { cause: e });
+  });
+
   let kind: unknown;
   try {
-    const text = await readFile(filePath, "utf-8");
     const top = parse(text) as Record<string, unknown> | null;
     kind = top?.kind;
   } catch {
-    // If we can't read/parse, fall through to workflow loader which will report the error.
+    // parse failure — fall through to workflow loader which will report the error
   }
 
   if (kind === "skill-pack") {
@@ -33,7 +35,7 @@ export async function validateAction(filePath: string): Promise<void> {
     await loadSkillPack(packRoot);
     console.log(`valid: ${filePath}`);
   } else {
-    await loadWorkflowFile(filePath);
+    loadWorkflow(text);            // synchronous; reuses already-read text
     console.log(`valid: ${filePath}`);
   }
 }

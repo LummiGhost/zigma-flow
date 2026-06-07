@@ -250,7 +250,7 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
   const needsResult = validateNeedsReferences(wf.jobs);
   if (!needsResult.valid) {
     throw new WorkflowError(
-      `Workflow has unresolved job references: ${needsResult.errors[0]}`,
+      `Workflow has ${needsResult.errors.length} unresolved job reference(s): ${needsResult.errors.join("; ")}`,
       { details: { errors: needsResult.errors } }
     );
   }

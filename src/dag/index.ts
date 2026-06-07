@@ -79,11 +79,9 @@ type Color = "white" | "grey" | "black";
  */
 export function detectCycles(jobs: DagJobs): string[][] | null {
   const color = new Map<string, Color>();
-  const parent = new Map<string, string | null>();
 
   for (const jobId of Object.keys(jobs)) {
     color.set(jobId, "white");
-    parent.set(jobId, null);
   }
 
   const cycles: string[][] = [];
@@ -106,6 +104,7 @@ export function detectCycles(jobs: DagJobs): string[][] | null {
             ? [...stack.slice(cycleStart), neighborId]
             : [neighborId, neighborId];
         cycles.push(cyclePath);
+        break;
       } else if (neighborColor === "white") {
         dfs(neighborId, stack);
       }

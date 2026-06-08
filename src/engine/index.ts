@@ -5,10 +5,12 @@
  * WF-P3-RUN Step 2.
  */
 
+import { dirname } from "node:path";
+
 import { computeReadyJobs } from "../dag/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { Clock, RunState } from "../run/index.js";
-import { WorkflowError } from "../utils/index.js";
+import { ConfigError, WorkflowError } from "../utils/index.js";
 import {
   JsonlEventWriter,
   LocalRunIdGenerator,
@@ -16,6 +18,7 @@ import {
   SystemClock,
   createRunDirectory,
   snapshotSkillLock,
+  writeActiveRun,
   writeRunYaml,
 } from "../run/index.js";
 import { nextEventId as formatEventId } from "../events/index.js";
@@ -136,6 +139,17 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
 
   // RC-R07/R11: Atomically write state.json via StateStore (Engine is sole writer)
   await stateStore.writeSnapshot(runDir, state);
+
+  // WF-P5-PROMPT: Write active_run pointer to config.json.
+  // runsDir = <project>/.zigma-flow/runs → zigmaflowDir = <project>
+  const zigmaflowDir = dirname(dirname(inputs.runsDir));
+  try {
+    await writeActiveRun(zigmaflowDir, runId);
+  } catch (e: unknown) {
+    // Suppress ConfigError (config.json not yet created — first run / test setups).
+    // Re-throw all other errors (permission denied, disk full, etc.).
+    if (!(e instanceof ConfigError)) throw e;
+  }
 
   return { runId };
 }

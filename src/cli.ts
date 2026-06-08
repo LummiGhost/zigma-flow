@@ -17,6 +17,8 @@ import { initAction } from "./commands/init.js";
 import { validateAction } from "./commands/validate.js";
 import { runAction } from "./commands/run.js";
 import { statusAction } from "./commands/status.js";
+import { promptAction } from "./commands/prompt.js";
+import { SystemClock } from "./run/index.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
   const packageInfo = getPackageInfo();
@@ -71,6 +73,19 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (options: { run?: string }) => {
       await statusAction(options);
+    });
+
+  program
+    .command("prompt")
+    .description("Generate an agent prompt for the current step of the active run.")
+    .option("--job <job>", "Job id to generate a prompt for (defaults to the single ready job).")
+    .exitOverride()
+    .action(async (options: { job?: string }) => {
+      await promptAction({
+        zigmaflowDir: process.cwd(),
+        ...(options.job !== undefined ? { job: options.job } : {}),
+        clock: new SystemClock(),
+      });
     });
 
   try {

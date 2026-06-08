@@ -162,6 +162,16 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
     jobId = readyJobs[0]!;
   }
 
+  // Guard: job must be "ready" — only ready jobs can start an agent step
+  const selectedJobState = state.jobs[jobId];
+  if (selectedJobState?.status !== "ready") {
+    throw new StateError(
+      `Job "${jobId}" is in status "${selectedJobState?.status ?? "unknown"}", not "ready". ` +
+      `Cannot generate prompt for a non-ready job.`,
+      { details: { jobId, status: selectedJobState?.status } }
+    );
+  }
+
   // 6. Build context (this also validates the job exists in workflowDef and picks the step)
   const bundle = await buildContext({
     runDir,

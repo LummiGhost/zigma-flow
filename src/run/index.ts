@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 
 import { stringify } from "yaml";
 
-import { FilesystemError, StateError, WorkflowError } from "../utils/index.js";
+import { ConfigError, FilesystemError, StateError, WorkflowError } from "../utils/index.js";
 
 // Re-export event types from events/ for backward compatibility.
 export type { EventWriter, WorkflowEvent } from "../events/index.js";
@@ -248,6 +248,79 @@ export async function snapshotSkillLock(runDir: string, skillLockPath: string): 
     }
     throw new FilesystemError(`Cannot copy skill lock file: ${skillLockPath}`, { cause: e });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Active run pointer helpers — WF-P5-PROMPT
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the active run id from `.zigma-flow/config.json`.
+ * Returns null if config.json is missing or `active_run` is null/absent.
+ *
+ * Full implementation: WF-P5-PROMPT Step 2.
+ */
+export async function readActiveRun(zigmaflowDir: string): Promise<string | null> {
+  const configPath = join(zigmaflowDir, ".zigma-flow", "config.json");
+  let text: string;
+  try {
+    text = await readFile(configPath, "utf-8");
+  } catch (e: unknown) {
+    if (isEnoent(e)) {
+      return null;
+    }
+    throw new FilesystemError(`Cannot read config.json at: ${configPath}`, { cause: e });
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const cfg = parsed as Record<string, unknown>;
+  const activeRun = cfg["active_run"];
+  return typeof activeRun === "string" ? activeRun : null;
+}
+
+/**
+ * Write the active run id into `.zigma-flow/config.json`.
+ * Throws ConfigError if config.json does not exist.
+ *
+ * Full implementation: WF-P5-PROMPT Step 2.
+ */
+export async function writeActiveRun(zigmaflowDir: string, runId: string): Promise<void> {
+  const configPath = join(zigmaflowDir, ".zigma-flow", "config.json");
+  let text: string;
+  try {
+    text = await readFile(configPath, "utf-8");
+  } catch (e: unknown) {
+    if (isEnoent(e)) {
+      throw new ConfigError(
+        `config.json not found; cannot write active_run: ${configPath}`,
+        { cause: e }
+      );
+    }
+    throw new FilesystemError(`Cannot read config.json at: ${configPath}`, { cause: e });
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e: unknown) {
+    throw new ConfigError(`config.json contains invalid JSON at: ${configPath}`, { cause: e });
+  }
+
+  const cfg = (typeof parsed === "object" && parsed !== null
+    ? parsed
+    : {}) as Record<string, unknown>;
+
+  const updated = { ...cfg, active_run: runId };
+  const tmpPath = join(zigmaflowDir, ".zigma-flow", `config.json.tmp-${randomUUID()}`);
+  await writeFile(tmpPath, JSON.stringify(updated, null, 2), "utf-8");
+  await rename(tmpPath, configPath);
 }
 
 // ---------------------------------------------------------------------------

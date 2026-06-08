@@ -218,7 +218,7 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
     type: "prompt_generated",
     run_id: activeRunId,
     timestamp: clock.now(),
-    producer: "engine",
+    producer: "prompt-command",
     job: jobId,
     step: bundle.stepId,
     attempt,
@@ -238,6 +238,7 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
       [jobId]: {
         ...state.jobs[jobId],
         status: "running" as const,
+        attempt,
       },
     },
   };

@@ -19,9 +19,8 @@
  * WF-P5-PROMPT Step 2.
  */
 
-import { readFile, writeFile, rename } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 
 import { parse as parseYaml } from "yaml";
 
@@ -243,11 +242,7 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
     },
   };
 
-  // Atomic write of state.json
-  const statePath = join(runDir, "state.json");
-  const tmpPath = join(runDir, `state.json.tmp-${randomUUID()}`);
-  await writeFile(tmpPath, JSON.stringify(updatedState, null, 2), "utf-8");
-  await rename(tmpPath, statePath);
+  await stateStore.writeSnapshot(runDir, updatedState);
 
   // 10. Print output path
   const mirrorPath = join(runDir, "current-step.md");

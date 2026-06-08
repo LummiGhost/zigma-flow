@@ -134,6 +134,13 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
         { details: { job: opts.job, available: Object.keys(workflowDef.jobs) } }
       );
     }
+    // Fix P1-2: guard for job existing in run state as well as workflow definition
+    if (!(opts.job in state.jobs)) {
+      throw new StateError(
+        `Job "${opts.job}" exists in workflow but not in run state`,
+        { details: { job: opts.job, runId: activeRunId } }
+      );
+    }
     jobId = opts.job;
   } else {
     // Auto-detect: find ready jobs
@@ -174,6 +181,9 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
     );
   }
 
+  // Fix P2-1: read attempt from job state rather than hard-coding 1
+  const attempt = state.jobs[jobId]?.attempt ?? 1;
+
   // 7. Build and write prompt (must happen before state mutation)
   const promptText = buildAgentPrompt(bundle);
   const { artifactRef } = await writePromptArtifact({
@@ -181,17 +191,28 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
     runId: activeRunId,
     jobId,
     stepId: bundle.stepId,
-    attempt: 1,
+    attempt,
     prompt: promptText,
     clock,
   });
 
   // 8. Append prompt_generated event
-  // Determine next event counter from the current last_event_id
-  const lastEventId = state.last_event_id;
-  const lastNum = parseInt(lastEventId.replace("evt-", ""), 10);
-  const newEventNum = lastNum + 1;
-  const newEventId = nextEventId(newEventNum);
+  // Fix P1-1: read authoritative tail from events.jsonl rather than state.last_event_id
+  const currentTail = await eventWriter.readLastEventId(runDir);
+  if (currentTail === null) {
+    throw new StateError(
+      `events.jsonl is missing or empty for run "${activeRunId}" — cannot derive event counter`,
+      { details: { runDir } }
+    );
+  }
+  const lastNum = parseInt(currentTail.replace("evt-", ""), 10);
+  if (isNaN(lastNum)) {
+    throw new StateError(
+      `Cannot derive event counter from last event id: ${currentTail}`,
+      { details: { runDir, currentTail } }
+    );
+  }
+  const newEventId = nextEventId(lastNum + 1);
 
   await eventWriter.appendEvent(runDir, {
     id: newEventId,
@@ -201,7 +222,7 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
     producer: "engine",
     job: jobId,
     step: bundle.stepId,
-    attempt: 1,
+    attempt,
     payload: {
       job_id: jobId,
       step_id: bundle.stepId,
@@ -216,7 +237,7 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
     jobs: {
       ...state.jobs,
       [jobId]: {
-        ...state.jobs[jobId]!,
+        ...state.jobs[jobId],
         status: "running" as const,
       },
     },

@@ -10,7 +10,7 @@ import { dirname } from "node:path";
 import { computeReadyJobs } from "../dag/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { Clock, RunState } from "../run/index.js";
-import { WorkflowError } from "../utils/index.js";
+import { ConfigError, WorkflowError } from "../utils/index.js";
 import {
   JsonlEventWriter,
   LocalRunIdGenerator,
@@ -145,9 +145,10 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
   const zigmaflowDir = dirname(dirname(inputs.runsDir));
   try {
     await writeActiveRun(zigmaflowDir, runId);
-  } catch {
-    // active_run update is best-effort — config.json may not exist in
-    // all test setups (e.g. older integration tests). Do not fail createRun.
+  } catch (e: unknown) {
+    // Suppress ConfigError (config.json not yet created — first run / test setups).
+    // Re-throw all other errors (permission denied, disk full, etc.).
+    if (!(e instanceof ConfigError)) throw e;
   }
 
   return { runId };

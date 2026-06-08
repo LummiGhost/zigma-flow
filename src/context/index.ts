@@ -12,7 +12,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { loadSkillPack, resolveSkillLock, SkillLockSchema } from "../skill-pack/index.js";
-import { WorkflowError } from "../utils/index.js";
+import { FilesystemError, WorkflowError } from "../utils/index.js";
 import { resolveExpression } from "../expression/index.js";
 import type { WorkflowDefinition } from "../workflow/index.js";
 import type { RunState } from "../run/index.js";
@@ -196,7 +196,15 @@ async function readArtifactSummaries(runDir: string): Promise<ArtifactSummary[]>
   const summaries: ArtifactSummary[] = [];
 
   for (const line of lines) {
-    const meta = JSON.parse(line) as ArtifactMetadata;
+    let meta: ArtifactMetadata;
+    try {
+      meta = JSON.parse(line) as ArtifactMetadata;
+    } catch (e: unknown) {
+      throw new FilesystemError(
+        `artifacts.jsonl contains unparseable line: ${(e as Error).message}`,
+        { cause: e }
+      );
+    }
     summaries.push({
       id: meta.id,
       kind: meta.kind,
@@ -243,7 +251,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
   }
 
   // Get job state — may be absent (edge case: state has no entry for jobId)
-  const jobState = state.jobs[jobId] as (typeof state.jobs[string] & { current_step?: string }) | undefined;
+  const jobState = state.jobs[jobId];
 
   // Determine current step id
   let stepId: string;

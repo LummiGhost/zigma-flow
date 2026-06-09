@@ -110,7 +110,7 @@ async function probeSpawn(command: string, cwd: string | undefined, env: NodeJS.
  * On POSIX, subprocess.kill() sends the signal to the process group which
  * propagates to children, so a direct kill() is sufficient.
  */
-function killProcessTree(subprocess: ReturnType<typeof execa>): void {
+function killProcessTree(subprocess: { readonly pid?: number; kill(): boolean }): void {
   const pid = subprocess.pid;
   if (process.platform === "win32" && pid !== undefined) {
     try {

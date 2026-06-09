@@ -74,7 +74,15 @@ export async function checkJsonSchema(opts: {
   }
 
   const ajv = new AjvCtor({ allErrors: true });
-  const validate = ajv.compile(schema);
+  let validate: ValidateFunction;
+  try {
+    validate = ajv.compile(schema);
+  } catch (err) {
+    throw new CheckError(`json-schema: schema file is not a valid JSON Schema: ${schemaPath}`, {
+      details: { path: schemaPath },
+      cause: err,
+    });
+  }
   const valid = validate(data);
 
   if (valid) {

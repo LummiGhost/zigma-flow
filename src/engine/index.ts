@@ -1,16 +1,22 @@
 /**
- * Engine — orchestrates run creation.
+ * Engine — orchestrates run creation and step execution.
  *
  * Reference: docs/mvp-contracts.md §2.3, §2.4 (RC-R01..R12)
- * WF-P3-RUN Step 2.
+ * WF-P3-RUN Step 2 / WF-P6-DISPATCH Step 2.
  */
 
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+
+import { parse as parseYaml } from "yaml";
 
 import { computeReadyJobs } from "../dag/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { Clock, RunState } from "../run/index.js";
-import { ConfigError, WorkflowError } from "../utils/index.js";
+import { ConfigError, StateError, WorkflowError } from "../utils/index.js";
+import type { ProcessRunner } from "../script/index.js";
+import { ExecaProcessRunner } from "../script/index.js";
+import { executeScriptStep } from "../script/executor.js";
 import {
   JsonlEventWriter,
   LocalRunIdGenerator,
@@ -152,4 +158,102 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
   }
 
   return { runId };
+}
+
+// ---------------------------------------------------------------------------
+// executeCurrentStep — script step execution (implemented in WF-P6-SCRIPT)
+// ---------------------------------------------------------------------------
+
+export interface ExecuteCurrentStepOpts {
+  runDir: string;
+  zigmaflowDir: string;
+  runId: string;
+  jobId: string;
+  runner?: ProcessRunner;
+  clock: Clock;
+}
+
+export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<void> {
+  const { runDir, zigmaflowDir, runId, jobId, clock } = opts;
+
+  // Read current state to validate job exists
+  const stateStore = new LocalStateStore();
+  const state = await stateStore.readSnapshot(runDir);
+  if (state === null) {
+    throw new StateError(`state.json missing for run ${runId}`);
+  }
+
+  const jobState = state.jobs[jobId];
+  if (jobState === undefined) {
+    throw new StateError(`Job "${jobId}" not found in state for run ${runId}`);
+  }
+
+  // Load workflow to validate step type (P6: only script steps)
+  const workflowPath = await readWorkflowPathFromRunYml(runDir);
+  const wf = await loadWorkflowFile(workflowPath);
+
+  const jobDef = wf.jobs[jobId];
+  if (jobDef === undefined) {
+    throw new WorkflowError(`Job "${jobId}" not found in workflow definition`);
+  }
+
+  const stepId = jobState.current_step ?? jobDef.steps[0]?.id;
+  if (stepId === undefined) {
+    throw new WorkflowError(`Job "${jobId}" has no steps defined`);
+  }
+
+  const stepDef = jobDef.steps.find((s) => s.id === stepId);
+  if (stepDef === undefined) {
+    throw new WorkflowError(`Step "${stepId}" not found in job "${jobId}"`);
+  }
+
+  if (stepDef.type !== "script") {
+    throw new WorkflowError(
+      `Step "${stepId}" in job "${jobId}" is type "${stepDef.type}", not a script step (P6 scope)`,
+      { details: { jobId, stepId, stepType: stepDef.type } }
+    );
+  }
+
+  const actualRunner = opts.runner ?? new ExecaProcessRunner();
+
+  await executeScriptStep({
+    runDir,
+    zigmaflowDir,
+    runId,
+    jobId,
+    clock,
+    runner: actualRunner,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Internal: parse run.yml to get the workflow file path
+// ---------------------------------------------------------------------------
+
+interface RunYmlShape {
+  workflow?: { path?: string };
+}
+
+async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
+  const runYmlPath = join(runDir, "run.yml");
+  let raw: string;
+  try {
+    raw = await readFile(runYmlPath, "utf-8");
+  } catch (e: unknown) {
+    throw new StateError(`Cannot read run.yml in: ${runDir}`, { cause: e });
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(raw);
+  } catch (e: unknown) {
+    throw new StateError(`run.yml contains invalid YAML in: ${runDir}`, { cause: e });
+  }
+
+  const shape = parsed as RunYmlShape;
+  const wfPath = shape?.workflow?.path;
+  if (typeof wfPath !== "string" || wfPath.length === 0) {
+    throw new StateError(`run.yml is missing workflow.path in: ${runDir}`);
+  }
+  return wfPath;
 }

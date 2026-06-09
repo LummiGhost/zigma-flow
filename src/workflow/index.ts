@@ -56,6 +56,13 @@ const StepBaseSchema = z.object({
   outputs: z.record(z.string(), z.unknown()).optional(),
   switch: z.string().optional(),
   cases: z.record(z.string(), RouterActionSchema).optional(),
+  // Script step fields (D2 — WF-P6-SCRIPT)
+  run: z.string().optional(),
+  shell: z.string().optional(),
+  timeout: z.string().optional(),
+  cwd: z.string().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  on_failure: RouterActionSchema.optional(),
 });
 
 export interface StepDefinition {
@@ -67,6 +74,13 @@ export interface StepDefinition {
   outputs?: Record<string, unknown>;
   switch?: string;
   cases?: Record<string, RouterAction>;
+  // Script step fields (D2 — WF-P6-SCRIPT)
+  run?: string;
+  shell?: string;
+  timeout?: string;
+  cwd?: string;
+  env?: Record<string, string>;
+  on_failure?: RouterAction;
   [key: string]: unknown;
 }
 

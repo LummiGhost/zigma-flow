@@ -50,7 +50,7 @@ export interface StateStore {
 // ---------------------------------------------------------------------------
 
 export interface JobState {
-  status: "ready" | "waiting" | "inactive" | "running" | "done" | "failed";
+  status: "ready" | "waiting" | "inactive" | "running" | "done" | "completed" | "failed" | "blocked";
   activation?: string;      // present iff workflow declares activation on the job
   attempt?: number;         // present iff retry-eligible; omit for initial state
   current_step?: string;    // id of the step currently being executed; absent before first step

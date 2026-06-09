@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "commander": "^12.1.0",
+    "execa": "^9.6.1",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   }

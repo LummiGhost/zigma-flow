@@ -18,6 +18,7 @@ import { validateAction } from "./commands/validate.js";
 import { runAction } from "./commands/run.js";
 import { statusAction } from "./commands/status.js";
 import { promptAction } from "./commands/prompt.js";
+import { stepAction } from "./commands/step.js";
 import { SystemClock } from "./run/index.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -82,6 +83,19 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (options: { job?: string }) => {
       await promptAction({
+        zigmaflowDir: process.cwd(),
+        ...(options.job !== undefined ? { job: options.job } : {}),
+        clock: new SystemClock(),
+      });
+    });
+
+  program
+    .command("step")
+    .description("Execute the current script step of the active run.")
+    .option("--job <job>", "Job id to execute (defaults to the single ready job).")
+    .exitOverride()
+    .action(async (options: { job?: string }) => {
+      await stepAction({
         zigmaflowDir: process.cwd(),
         ...(options.job !== undefined ? { job: options.job } : {}),
         clock: new SystemClock(),

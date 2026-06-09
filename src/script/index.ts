@@ -107,19 +107,34 @@ async function probeSpawn(command: string, cwd: string | undefined, env: NodeJS.
  * (cmd.exe when shell:true), leaving any grandchild processes (e.g. node.exe)
  * running as orphans. `taskkill /F /T` terminates the tree recursively.
  *
- * On POSIX, subprocess.kill() sends the signal to the process group which
- * propagates to children, so a direct kill() is sufficient.
+ * On POSIX, when the subprocess was spawned with `detached: true` it becomes
+ * the process group leader (PGID = PID). `process.kill(-pid, "SIGKILL")`
+ * delivers SIGKILL to every process in that group — the shell AND all its
+ * grandchildren — so execa's stdio pipes close immediately.
  */
 function killProcessTree(subprocess: { readonly pid?: number; kill(): boolean }): void {
   const pid = subprocess.pid;
-  if (process.platform === "win32" && pid !== undefined) {
-    try {
-      execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" });
-    } catch {
-      // Process was already terminated — ignore.
+  if (process.platform === "win32") {
+    if (pid !== undefined) {
+      try {
+        execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" });
+      } catch {
+        // Process was already terminated — ignore.
+      }
     }
   } else {
-    subprocess.kill();
+    if (pid !== undefined) {
+      try {
+        // Kill the entire process group: -pid targets all members of the group
+        // whose PGID equals pid (set via detached:true at spawn time).
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // Process already terminated or no such group — fall back.
+        subprocess.kill();
+      }
+    } else {
+      subprocess.kill();
+    }
   }
 }
 
@@ -157,12 +172,18 @@ export class ExecaProcessRunner implements ProcessRunner {
     let timedOut = false;
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
+    // On POSIX: detached:true makes the subprocess the process group leader
+    // (PGID = child PID). killProcessTree() can then send -pid to kill the
+    // entire group (shell + grandchildren) atomically. On Windows taskkill
+    // handles the tree walk, so detached must stay false (it would open a new
+    // console window otherwise).
     const subprocess = execa(opts.command, {
       shell: shellOpt,
       ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
       env: { ...process.env, ...opts.env },
       reject: false,
       encoding: "utf8",
+      ...(process.platform !== "win32" ? { detached: true } : {}),
     });
 
     if (opts.timeoutMs !== undefined) {

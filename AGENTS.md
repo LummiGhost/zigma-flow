@@ -44,6 +44,13 @@ Default workflow:
 - For documentation-only changes, run lightweight validation such as formatting, link checks, or repository-specific doc checks when available.
 - If a required gate cannot be run, record the reason and residual risk in the PR.
 
+## CI and Merge Policy
+
+- **Never merge a PR while CI is failing.** After pushing to a PR branch, always check CI status with `gh pr checks <N>` before merging. If CI is failing, investigate and fix before proceeding.
+- **Check CI before every merge**: run `gh pr checks <N>` and confirm the result shows `pass` (not `fail` or `pending`). A local gate pass does not substitute for CI — the CI environment (Linux, different Node version) may surface issues not caught locally.
+- **Check git state promptly**: before starting any new task, run `git log --oneline --all --graph` to understand the current branch and commit state. Confirm the working branch is based on a clean `origin/main`.
+- After merging, check CI on the main branch push as well: `gh run list --limit 3`.
+
 ## Reports
 
 - If the user requests an implementation report, review report, fix report, or similar report, write the report directly as a PR comment.

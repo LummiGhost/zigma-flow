@@ -98,12 +98,14 @@ interface FakeCheckResult {
 /**
  * FakeCheckRunner implements the CheckRunner shape with a deterministic
  * canned `run()` return value plus an `unknownKind` mode used by T-CHECK-5
- * to simulate an unregistered check kind. When `unknownKind` is true, the
- * runner is never reached because the executor MUST detect the unknown
- * kind during resolution and throw `CheckError` before invoking the
- * runner. The fake therefore throws if it is ever called in that mode —
- * the throw is a regression guard, not the expected production path.
+ * to simulate an unregistered check kind. When `unknownKind` is true,
+ * `resolveKind()` throws `CheckError` so the executor short-circuits before
+ * appending any events and before invoking `run()`. The `run()` guard
+ * (throwing if called in unknownKind mode) is a regression safeguard — the
+ * executor MUST NOT reach `run()` for an unknown kind.
  */
+import { CheckError } from "../../src/utils/index.js";
+
 class FakeCheckRunner {
   public readonly calls: FakeCheckRunOptions[] = [];
 
@@ -111,6 +113,14 @@ class FakeCheckRunner {
     private readonly canned: FakeCheckResult,
     private readonly opts: { unknownKind?: boolean } = {}
   ) {}
+
+  async resolveKind(checkId: string): Promise<void> {
+    if (this.opts.unknownKind === true) {
+      throw new CheckError(`Unknown check kind: ${checkId}`, {
+        details: { checkId },
+      });
+    }
+  }
 
   async run(opts: FakeCheckRunOptions): Promise<FakeCheckResult> {
     this.calls.push(opts);

@@ -10,6 +10,8 @@ export {
   ArtifactError,
   StateError,
   ScriptError,
+  CheckError,
+  PermissionError,
   type ZigmaFlowErrorKind,
   type ZigmaFlowErrorOptions
 } from "./errors.js";

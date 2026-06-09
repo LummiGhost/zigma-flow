@@ -99,3 +99,15 @@ export class ScriptError extends ZigmaFlowError {
     super("ScriptError", message, 1, options);
   }
 }
+
+export class CheckError extends ZigmaFlowError {
+  public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
+    super("CheckError", message, 1, options);
+  }
+}
+
+export class PermissionError extends ZigmaFlowError {
+  public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
+    super("PermissionError", message, 1, options);
+  }
+}

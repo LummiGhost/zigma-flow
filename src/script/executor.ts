@@ -232,17 +232,17 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     );
   }
 
-  // ── 3. Helper: get event counter and next event id ───────────────────────
+  // ── 3. Initialize in-process event counter from last persisted event id ─────
+  // Read once here; all subsequent IDs are generated in-process to avoid TOCTOU
+  // races and redundant disk reads between event appends.
 
-  async function getNextEventId(): Promise<string> {
-    const lastId = await eventWriter.readLastEventId(runDir);
-    const counter = lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
-    return nextEventId(counter + 1);
-  }
+  const initialLastId = await eventWriter.readLastEventId(runDir);
+  let eventCounter = initialLastId !== null ? parseInt(initialLastId.replace("evt-", ""), 10) : 0;
+  function getNextEventId(): string { return nextEventId(++eventCounter); }
 
   // ── 4. Emit step_started; write state snapshot (ready → running) ─────────
 
-  const stepStartedId = await getNextEventId();
+  const stepStartedId = getNextEventId();
   await eventWriter.appendEvent(runDir, {
     id: stepStartedId,
     run_id: runId,
@@ -327,7 +327,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
 
   // ── 9. Emit script_completed ──────────────────────────────────────────────
 
-  const scriptCompletedId = await getNextEventId();
+  const scriptCompletedId = getNextEventId();
   await eventWriter.appendEvent(runDir, {
     id: scriptCompletedId,
     run_id: runId,
@@ -352,7 +352,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
   if (isSuccess) {
     // ── 10a. Success path ──────────────────────────────────────────────────
 
-    const stepCompletedId = await getNextEventId();
+    const stepCompletedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {
       id: stepCompletedId,
       run_id: runId,
@@ -365,7 +365,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       payload: { job_id: jobId, step_id: stepId, attempt },
     });
 
-    const jobCompletedId = await getNextEventId();
+    const jobCompletedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {
       id: jobCompletedId,
       run_id: runId,
@@ -400,7 +400,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         : "timeout"
       : `exit code ${runnerResult.exitCode}`;
 
-    const stepFailedId = await getNextEventId();
+    const stepFailedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {
       id: stepFailedId,
       run_id: runId,
@@ -413,18 +413,17 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       payload: { job_id: jobId, step_id: stepId, attempt, reason },
     });
 
-    // Apply on_failure override (MVP: only status: "failed" | "blocked"; default is "failed")
+    // Apply on_failure override (MVP: status "failed" | "blocked"; default is "failed")
     // TD-P6-002: retry_job, activate_job, goto_job not implemented.
-    let finalJobStatus: "failed" = "failed";
+    let finalJobStatus: "failed" | "blocked" = "failed";
     const onFailure = stepDef.on_failure;
     if (
       onFailure !== undefined &&
       typeof onFailure === "object" &&
-      "status" in onFailure
+      "status" in onFailure &&
+      (onFailure.status === "failed" || onFailure.status === "blocked")
     ) {
-      // { status: "failed" | "blocked" } — for now only "failed" is the outcome
-      // "blocked" would transition to blocked; TD-P6-002 tracks full implementation
-      finalJobStatus = "failed";
+      finalJobStatus = onFailure.status;
     }
 
     // Write final state snapshot: job running → failed

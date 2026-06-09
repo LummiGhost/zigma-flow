@@ -26,7 +26,6 @@ import { parse as parseYaml } from "yaml";
 import { executeCurrentStep } from "../engine/index.js";
 import type { ProcessRunner } from "../script/index.js";
 import {
-  JsonlEventWriter,
   LocalStateStore,
   readActiveRun,
   type Clock,
@@ -38,10 +37,7 @@ import {
   UserInputError,
   WorkflowError,
 } from "../utils/index.js";
-
-// suppress unused import warning — used for type reference only
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const _jsonlRef = JsonlEventWriter;
+import { artifactStepDir } from "../artifact/index.js";
 
 // ---------------------------------------------------------------------------
 // stepAction options
@@ -209,6 +205,6 @@ export async function stepAction(opts: StepActionOpts): Promise<void> {
 
   // 9. Print result path
   const attempt = selectedJobState.attempt ?? 1;
-  const resultPath = join(runDir, "jobs", jobId, String(attempt), "steps", currentStep.id, "result.json");
+  const resultPath = join(artifactStepDir(runDir, jobId, attempt, currentStep.id), "result.json");
   console.log(`Step completed: ${resultPath}`);
 }

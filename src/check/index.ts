@@ -8,6 +8,10 @@
  */
 
 import { CheckError } from "../utils/errors.js";
+import { checkFileExists } from "./checks/file-exists.js";
+import { checkJsonParse } from "./checks/json-parse.js";
+import { checkJsonSchema } from "./checks/json-schema.js";
+import { checkRequiredFields } from "./checks/required-fields.js";
 
 // ---------------------------------------------------------------------------
 // CheckResult — snake_case shape; identical to the on-disk check-result.json
@@ -63,21 +67,44 @@ export interface CheckRunner {
 // LocalCheckRunner — default stub; all kinds are unregistered (TD-P7-002)
 // ---------------------------------------------------------------------------
 
+const KNOWN_KINDS = new Set([
+  "zigma/file-exists",
+  "zigma/json-parse",
+  "zigma/json-schema",
+  "zigma/required-fields",
+]);
+
 /**
- * Default `CheckRunner` implementation. Throws `CheckError` for any check
- * kind because no concrete kind implementations ship in this slice
- * (TD-P7-002 deferred to follow-on workflows).
+ * Default `CheckRunner` implementation. Dispatches to concrete check-kind
+ * implementations for known kinds; throws `CheckError` for unknown kinds.
  */
 export class LocalCheckRunner implements CheckRunner {
   async resolveKind(checkId: string): Promise<void> {
-    throw new CheckError(`Unknown check kind: ${checkId}`, {
-      details: { checkId },
-    });
+    if (!KNOWN_KINDS.has(checkId)) {
+      throw new CheckError(`Unknown check kind: ${checkId}`, {
+        details: { checkId },
+      });
+    }
+    return Promise.resolve();
   }
 
-  async run(_opts: CheckRunnerRunOpts): Promise<CheckResult> {
-    throw new CheckError(`Unknown check kind: ${_opts.checkId}`, {
-      details: { checkId: _opts.checkId },
-    });
+  async run(opts: CheckRunnerRunOpts): Promise<CheckResult> {
+    const w = opts.with ?? {};
+    const runDir = opts.runDir;
+
+    switch (opts.checkId) {
+      case "zigma/file-exists":
+        return checkFileExists({ with: w, runDir });
+      case "zigma/json-parse":
+        return checkJsonParse({ with: w, runDir });
+      case "zigma/json-schema":
+        return checkJsonSchema({ with: w, runDir });
+      case "zigma/required-fields":
+        return checkRequiredFields({ with: w, runDir });
+      default:
+        throw new CheckError(`Unknown check kind: ${opts.checkId}`, {
+          details: { checkId: opts.checkId },
+        });
+    }
   }
 }

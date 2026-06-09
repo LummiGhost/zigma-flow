@@ -1,8 +1,8 @@
 /**
- * Engine — orchestrates run creation.
+ * Engine — orchestrates run creation and step execution.
  *
  * Reference: docs/mvp-contracts.md §2.3, §2.4 (RC-R01..R12)
- * WF-P3-RUN Step 2.
+ * WF-P3-RUN Step 2 / WF-P6-DISPATCH Step 2.
  */
 
 import { dirname } from "node:path";
@@ -11,6 +11,7 @@ import { computeReadyJobs } from "../dag/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import { ConfigError, WorkflowError } from "../utils/index.js";
+import type { ProcessRunner } from "../script/index.js";
 import {
   JsonlEventWriter,
   LocalRunIdGenerator,
@@ -152,4 +153,22 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
   }
 
   return { runId };
+}
+
+// ---------------------------------------------------------------------------
+// executeCurrentStep — script step execution (implemented in WF-P6-SCRIPT)
+// ---------------------------------------------------------------------------
+
+export interface ExecuteCurrentStepOpts {
+  runDir: string;
+  zigmaflowDir: string;
+  runId: string;
+  jobId: string;
+  runner?: ProcessRunner;
+  clock: Clock;
+}
+
+export async function executeCurrentStep(_opts: ExecuteCurrentStepOpts): Promise<void> {
+  // Full implementation in WF-P6-SCRIPT Step 2.
+  throw new Error("executeCurrentStep not yet implemented");
 }

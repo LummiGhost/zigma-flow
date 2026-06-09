@@ -93,3 +93,9 @@ export class StateError extends ZigmaFlowError {
     super("StateError", message, 1, options);
   }
 }
+
+export class ScriptError extends ZigmaFlowError {
+  public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
+    super("ScriptError", message, 1, options);
+  }
+}

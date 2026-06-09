@@ -9,6 +9,7 @@ export {
   SkillPackError,
   ArtifactError,
   StateError,
+  ScriptError,
   type ZigmaFlowErrorKind,
   type ZigmaFlowErrorOptions
 } from "./errors.js";

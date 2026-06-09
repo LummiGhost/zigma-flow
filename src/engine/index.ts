@@ -17,6 +17,9 @@ import { ConfigError, StateError, WorkflowError } from "../utils/index.js";
 import type { ProcessRunner } from "../script/index.js";
 import { ExecaProcessRunner } from "../script/index.js";
 import { executeScriptStep } from "../script/executor.js";
+import type { CheckRunner } from "../check/index.js";
+import { LocalCheckRunner } from "../check/index.js";
+import { executeCheckStep } from "../check/executor.js";
 import {
   JsonlEventWriter,
   LocalRunIdGenerator,
@@ -169,7 +172,7 @@ export interface ExecuteCurrentStepOpts {
   zigmaflowDir: string;
   runId: string;
   jobId: string;
-  runner?: ProcessRunner;
+  runner?: ProcessRunner | CheckRunner;
   clock: Clock;
 }
 
@@ -207,23 +210,32 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
     throw new WorkflowError(`Step "${stepId}" not found in job "${jobId}"`);
   }
 
-  if (stepDef.type !== "script") {
+  if (stepDef.type === "script") {
+    const actualRunner = (opts.runner as ProcessRunner | undefined) ?? new ExecaProcessRunner();
+    await executeScriptStep({
+      runDir,
+      zigmaflowDir,
+      runId,
+      jobId,
+      clock,
+      runner: actualRunner,
+    });
+  } else if (stepDef.type === "check") {
+    const actualRunner = (opts.runner as CheckRunner | undefined) ?? new LocalCheckRunner();
+    await executeCheckStep({
+      runDir,
+      zigmaflowDir,
+      runId,
+      jobId,
+      clock,
+      runner: actualRunner,
+    });
+  } else {
     throw new WorkflowError(
-      `Step "${stepId}" in job "${jobId}" is type "${stepDef.type}", not a script step (P6 scope)`,
+      `Step "${stepId}" in job "${jobId}" is type "${stepDef.type}", not a script or check step (P7 scope)`,
       { details: { jobId, stepId, stepType: stepDef.type } }
     );
   }
-
-  const actualRunner = opts.runner ?? new ExecaProcessRunner();
-
-  await executeScriptStep({
-    runDir,
-    zigmaflowDir,
-    runId,
-    jobId,
-    clock,
-    runner: actualRunner,
-  });
 }
 
 // ---------------------------------------------------------------------------

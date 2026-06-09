@@ -63,6 +63,9 @@ const StepBaseSchema = z.object({
   cwd: z.string().optional(),
   env: z.record(z.string(), z.string()).optional(),
   on_failure: RouterActionSchema.optional(),
+  // Check step fields (D2 — WF-P7-CHECK)
+  on_pass: RouterActionSchema.optional(),
+  on_fail: RouterActionSchema.optional(),
 });
 
 export interface StepDefinition {
@@ -81,6 +84,9 @@ export interface StepDefinition {
   cwd?: string;
   env?: Record<string, string>;
   on_failure?: RouterAction;
+  // Check step fields (D2 — WF-P7-CHECK)
+  on_pass?: RouterAction;
+  on_fail?: RouterAction;
   [key: string]: unknown;
 }
 

@@ -245,6 +245,16 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
   if (checkResult.passed) {
     // ── 9a. Success path ───────────────────────────────────────────────────
 
+    // Guard: on_pass values other than "continue" / absent are not supported in P7.
+    // TD-P7-003: advanced on_pass forms deferred to P8.
+    const onPass = stepDef.on_pass;
+    if (onPass !== undefined && onPass !== "continue") {
+      throw new WorkflowError(
+        `on_pass value "${String(onPass)}" is not supported in P7 (TD-P7-003). Only "continue" or absent is valid.`,
+        { details: { jobId, stepId, onPass } }
+      );
+    }
+
     const stepCompletedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {
       id: stepCompletedId,
@@ -316,6 +326,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       (onFail.status === "failed" || onFail.status === "blocked")
     ) {
       finalJobStatus = onFail.status;
+    } else if (onFail === "fail") {
+      // Explicit "fail" literal — default outcome, intentional no-op.
+      finalJobStatus = "failed";
     } else if (onFail === "block") {
       finalJobStatus = "blocked";
     }

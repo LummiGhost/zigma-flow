@@ -643,6 +643,152 @@ describe(
 );
 
 // ---------------------------------------------------------------------------
+// T-CHECK-4b: on_fail: "fail" literal — explicit branch, same outcome as default
+// ---------------------------------------------------------------------------
+
+/**
+ * Workflow YAML with `on_fail: "fail"` string literal on the check step.
+ * Used for T-CHECK-4b to verify the explicit branch in the dispatch logic.
+ */
+const CHECK_WORKFLOW_WITH_ON_FAIL_LITERAL_YAML = `\
+name: code-change
+version: "0.1.0"
+jobs:
+  verify:
+    steps:
+      - id: report-schema
+        type: check
+        uses: code.checks.report-schema
+        on_fail: fail
+`;
+
+describe(
+  "executeCheckStep — on_fail: \"fail\" string literal (T-CHECK-4b)",
+  () => {
+    let sandbox: Sandbox;
+
+    beforeEach(async () => {
+      sandbox = await makeSandbox({ activeRun: null });
+    });
+
+    afterEach(async () => {
+      await rm(sandbox.projectRoot, { recursive: true, force: true });
+    });
+
+    it(
+      "transitions job to \"failed\" when on_fail is the \"fail\" string literal — explicit branch prevents silent fallthrough (T-CHECK-4b)",
+      async () => {
+        const { runId, runDir } = await bootstrapCheckRun(
+          sandbox,
+          CHECK_WORKFLOW_WITH_ON_FAIL_LITERAL_YAML
+        );
+
+        const runner = new FakeCheckRunner({
+          passed: false,
+          check_id: "code.checks.report-schema",
+          failures: ["report missing"],
+          artifacts: [],
+        });
+
+        await executeCheckStep(
+          makeExecutorOpts({
+            runDir,
+            zigmaflowDir: sandbox.zigmaflowDir,
+            runId,
+            jobId: "verify",
+            runner,
+          })
+        );
+
+        const events = await readEvents(runDir);
+        const types = events.map((e) => e.type);
+        expect(types).toContain("step_failed");
+        expect(types).not.toContain("step_completed");
+        expect(types).not.toContain("job_completed");
+
+        const snapshot = await readStateSnapshot(runDir);
+        expect(snapshot.jobs["verify"]?.status).toBe("failed");
+      }
+    );
+  }
+);
+
+// ---------------------------------------------------------------------------
+// T-CHECK-6: on_pass with unsupported value → WorkflowError (TD-P7-003 guard)
+// ---------------------------------------------------------------------------
+
+import { WorkflowError } from "../../src/utils/index.js";
+
+/**
+ * Workflow YAML with an unsupported `on_pass` value. Used for T-CHECK-6
+ * to verify the guard throws WorkflowError instead of silently succeeding.
+ */
+const CHECK_WORKFLOW_WITH_UNSUPPORTED_ON_PASS_YAML = `\
+name: code-change
+version: "0.1.0"
+jobs:
+  verify:
+    steps:
+      - id: report-schema
+        type: check
+        uses: code.checks.report-schema
+        on_pass: fail
+`;
+
+describe(
+  "executeCheckStep — on_pass unsupported value → WorkflowError (T-CHECK-6)",
+  () => {
+    let sandbox: Sandbox;
+
+    beforeEach(async () => {
+      sandbox = await makeSandbox({ activeRun: null });
+    });
+
+    afterEach(async () => {
+      await rm(sandbox.projectRoot, { recursive: true, force: true });
+    });
+
+    it(
+      "throws WorkflowError when on_pass is present and is not \"continue\" — prevents silent misconfiguration (T-CHECK-6, TD-P7-003 guard)",
+      async () => {
+        const { runId, runDir } = await bootstrapCheckRun(
+          sandbox,
+          CHECK_WORKFLOW_WITH_UNSUPPORTED_ON_PASS_YAML
+        );
+
+        const runner = new FakeCheckRunner({
+          passed: true,
+          check_id: "code.checks.report-schema",
+          failures: [],
+          artifacts: [],
+        });
+
+        let thrown: unknown = undefined;
+        try {
+          await executeCheckStep(
+            makeExecutorOpts({
+              runDir,
+              zigmaflowDir: sandbox.zigmaflowDir,
+              runId,
+              jobId: "verify",
+              runner,
+            })
+          );
+        } catch (e: unknown) {
+          thrown = e;
+        }
+
+        expect(thrown).toBeDefined();
+        expect(thrown).toBeInstanceOf(WorkflowError);
+        const err = thrown as WorkflowError;
+        expect(err.message).toMatch(/on_pass/);
+        expect(err.message).toMatch(/TD-P7-003/);
+      }
+    );
+  }
+);
+
+// ---------------------------------------------------------------------------
 // T-CHECK-5: Unknown check kind → CheckError BEFORE any events
 // ---------------------------------------------------------------------------
 

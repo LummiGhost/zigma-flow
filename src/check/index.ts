@@ -12,6 +12,9 @@ import { checkFileExists } from "./checks/file-exists.js";
 import { checkJsonParse } from "./checks/json-parse.js";
 import { checkJsonSchema } from "./checks/json-schema.js";
 import { checkRequiredFields } from "./checks/required-fields.js";
+import { checkGitDiffExists } from "./checks/git-diff-exists.js";
+import { checkForbiddenPaths } from "./checks/forbidden-paths.js";
+import { checkProtectedRuntimeFiles } from "./checks/protected-runtime-files.js";
 
 // ---------------------------------------------------------------------------
 // CheckResult — snake_case shape; identical to the on-disk check-result.json
@@ -72,6 +75,9 @@ const KNOWN_KINDS = new Set([
   "zigma/json-parse",
   "zigma/json-schema",
   "zigma/required-fields",
+  "zigma/git-diff-exists",
+  "zigma/forbidden-paths",
+  "zigma/protected-runtime-files",
 ]);
 
 /**
@@ -101,6 +107,12 @@ export class LocalCheckRunner implements CheckRunner {
         return checkJsonSchema({ with: w, runDir });
       case "zigma/required-fields":
         return checkRequiredFields({ with: w, runDir });
+      case "zigma/git-diff-exists":
+        return checkGitDiffExists({ with: w, runDir });
+      case "zigma/forbidden-paths":
+        return checkForbiddenPaths({ with: w, runDir });
+      case "zigma/protected-runtime-files":
+        return checkProtectedRuntimeFiles({ with: w, runDir });
       default:
         throw new CheckError(`Unknown check kind: ${opts.checkId}`, {
           details: { checkId: opts.checkId },

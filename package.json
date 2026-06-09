@@ -21,6 +21,7 @@
     "node": ">=20.11.0"
   },
   "devDependencies": {
+    "@types/micromatch": "^4.0.9",
     "@types/node": "^20.19.42",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
@@ -30,6 +31,8 @@
     "ajv": "^8.17.1",
     "commander": "^12.1.0",
     "execa": "^9.6.1",
+    "micromatch": "^4",
+    "simple-git": "^3",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   }

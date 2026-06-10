@@ -192,6 +192,15 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
   // ── 7. Apply the action ───────────────────────────────────────────────────
 
   if (action === "continue") {
+    // Write intermediate snapshot so advanceJob reads last_event_id that includes signal_received.
+    // This preserves the event-first-then-snapshot invariant: the snapshot must always point
+    // to the tail of events.jsonl before any subsequent reader (advanceJob) calls readSnapshot.
+    const afterSignalState: RunState = {
+      ...state,
+      last_event_id: signalReceivedId,
+    };
+    await stateStore.writeSnapshot(runDir, afterSignalState);
+
     // Delegate to advanceJob — it writes its own snapshot
     // Import advanceJob lazily to avoid circular import issues at module load time
     const { advanceJob } = await import("./index.js");
@@ -336,7 +345,13 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         .filter(([, js]) => js.status === "completed")
         .map(([id]) => id)
     );
-    const activeJobIds = new Set<string>(); // for readiness check, treat target as not yet active
+    // Include all non-target non-completed jobs as active so computeReadyJobs
+    // only considers the target job for readiness (correct DAG semantics).
+    const activeJobIds = new Set<string>(
+      Object.keys(state.jobs).filter(
+        (id) => id !== targetJobId && !completedJobIds.has(id)
+      )
+    );
     const readyAfterActivation = new Set(computeReadyJobs(wf.jobs, completedJobIds, activeJobIds));
     const newStatus = readyAfterActivation.has(targetJobId) ? "ready" : "waiting";
 
@@ -364,6 +379,19 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       throw new StateError(`goto_job target "${targetJobId}" not found in state for run ${runId}`);
     }
 
+    // Guard: reject if target is already in a terminal or running state.
+    // "ready" is allowed — goto_job to an already-ready job is idempotent.
+    if (
+      targetJobState.status !== "inactive" &&
+      targetJobState.status !== "waiting" &&
+      targetJobState.status !== "ready"
+    ) {
+      throw new WorkflowError(
+        `goto_job target "${targetJobId}" is already in status "${targetJobState.status}"; cannot transition to ready`,
+        { details: { sourceJobId, targetJobId, targetStatus: targetJobState.status } }
+      );
+    }
+
     // Append job_skipped
     const jobSkippedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {
@@ -383,16 +411,34 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     completedSourceState.status = "completed";
     delete completedSourceState.current_step;
 
-    // goto_job bypasses dependency check: target → ready directly
+    // Build the updated jobs map with source completed, then use computeReadyJobs
+    // to decide whether target's deps are now satisfied (ready) or still unmet (waiting).
+    const updatedJobs: RunState["jobs"] = {
+      ...state.jobs,
+      [sourceJobId]: completedSourceState,
+    };
+
+    const completedJobIdsForGoto = new Set<string>(
+      Object.entries(updatedJobs)
+        .filter(([, js]) => js.status === "completed")
+        .map(([id]) => id)
+    );
+    const activeJobIdsForGoto = new Set<string>(
+      Object.keys(state.jobs).filter(
+        (id) => id !== targetJobId && !completedJobIdsForGoto.has(id)
+      )
+    );
+    const readyAfterGoto = new Set(computeReadyJobs(wf.jobs, completedJobIdsForGoto, activeJobIdsForGoto));
+    const newTargetStatus = readyAfterGoto.has(targetJobId) ? "ready" : "waiting";
+
     const readyTargetState = { ...targetJobState };
-    readyTargetState.status = "ready";
+    readyTargetState.status = newTargetStatus;
 
     const updatedState: RunState = {
       ...state,
       last_event_id: jobSkippedId,
       jobs: {
-        ...state.jobs,
-        [sourceJobId]: completedSourceState,
+        ...updatedJobs,
         [targetJobId]: readyTargetState,
       },
     };

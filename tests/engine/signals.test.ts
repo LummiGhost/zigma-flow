@@ -417,6 +417,10 @@ describe("applyRoutingAction — continue action (T-SIGNALS-1)", () => {
 
       // No job_completed expected — still mid-way.
       expect(events.filter((e) => e.type === "job_completed")).toHaveLength(0);
+
+      // last_event_id must be the TAIL of events.jsonl (not pre-signal_received)
+      const finalEvents = await readEvents(runDir);
+      expect(snap.last_event_id).toBe(finalEvents[finalEvents.length - 1]!.id);
     }
   );
 });
@@ -700,6 +704,83 @@ describe("applyRoutingAction — goto_job action (T-SIGNALS-6)", () => {
       expect(snap.jobs["review"]!.status).toBe("completed");
       expect(snap.jobs["review"]!.current_step).toBeUndefined();
       expect(snap.jobs["cleanup"]!.status).toBe("ready");
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-SIGNALS-6b: goto_job — target with unmet deps stays waiting
+// ---------------------------------------------------------------------------
+
+/**
+ * Extended GOTO workflow for T-SIGNALS-6b.
+ * `cleanup` depends on BOTH `review` (source) AND `prerequisite`.
+ * When goto_job targets `cleanup` from `review`, `prerequisite` is still
+ * waiting → cleanup must stay "waiting", not be set to "ready".
+ */
+const GOTO_UNMET_DEPS_YAML = `\
+name: signals-goto-unmet
+version: "0.1.0"
+jobs:
+  prerequisite:
+    steps:
+      - id: pre
+        type: script
+        run: "echo pre"
+  review:
+    steps:
+      - id: route
+        type: script
+        run: "echo route"
+  cleanup:
+    needs:
+      - review
+      - prerequisite
+    steps:
+      - id: cleanup-step
+        type: script
+        run: "echo cleanup"
+`;
+
+describe("applyRoutingAction — goto_job target with unmet deps stays waiting (T-SIGNALS-6b)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "goto_job target stays waiting when it has unmet deps beyond the source job (T-SIGNALS-6b, FP-SIG-TRANSITION-GOTO)",
+    async () => {
+      const { runId, runDir } = await bootstrapSignalsRun(
+        sandbox,
+        GOTO_UNMET_DEPS_YAML,
+        "signals-goto-unmet"
+      );
+
+      // review is running; prerequisite is still waiting; cleanup is waiting.
+      await setJobState(runDir, "review", { status: "running", current_step: "route" });
+
+      await callApplyRoutingAction({
+        runDir,
+        runId,
+        sourceJobId: "review",
+        sourceStepId: "route",
+        attempt: 1,
+        action: { goto_job: "cleanup" },
+        reason: "router decided: goto_job (case: skip_review)",
+        clock: new FakeClock(),
+      });
+
+      const snap = await readStateSnapshot(runDir);
+      // Source should be completed
+      expect(snap.jobs["review"]!.status).toBe("completed");
+      // prerequisite is still not completed → cleanup stays waiting
+      expect(snap.jobs["cleanup"]!.status).toBe("waiting");
     }
   );
 });

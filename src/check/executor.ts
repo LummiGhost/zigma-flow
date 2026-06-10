@@ -29,8 +29,10 @@ import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import type { CheckRunner } from "./index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
+import type { RouterAction } from "../workflow/index.js";
 import { WorkflowError, StateError } from "../utils/index.js";
 import { artifactStepDir } from "../artifact/index.js";
+import { applyRoutingAction } from "../engine/routing.js";
 
 // ---------------------------------------------------------------------------
 // ExecuteCheckStepOpts
@@ -245,15 +247,13 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
   if (checkResult.passed) {
     // ── 9a. Success path ───────────────────────────────────────────────────
 
-    // Guard: on_pass values other than "continue" / absent are not supported in P7.
-    // TD-P7-003: advanced on_pass forms deferred to P8.
     const onPass = stepDef.on_pass;
-    if (onPass !== undefined && onPass !== "continue") {
-      throw new WorkflowError(
-        `on_pass value "${String(onPass)}" is not supported in P7 (TD-P7-003). Only "continue" or absent is valid.`,
-        { details: { jobId, stepId, onPass } }
-      );
-    }
+
+    // Check for object-form routing action (retry_job / activate_job / goto_job)
+    const isObjectFormOnPass =
+      onPass !== undefined &&
+      typeof onPass === "object" &&
+      ("retry_job" in onPass || "activate_job" in onPass || "goto_job" in onPass);
 
     const stepCompletedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {
@@ -267,6 +267,27 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       attempt,
       payload: { job_id: jobId, step_id: stepId, attempt },
     });
+
+    if (isObjectFormOnPass) {
+      await applyRoutingAction({
+        runDir,
+        runId,
+        sourceJobId: jobId,
+        sourceStepId: stepId,
+        attempt,
+        action: onPass as RouterAction,
+        reason: `check passed: on_pass routing action`,
+        clock,
+      });
+      return;
+    }
+
+    if (onPass !== undefined && onPass !== "continue") {
+      throw new WorkflowError(
+        `on_pass value "${String(onPass)}" is not supported (TD-P7-003). Only "continue", absent, or object-form routing actions are valid.`,
+        { details: { jobId, stepId, onPass } }
+      );
+    }
 
     const jobCompletedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {
@@ -315,10 +336,30 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       payload: { job_id: jobId, step_id: stepId, attempt, reason },
     });
 
-    // Apply on_fail override (MVP: status "failed" | "blocked"; default is "failed")
-    // TD-P7-003: retry_job, activate_job, goto_job not implemented.
-    let finalJobStatus: "failed" | "blocked" = "failed";
     const onFail = stepDef.on_fail;
+
+    // Check for object-form routing action (retry_job / activate_job / goto_job)
+    const isObjectFormOnFail =
+      onFail !== undefined &&
+      typeof onFail === "object" &&
+      ("retry_job" in onFail || "activate_job" in onFail || "goto_job" in onFail);
+
+    if (isObjectFormOnFail) {
+      await applyRoutingAction({
+        runDir,
+        runId,
+        sourceJobId: jobId,
+        sourceStepId: stepId,
+        attempt,
+        action: onFail as RouterAction,
+        reason,
+        clock,
+      });
+      return;
+    }
+
+    // Apply on_fail override (status "failed" | "blocked"; default is "failed")
+    let finalJobStatus: "failed" | "blocked" = "failed";
     if (
       onFail !== undefined &&
       typeof onFail === "object" &&
@@ -327,7 +368,6 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     ) {
       finalJobStatus = onFail.status;
     } else if (onFail === "fail") {
-      // Explicit "fail" literal — default outcome, intentional no-op.
       finalJobStatus = "failed";
     } else if (onFail === "block") {
       finalJobStatus = "blocked";

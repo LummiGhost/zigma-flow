@@ -27,8 +27,10 @@ import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import type { ProcessRunner } from "./index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
+import type { RouterAction } from "../workflow/index.js";
 import { WorkflowError, StateError, SkillPackError } from "../utils/index.js";
 import { artifactStepDir, artifactId } from "../artifact/index.js";
+import { applyRoutingAction } from "../engine/routing.js";
 
 // ---------------------------------------------------------------------------
 // ExecuteScriptStepOpts
@@ -413,10 +415,30 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       payload: { job_id: jobId, step_id: stepId, attempt, reason },
     });
 
-    // Apply on_failure override (MVP: status "failed" | "blocked"; default is "failed")
-    // TD-P6-002: retry_job, activate_job, goto_job not implemented.
-    let finalJobStatus: "failed" | "blocked" = "failed";
     const onFailure = stepDef.on_failure;
+
+    // Check for object-form routing action (retry_job / activate_job / goto_job)
+    const isObjectFormRoutingAction =
+      onFailure !== undefined &&
+      typeof onFailure === "object" &&
+      ("retry_job" in onFailure || "activate_job" in onFailure || "goto_job" in onFailure);
+
+    if (isObjectFormRoutingAction) {
+      await applyRoutingAction({
+        runDir,
+        runId,
+        sourceJobId: jobId,
+        sourceStepId: stepId,
+        attempt,
+        action: onFailure as RouterAction,
+        reason,
+        clock,
+      });
+      return;
+    }
+
+    // Apply on_failure override (status "failed" | "blocked"; default is "failed")
+    let finalJobStatus: "failed" | "blocked" = "failed";
     if (
       onFailure !== undefined &&
       typeof onFailure === "object" &&

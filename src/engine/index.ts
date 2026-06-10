@@ -20,6 +20,7 @@ import { executeScriptStep } from "../script/executor.js";
 import type { CheckRunner } from "../check/index.js";
 import { LocalCheckRunner } from "../check/index.js";
 import { executeCheckStep } from "../check/executor.js";
+import { executeRouterStep } from "../router/executor.js";
 import {
   JsonlEventWriter,
   LocalRunIdGenerator,
@@ -31,6 +32,9 @@ import {
   writeRunYaml,
 } from "../run/index.js";
 import { nextEventId as formatEventId } from "../events/index.js";
+
+export { applyRoutingAction } from "./routing.js";
+export type { ApplyRoutingActionOpts } from "./routing.js";
 
 export interface CreateRunInputs {
   workflowPath: string;
@@ -230,12 +234,216 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       clock,
       runner: actualRunner,
     });
+  } else if (stepDef.type === "router") {
+    await executeRouterStep({
+      runDir,
+      zigmaflowDir,
+      runId,
+      jobId,
+      clock,
+    });
   } else {
     throw new WorkflowError(
-      `Step "${stepId}" in job "${jobId}" is type "${stepDef.type}", not a script or check step (P7 scope)`,
+      `Step "${stepId}" in job "${jobId}" is type "${stepDef.type}", not a script, check, or router step (P8 scope)`,
       { details: { jobId, stepId, stepType: stepDef.type } }
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// advanceJob — mechanical step-pointer advancement (WF-P8-MULTISTEP Step 2)
+// ---------------------------------------------------------------------------
+
+export interface AdvanceJobOpts {
+  /** Absolute path to the run directory (e.g. <runsDir>/<runId>). */
+  runDir: string;
+  /** Run identifier. */
+  runId: string;
+  /** Job identifier to advance the step pointer for. */
+  jobId: string;
+  /** Clock for timestamping the job_completed event (terminal path only). */
+  clock: Clock;
+}
+
+/**
+ * Advance the step pointer for a job after a step has completed.
+ *
+ * Contract:
+ * - Reads the run state snapshot from disk.
+ * - Locates the current step pointer (`state.jobs[jobId].current_step`).
+ * - If undefined, treats it as "the implicit first step just finished"
+ *   (post-retry-reset baseline, TD-P8-005).
+ * - Finds the next step in `JobDefinition.steps` after the pointer.
+ * - If a next step exists: writes a new snapshot with `current_step` set
+ *   to the next step's id and returns `true`.
+ * - If no next step exists (or steps is empty): appends a single
+ *   `job_completed` event, sets `state.jobs[jobId].status = "completed"`,
+ *   removes `current_step`, writes a snapshot with the updated
+ *   `last_event_id`, and returns `false`.
+ * - If the job is in a terminal/gated state (`completed`, `failed`,
+ *   `blocked`): returns `false` immediately without touching disk.
+ * - If state is missing or the job/pointer cannot be resolved: throws
+ *   `StateError` without writing any state or event.
+ *
+ * Reference: docs/phases/p8-router-and-signals/workflows/wf-p8-multistep/01-cases-and-tests.md
+ * FP-MULTISTEP-ENGINE-ENTRY, FP-MULTISTEP-POINTER-INIT, FP-MULTISTEP-POINTER-WRITE,
+ * FP-MULTISTEP-JOB-COMPLETED, FP-MULTISTEP-FINAL-SEQUENCE, FP-MULTISTEP-FAILED-GATE,
+ * FP-MULTISTEP-INVALID-JOB, FP-MULTISTEP-UNKNOWN-POINTER, FP-MULTISTEP-STATE-MISSING,
+ * FP-MULTISTEP-EMPTY-STEPS, FP-MULTISTEP-IDEMPOTENT-TERMINAL.
+ */
+export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
+  const { runDir, runId, jobId, clock } = opts;
+
+  const stateStore = new LocalStateStore();
+  const eventWriter = new JsonlEventWriter();
+
+  // ── 1. Read state snapshot — throw StateError if missing ─────────────────
+
+  const state = await stateStore.readSnapshot(runDir);
+  if (state === null) {
+    throw new StateError(`state.json missing for run ${runId}`);
+  }
+
+  // ── 2. Locate job — throw StateError if absent ────────────────────────────
+
+  const jobState = state.jobs[jobId];
+  if (jobState === undefined) {
+    throw new StateError(`Job "${jobId}" not found in state for run ${runId}`);
+  }
+
+  // ── 3. Idempotent terminal guard (FP-MULTISTEP-IDEMPOTENT-TERMINAL) ───────
+
+  if (jobState.status === "completed") {
+    return false;
+  }
+
+  // ── 4. Failed/blocked gate — inert no-op (FP-MULTISTEP-FAILED-GATE) ──────
+
+  if (jobState.status === "failed" || jobState.status === "blocked") {
+    return false;
+  }
+
+  // ── 5. Load workflow to resolve JobDefinition.steps ──────────────────────
+
+  const workflowPath = await readWorkflowPathFromRunYml(runDir);
+  const wf = await loadWorkflowFile(workflowPath);
+
+  const jobDef = wf.jobs[jobId];
+  if (jobDef === undefined) {
+    throw new StateError(
+      `Job "${jobId}" not found in workflow definition for run ${runId}`
+    );
+  }
+
+  const steps = jobDef.steps;
+
+  // ── 6. Empty steps array — defensive completion (FP-MULTISTEP-EMPTY-STEPS) ─
+
+  if (steps.length === 0) {
+    return await appendJobCompleted({ state, stateStore, eventWriter, runDir, runId, jobId, clock });
+  }
+
+  // ── 7. Resolve current step index ────────────────────────────────────────
+
+  const currentStep = jobState.current_step;
+  let currentIndex: number;
+
+  if (currentStep === undefined) {
+    // FP-MULTISTEP-POINTER-INIT: undefined means "implicit first step just finished"
+    currentIndex = 0;
+  } else {
+    const idx = steps.findIndex((s) => s.id === currentStep);
+    if (idx === -1) {
+      // FP-MULTISTEP-UNKNOWN-POINTER
+      throw new StateError(
+        `current_step "${currentStep}" not found in steps for job "${jobId}" in run ${runId}`
+      );
+    }
+    currentIndex = idx;
+  }
+
+  // ── 8. Find next step ─────────────────────────────────────────────────────
+
+  const nextIndex = currentIndex + 1;
+
+  if (nextIndex < steps.length) {
+    // ── 8a. Non-terminal: advance pointer, write snapshot, return true ──────
+    // FP-MULTISTEP-POINTER-WRITE: no new events, just update current_step
+    const nextStepId = steps[nextIndex]!.id;
+    const updatedState: RunState = {
+      ...state,
+      jobs: {
+        ...state.jobs,
+        [jobId]: {
+          ...jobState,
+          current_step: nextStepId,
+        },
+      },
+    };
+    await stateStore.writeSnapshot(runDir, updatedState);
+    return true;
+  }
+
+  // ── 8b. Terminal: no next step — append job_completed, complete job ───────
+  // FP-MULTISTEP-JOB-COMPLETED, FP-MULTISTEP-FINAL-SEQUENCE
+  return await appendJobCompleted({ state, stateStore, eventWriter, runDir, runId, jobId, clock });
+}
+
+// ---------------------------------------------------------------------------
+// appendJobCompleted — shared terminal path for advanceJob
+// ---------------------------------------------------------------------------
+
+interface AppendJobCompletedOpts {
+  state: RunState;
+  stateStore: LocalStateStore;
+  eventWriter: JsonlEventWriter;
+  runDir: string;
+  runId: string;
+  jobId: string;
+  clock: Clock;
+}
+
+async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> {
+  const { state, stateStore, eventWriter, runDir, runId, jobId, clock } = opts;
+
+  const jobState = state.jobs[jobId]!;
+  const attempt = jobState.attempt ?? 1;
+
+  // Read the current tail event id to derive the next sequential counter
+  const lastId = await eventWriter.readLastEventId(runDir);
+  const counter = lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
+  const jobCompletedId = formatEventId(counter + 1);
+
+  // Append job_completed event BEFORE writing snapshot (FP-MULTISTEP-FINAL-SEQUENCE)
+  await eventWriter.appendEvent(runDir, {
+    id: jobCompletedId,
+    run_id: runId,
+    type: "job_completed",
+    timestamp: clock.now(),
+    producer: "engine",
+    job: jobId,
+    step: null,
+    attempt,
+    payload: { job_id: jobId, attempt },
+  });
+
+  // Build terminal snapshot: remove current_step, set status = "completed",
+  // update last_event_id to the appended event id.
+  const completedJobState = { ...jobState };
+  delete completedJobState.current_step;
+  completedJobState.status = "completed";
+
+  const completedState: RunState = {
+    ...state,
+    last_event_id: jobCompletedId,
+    jobs: {
+      ...state.jobs,
+      [jobId]: completedJobState,
+    },
+  };
+  await stateStore.writeSnapshot(runDir, completedState);
+
+  return false;
 }
 
 // ---------------------------------------------------------------------------

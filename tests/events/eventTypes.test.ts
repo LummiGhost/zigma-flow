@@ -2,10 +2,10 @@
  * Event type catalog tests for WF-P4-EVENT (Step 1 — Cases and Tests).
  *
  * Covers:
- *   - The 17-element `ZigmaFlowEventType` catalog (closed string union + runtime tuple).
+ *   - The 19-element `ZigmaFlowEventType` catalog (closed string union + runtime tuple).
  *   - `EventEnvelope` common fields (id, run_id, type, timestamp, producer, job, step, attempt).
  *   - `ZigmaFlowEvent` discriminated union — type narrowing + exhaustiveness.
- *   - JSON round-trip of each of the 17 event types (structural equality after serialize/parse).
+ *   - JSON round-trip of each of the 19 event types (structural equality after serialize/parse).
  *   - `nextEventId(counter)` formatter behavior (first id, sequential ids, width growth).
  *
  * Reference:
@@ -28,9 +28,11 @@ import type {
   AgentReportAcceptedPayload,
   CheckCompletedPayload,
   EventEnvelope,
+  JobActivatedPayload,
   JobCompletedPayload,
   JobReadyPayload,
   JobRetryingPayload,
+  JobSkippedPayload,
   PromptGeneratedPayload,
   RouterDecidedPayload,
   RunBlockedPayload,
@@ -94,7 +96,7 @@ function runEnvelope(id: string, type: ZigmaFlowEventType): EventEnvelope {
 // ---------------------------------------------------------------------------
 
 describe("ZigmaFlowEventType", () => {
-  it("enumerates all 17 MVP event types from mvp-contracts.md §2.4 (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
+  it("enumerates all 19 MVP event types from mvp-contracts.md §2.4 (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
     const expected: ZigmaFlowEventType[] = [
       "run_created",
       "job_ready",
@@ -113,12 +115,14 @@ describe("ZigmaFlowEventType", () => {
       "run_failed",
       "run_completed",
       "run_cancelled",
+      "job_activated",
+      "job_skipped",
     ];
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(17);
-    expect(expected.length).toBe(17);
+    expect(EVENT_TYPES.length).toBe(19);
+    expect(expected.length).toBe(19);
   });
 });
 
@@ -239,6 +243,10 @@ describe("ZigmaFlowEvent", () => {
           return "run_completed";
         case "run_cancelled":
           return "run_cancelled";
+        case "job_activated":
+          return "job_activated";
+        case "job_skipped":
+          return "job_skipped";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;
@@ -513,6 +521,37 @@ describe("ZigmaFlowEvent JSON round-trip", () => {
     const back = roundTrip(ev);
     expect(back).toEqual(ev);
     expect(back.type).toBe("run_cancelled");
+  });
+
+  it("round-trips job_activated (T-EVT-RT-18, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {
+    const payload: JobActivatedPayload = {
+      job_id: "architecture-design",
+      reason: "router decided: activate_job",
+    };
+    const ev: ZigmaFlowEvent = {
+      ...runEnvelope("evt-018", "job_activated"),
+      type: "job_activated",
+      payload,
+    };
+    const back = roundTrip(ev);
+    expect(back).toEqual(ev);
+    expect(back.type).toBe("job_activated");
+  });
+
+  it("round-trips job_skipped (T-EVT-RT-19, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {
+    const payload: JobSkippedPayload = {
+      job_id: "review",
+      target: "cleanup",
+      reason: "router decided: goto_job",
+    };
+    const ev: ZigmaFlowEvent = {
+      ...runEnvelope("evt-019", "job_skipped"),
+      type: "job_skipped",
+      payload,
+    };
+    const back = roundTrip(ev);
+    expect(back).toEqual(ev);
+    expect(back.type).toBe("job_skipped");
   });
 });
 

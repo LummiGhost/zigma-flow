@@ -6,7 +6,7 @@
  */
 
 // ---------------------------------------------------------------------------
-// ZigmaFlowEventType — the 17 MVP event type tags (closed string union)
+// ZigmaFlowEventType — the 19 MVP event type tags (closed string union)
 // ---------------------------------------------------------------------------
 
 export type ZigmaFlowEventType =
@@ -26,10 +26,12 @@ export type ZigmaFlowEventType =
   | "run_blocked"
   | "run_failed"
   | "run_completed"
-  | "run_cancelled";
+  | "run_cancelled"
+  | "job_activated"
+  | "job_skipped";
 
 /**
- * Runtime tuple of all 17 event type tags.
+ * Runtime tuple of all 19 event type tags.
  * Length is statically checked by the test suite.
  */
 export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
@@ -50,6 +52,8 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "run_failed",
   "run_completed",
   "run_cancelled",
+  "job_activated",
+  "job_skipped",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -152,6 +156,17 @@ export interface RunCancelledPayload {
   reason: string;
 }
 
+export interface JobActivatedPayload {
+  job_id: string;
+  reason: string;
+}
+
+export interface JobSkippedPayload {
+  job_id: string;
+  target: string;
+  reason: string;
+}
+
 // ---------------------------------------------------------------------------
 // EventEnvelope — the common envelope wrapping every event
 // ---------------------------------------------------------------------------
@@ -168,7 +183,7 @@ export interface EventEnvelope {
 }
 
 // ---------------------------------------------------------------------------
-// ZigmaFlowEvent — discriminated union of all 17 concrete event types
+// ZigmaFlowEvent — discriminated union of all 19 concrete event types
 // ---------------------------------------------------------------------------
 
 export type ZigmaFlowEvent =
@@ -188,7 +203,9 @@ export type ZigmaFlowEvent =
   | (EventEnvelope & { type: "run_blocked"; payload: RunBlockedPayload })
   | (EventEnvelope & { type: "run_failed"; payload: RunFailedPayload })
   | (EventEnvelope & { type: "run_completed"; payload: RunCompletedPayload })
-  | (EventEnvelope & { type: "run_cancelled"; payload: RunCancelledPayload });
+  | (EventEnvelope & { type: "run_cancelled"; payload: RunCancelledPayload })
+  | (EventEnvelope & { type: "job_activated"; payload: JobActivatedPayload })
+  | (EventEnvelope & { type: "job_skipped"; payload: JobSkippedPayload });
 
 // ---------------------------------------------------------------------------
 // nextEventId — sequential event id formatter

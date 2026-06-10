@@ -256,7 +256,16 @@ const ROUTER_WORKFLOW_RETRY_JOB_YAML = `\
 name: code-change
 version: "0.1.0"
 jobs:
+  implement:
+    retry:
+      max_attempts: 3
+    steps:
+      - id: build
+        type: script
+        run: "echo build"
   review:
+    needs:
+      - implement
     steps:
       - id: route-decision
         type: router
@@ -271,6 +280,12 @@ const ROUTER_WORKFLOW_ACTIVATE_JOB_YAML = `\
 name: code-change
 version: "0.1.0"
 jobs:
+  architecture-design:
+    activation: optional
+    steps:
+      - id: design
+        type: script
+        run: "echo design"
   review:
     steps:
       - id: route-decision
@@ -294,6 +309,13 @@ jobs:
         cases:
           stop:
             goto_job: cleanup
+  cleanup:
+    needs:
+      - review
+    steps:
+      - id: cleanup-step
+        type: script
+        run: "echo cleanup"
 `;
 
 /**
@@ -518,7 +540,7 @@ describe("executeRouterStep — block action (T-ROUTER-3)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// T-ROUTER-4: retry_job — decision-only; state stays "running" (TD-P8-005)
+// T-ROUTER-4: retry_job — router delegates to applyRoutingAction (WF-P8-SIGNALS)
 // ---------------------------------------------------------------------------
 
 describe("executeRouterStep — retry_job action (T-ROUTER-4)", () => {
@@ -533,7 +555,7 @@ describe("executeRouterStep — retry_job action (T-ROUTER-4)", () => {
   });
 
   it(
-    "emits router_decided(action:\"retry_job\", target:\"implement\") and leaves job status \"running\"; no terminal event appended (T-ROUTER-4, UC-ROUTER-4, TD-P8-005)",
+    "emits step_started → router_decided(action:\"retry_job\") → signal_received → job_retrying; implement transitions to ready with attempt=2 (T-ROUTER-4, UC-ROUTER-4)",
     async () => {
       const { runId, runDir } = await bootstrapRouterRun(
         sandbox,
@@ -552,33 +574,39 @@ describe("executeRouterStep — retry_job action (T-ROUTER-4)", () => {
       const state = await readStateSnapshot(runDir);
       const types = events.map((e) => e.type);
 
-      // (a) events contain step_started, router_decided
+      // (a) events contain step_started, router_decided, signal_received, job_retrying
       expect(types).toContain("step_started");
       expect(types).toContain("router_decided");
+      expect(types).toContain("signal_received");
+      expect(types).toContain("job_retrying");
 
       // (b) router_decided.payload.action === "retry_job"
       const routerDecidedEvent = events.find((e) => e.type === "router_decided")!;
       expect(routerDecidedEvent.payload["action"]).toBe("retry_job");
-
-      // (c) router_decided.payload.target === "implement"
       expect(routerDecidedEvent.payload["target"]).toBe("implement");
 
-      // (d) NO step_completed / step_failed / job_completed
-      expect(types).not.toContain("step_completed");
-      expect(types).not.toContain("step_failed");
-      expect(types).not.toContain("job_completed");
+      // (c) ordering: step_started < router_decided < signal_received < job_retrying
+      const stepStartedIdx = types.indexOf("step_started");
+      const routerDecidedIdx = types.indexOf("router_decided");
+      const signalIdx = types.indexOf("signal_received");
+      const retryIdx = types.indexOf("job_retrying");
+      expect(routerDecidedIdx).toBeGreaterThan(stepStartedIdx);
+      expect(signalIdx).toBeGreaterThan(routerDecidedIdx);
+      expect(retryIdx).toBeGreaterThan(signalIdx);
 
-      // (e) state.jobs.review.status === "running"
-      expect(state.jobs["review"]?.status).toBe("running");
+      // (d) implement transitions to ready with attempt=2
+      expect(state.jobs["implement"]?.status).toBe("ready");
+      expect((state.jobs["implement"] as Record<string, unknown>)["attempt"]).toBe(2);
 
-      // (f) state.last_event_id === router_decided event id
-      expect(state.last_event_id).toBe(routerDecidedEvent.id);
+      // (e) state.last_event_id === tail event id
+      const tailEvent = events[events.length - 1]!;
+      expect(state.last_event_id).toBe(tailEvent.id);
     }
   );
 });
 
 // ---------------------------------------------------------------------------
-// T-ROUTER-5: activate_job — decision-only; state stays "running"
+// T-ROUTER-5: activate_job — router delegates to applyRoutingAction (WF-P8-SIGNALS)
 // ---------------------------------------------------------------------------
 
 describe("executeRouterStep — activate_job action (T-ROUTER-5)", () => {
@@ -593,7 +621,7 @@ describe("executeRouterStep — activate_job action (T-ROUTER-5)", () => {
   });
 
   it(
-    "emits router_decided(action:\"activate_job\", target:\"architecture-design\") and leaves job status \"running\"; no terminal event appended (T-ROUTER-5, UC-ROUTER-5, TD-P8-005)",
+    "emits step_started → router_decided(action:\"activate_job\") → signal_received → job_activated; architecture-design transitions to ready (T-ROUTER-5, UC-ROUTER-5)",
     async () => {
       const { runId, runDir } = await bootstrapRouterRun(
         sandbox,
@@ -612,29 +640,36 @@ describe("executeRouterStep — activate_job action (T-ROUTER-5)", () => {
       const state = await readStateSnapshot(runDir);
       const types = events.map((e) => e.type);
 
-      // events contain step_started, router_decided
+      // events contain step_started, router_decided, signal_received, job_activated
       expect(types).toContain("step_started");
       expect(types).toContain("router_decided");
+      expect(types).toContain("signal_received");
+      expect(types).toContain("job_activated");
 
       // router_decided.payload
       const routerDecidedEvent = events.find((e) => e.type === "router_decided")!;
       expect(routerDecidedEvent.payload["action"]).toBe("activate_job");
       expect(routerDecidedEvent.payload["target"]).toBe("architecture-design");
 
-      // NO terminal events
-      expect(types).not.toContain("step_completed");
-      expect(types).not.toContain("step_failed");
-      expect(types).not.toContain("job_completed");
+      // ordering: router_decided < signal_received < job_activated
+      const routerDecidedIdx = types.indexOf("router_decided");
+      const signalIdx = types.indexOf("signal_received");
+      const activatedIdx = types.indexOf("job_activated");
+      expect(signalIdx).toBeGreaterThan(routerDecidedIdx);
+      expect(activatedIdx).toBeGreaterThan(signalIdx);
 
-      // job status stays running; last_event_id = router_decided
-      expect(state.jobs["review"]?.status).toBe("running");
-      expect(state.last_event_id).toBe(routerDecidedEvent.id);
+      // architecture-design transitions from inactive to ready
+      expect(state.jobs["architecture-design"]?.status).toBe("ready");
+
+      // state.last_event_id === tail event id
+      const tailEvent = events[events.length - 1]!;
+      expect(state.last_event_id).toBe(tailEvent.id);
     }
   );
 });
 
 // ---------------------------------------------------------------------------
-// T-ROUTER-6: goto_job — decision-only; state stays "running"
+// T-ROUTER-6: goto_job — router delegates to applyRoutingAction (WF-P8-SIGNALS)
 // ---------------------------------------------------------------------------
 
 describe("executeRouterStep — goto_job action (T-ROUTER-6)", () => {
@@ -649,7 +684,7 @@ describe("executeRouterStep — goto_job action (T-ROUTER-6)", () => {
   });
 
   it(
-    "emits router_decided(action:\"goto_job\", target:\"cleanup\") and leaves job status \"running\"; no terminal event appended (T-ROUTER-6, UC-ROUTER-6, TD-P8-005)",
+    "emits step_started → router_decided(action:\"goto_job\") → signal_received → job_skipped; review completes; cleanup transitions to ready (T-ROUTER-6, UC-ROUTER-6)",
     async () => {
       const { runId, runDir } = await bootstrapRouterRun(
         sandbox,
@@ -668,23 +703,31 @@ describe("executeRouterStep — goto_job action (T-ROUTER-6)", () => {
       const state = await readStateSnapshot(runDir);
       const types = events.map((e) => e.type);
 
-      // events contain step_started, router_decided
+      // events contain step_started, router_decided, signal_received, job_skipped
       expect(types).toContain("step_started");
       expect(types).toContain("router_decided");
+      expect(types).toContain("signal_received");
+      expect(types).toContain("job_skipped");
 
       // router_decided.payload
       const routerDecidedEvent = events.find((e) => e.type === "router_decided")!;
       expect(routerDecidedEvent.payload["action"]).toBe("goto_job");
       expect(routerDecidedEvent.payload["target"]).toBe("cleanup");
 
-      // NO terminal events
-      expect(types).not.toContain("step_completed");
-      expect(types).not.toContain("step_failed");
-      expect(types).not.toContain("job_completed");
+      // ordering: router_decided < signal_received < job_skipped
+      const routerDecidedIdx = types.indexOf("router_decided");
+      const signalIdx = types.indexOf("signal_received");
+      const skippedIdx = types.indexOf("job_skipped");
+      expect(signalIdx).toBeGreaterThan(routerDecidedIdx);
+      expect(skippedIdx).toBeGreaterThan(signalIdx);
 
-      // job status stays running; last_event_id = router_decided
-      expect(state.jobs["review"]?.status).toBe("running");
-      expect(state.last_event_id).toBe(routerDecidedEvent.id);
+      // review completes; cleanup transitions to ready
+      expect(state.jobs["review"]?.status).toBe("completed");
+      expect(state.jobs["cleanup"]?.status).toBe("ready");
+
+      // state.last_event_id === tail event id
+      const tailEvent = events[events.length - 1]!;
+      expect(state.last_event_id).toBe(tailEvent.id);
     }
   );
 });

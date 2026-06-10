@@ -33,6 +33,9 @@ import {
 } from "../run/index.js";
 import { nextEventId as formatEventId } from "../events/index.js";
 
+export { applyRoutingAction } from "./routing.js";
+export type { ApplyRoutingActionOpts } from "./routing.js";
+
 export interface CreateRunInputs {
   workflowPath: string;
   task: string;

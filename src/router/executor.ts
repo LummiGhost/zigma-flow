@@ -32,6 +32,7 @@ import type { Clock, RunState } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { RouterAction } from "../workflow/index.js";
 import { RouterError, StateError, WorkflowError } from "../utils/index.js";
+import { applyRoutingAction } from "../engine/routing.js";
 
 // ---------------------------------------------------------------------------
 // ExecuteRouterStepOpts
@@ -374,13 +375,16 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     await stateStore.writeSnapshot(runDir, blockedState);
 
   } else {
-    // Object-form action: retry_job / activate_job / goto_job
-    // Per TD-P8-005: emit router_decided only; no terminal event.
-    // Job remains "running"; last_event_id advances to router_decided.
-    const deferredState: RunState = {
-      ...runningState,
-      last_event_id: routerDecidedId,
-    };
-    await stateStore.writeSnapshot(runDir, deferredState);
+    // Object-form action: route through signal handler (WF-P8-SIGNALS)
+    await applyRoutingAction({
+      runDir,
+      runId,
+      sourceJobId: jobId,
+      sourceStepId: stepId,
+      attempt,
+      action: matchedAction,
+      reason: `router decided: ${actionStr} (case: ${switchValue})`,
+      clock,
+    });
   }
 }

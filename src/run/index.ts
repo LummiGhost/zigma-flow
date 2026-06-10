@@ -51,9 +51,12 @@ export interface StateStore {
 
 export interface JobState {
   status: "ready" | "waiting" | "inactive" | "running" | "done" | "completed" | "failed" | "blocked";
-  activation?: string;      // present iff workflow declares activation on the job
-  attempt?: number;         // present iff retry-eligible; omit for initial state
-  current_step?: string;    // id of the step that has just completed within the current attempt; absent before any step has run (WF-P8-MULTISTEP Architecture Decision 2)
+  activation?: string;           // present iff workflow declares activation on the job
+  attempt?: number;              // present iff retry-eligible; omit for initial state
+  current_step?: string;         // id of the step that has just completed within the current attempt; absent before any step has run (WF-P8-MULTISTEP Architecture Decision 2)
+  activated?: boolean;           // true after activate_job transition (WF-P8-SIGNALS)
+  activation_reason?: string;    // reason from opts.reason on activate_job (WF-P8-SIGNALS)
+  retry_reason?: string;         // reason from opts.reason on retry_job (WF-P8-SIGNALS)
 }
 
 export interface RunState {

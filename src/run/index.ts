@@ -53,7 +53,7 @@ export interface JobState {
   status: "ready" | "waiting" | "inactive" | "running" | "done" | "completed" | "failed" | "blocked";
   activation?: string;      // present iff workflow declares activation on the job
   attempt?: number;         // present iff retry-eligible; omit for initial state
-  current_step?: string;    // id of the step currently being executed; absent before first step
+  current_step?: string;    // id of the step that has just completed within the current attempt; absent before any step has run (WF-P8-MULTISTEP Architecture Decision 2)
 }
 
 export interface RunState {

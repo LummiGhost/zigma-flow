@@ -11,6 +11,7 @@ export {
   StateError,
   ScriptError,
   CheckError,
+  RouterError,
   PermissionError,
   type ZigmaFlowErrorKind,
   type ZigmaFlowErrorOptions

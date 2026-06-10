@@ -15,6 +15,7 @@ export type ZigmaFlowErrorKind =
   | "FilesystemError"
   | "ScriptError"
   | "CheckError"
+  | "RouterError"
   | "PermissionError"
   | "ArtifactError"
   | "ConfigError";
@@ -103,6 +104,12 @@ export class ScriptError extends ZigmaFlowError {
 export class CheckError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
     super("CheckError", message, 1, options);
+  }
+}
+
+export class RouterError extends ZigmaFlowError {
+  public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
+    super("RouterError", message, 1, options);
   }
 }
 

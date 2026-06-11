@@ -2,10 +2,10 @@
  * Event type catalog tests for WF-P4-EVENT (Step 1 — Cases and Tests).
  *
  * Covers:
- *   - The 19-element `ZigmaFlowEventType` catalog (closed string union + runtime tuple).
+ *   - The 21-element `ZigmaFlowEventType` catalog (closed string union + runtime tuple).
  *   - `EventEnvelope` common fields (id, run_id, type, timestamp, producer, job, step, attempt).
  *   - `ZigmaFlowEvent` discriminated union — type narrowing + exhaustiveness.
- *   - JSON round-trip of each of the 19 event types (structural equality after serialize/parse).
+ *   - JSON round-trip of each of the 21 event types (structural equality after serialize/parse).
  *   - `nextEventId(counter)` formatter behavior (first id, sequential ids, width growth).
  *
  * Reference:
@@ -29,7 +29,9 @@ import type {
   CheckCompletedPayload,
   EventEnvelope,
   JobActivatedPayload,
+  JobBlockedPayload,
   JobCompletedPayload,
+  JobFailedPayload,
   JobReadyPayload,
   JobRetryingPayload,
   JobSkippedPayload,
@@ -96,7 +98,7 @@ function runEnvelope(id: string, type: ZigmaFlowEventType): EventEnvelope {
 // ---------------------------------------------------------------------------
 
 describe("ZigmaFlowEventType", () => {
-  it("enumerates all 19 MVP event types from mvp-contracts.md §2.4 (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
+  it("enumerates all 21 MVP event types from mvp-contracts.md §2.4 (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
     const expected: ZigmaFlowEventType[] = [
       "run_created",
       "job_ready",
@@ -117,12 +119,14 @@ describe("ZigmaFlowEventType", () => {
       "run_cancelled",
       "job_activated",
       "job_skipped",
+      "job_blocked",
+      "job_failed",
     ];
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(19);
-    expect(expected.length).toBe(19);
+    expect(EVENT_TYPES.length).toBe(21);
+    expect(expected.length).toBe(21);
   });
 });
 
@@ -247,6 +251,10 @@ describe("ZigmaFlowEvent", () => {
           return "job_activated";
         case "job_skipped":
           return "job_skipped";
+        case "job_blocked":
+          return "job_blocked";
+        case "job_failed":
+          return "job_failed";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;
@@ -552,6 +560,36 @@ describe("ZigmaFlowEvent JSON round-trip", () => {
     const back = roundTrip(ev);
     expect(back).toEqual(ev);
     expect(back.type).toBe("job_skipped");
+  });
+
+  it("round-trips job_blocked (T-EVT-RT-20, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {
+    const payload: JobBlockedPayload = {
+      job_id: "implement",
+      reason: "retry exhausted: max_attempts reached",
+    };
+    const ev: ZigmaFlowEvent = {
+      ...runEnvelope("evt-020", "job_blocked"),
+      type: "job_blocked",
+      payload,
+    };
+    const back = roundTrip(ev);
+    expect(back).toEqual(ev);
+    expect(back.type).toBe("job_blocked");
+  });
+
+  it("round-trips job_failed (T-EVT-RT-21, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {
+    const payload: JobFailedPayload = {
+      job_id: "implement",
+      reason: "retry exhausted: on_exceeded.status = failed",
+    };
+    const ev: ZigmaFlowEvent = {
+      ...runEnvelope("evt-021", "job_failed"),
+      type: "job_failed",
+      payload,
+    };
+    const back = roundTrip(ev);
+    expect(back).toEqual(ev);
+    expect(back.type).toBe("job_failed");
   });
 });
 

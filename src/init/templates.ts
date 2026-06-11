@@ -60,22 +60,30 @@ on:
 skills:
   code:
     uses: skill://zigma.code-change@1
-    expose_to_agent: true
 
 permissions:
   contents: read
-  edits: none
+  edits: write
   commands: none
   workflow_state: none
 
 signals:
-  blocked:
+  needs_architecture_design:
+    severity: info
+    priority: 50
+    allowed_from:
+      - plan
+      - review
+    action:
+      activate_job: architecture-design
+
+  review_rejected:
     severity: high
     priority: 100
     allowed_from:
-      - intake
+      - review
     action:
-      status: blocked
+      retry_job: implement
 
 jobs:
   intake:
@@ -84,30 +92,124 @@ jobs:
     steps:
       - id: analyze
         type: agent
-        uses: agent://planner
         expose:
           skills:
             - code
-        with:
-          task: "\${{ inputs.task }}"
-        outputs:
-          summary: report.summary
-          signals: report.signals
 
-      - id: collect-diff
-        type: script
-        uses: code.scripts.collect-diff
-        outputs:
-          diff: result.diff
+  code-map:
+    needs:
+      - intake
+    workspace:
+      mode: read-only
+    steps:
+      - id: map
+        type: agent
+        expose:
+          skills:
+            - code
 
+  risk-scan:
+    needs:
+      - code-map
+    workspace:
+      mode: read-only
+    steps:
+      - id: validate
+        type: check
+        kind: file-exists
+        path: "."
       - id: route
         type: router
-        switch: "\${{ steps.analyze.outputs.signals }}"
         cases:
-          blocked:
-            status: blocked
-          default:
-            continue
+          default: continue
+
+  plan:
+    needs:
+      - risk-scan
+    workspace:
+      mode: read-only
+    steps:
+      - id: plan
+        type: agent
+        expose:
+          skills:
+            - code
+
+  architecture-design:
+    activation: "manual"
+    needs:
+      - plan
+    workspace:
+      mode: read-only
+    steps:
+      - id: design
+        type: agent
+        expose:
+          skills:
+            - code
+
+  implement:
+    needs:
+      - plan
+    optional_needs:
+      - architecture-design
+    retry:
+      max_attempts: 3
+      on_exceeded:
+        status: failed
+    steps:
+      - id: implement
+        type: agent
+        expose:
+          skills:
+            - code
+
+  static-check:
+    needs:
+      - implement
+    workspace:
+      mode: read-only
+    steps:
+      - id: check
+        type: script
+        run: "echo 'static-check placeholder: replace with pnpm typecheck && pnpm lint'"
+        on_failure: fail
+
+  unit-test:
+    needs:
+      - implement
+    workspace:
+      mode: read-only
+    steps:
+      - id: test
+        type: script
+        run: "echo 'unit-test placeholder: replace with pnpm test:ci'"
+        on_failure: fail
+
+  review:
+    needs:
+      - static-check
+      - unit-test
+    workspace:
+      mode: read-only
+    steps:
+      - id: review
+        type: agent
+        expose:
+          skills:
+            - code
+
+  summarize:
+    needs:
+      - review
+    workspace:
+      mode: read-only
+    steps:
+      - id: summarize
+        type: agent
+        expose:
+          skills:
+            - code
 `;
 }
 
@@ -121,31 +223,30 @@ kind: skill-pack
 name: zigma.code-change
 version: 1.0.0
 description: >
-  Code change skill pack for Zigma Flow. Provides knowledge, prompts,
-  scripts, checks, and policies for implementing and reviewing code changes.
+  Code change skill pack for Zigma Flow.
 
 knowledge:
-  - path: knowledge/coding-guidelines.md
-    id: coding-guidelines
+  - id: coding-guidelines
+    path: knowledge/coding-guidelines.md
+  - id: workflow-guide
+    path: knowledge/workflow-guide.md
 
 prompts:
-  - path: prompts/implement.md
-    id: implement
-  - path: prompts/review.md
-    id: review
+  - id: intake
+    path: prompts/intake.md
+  - id: code-map
+    path: prompts/code-map.md
+  - id: plan
+    path: prompts/plan.md
+  - id: implement
+    path: prompts/implement.md
+  - id: review
+    path: prompts/review.md
+  - id: summarize
+    path: prompts/summarize.md
 
-scripts:
-  - path: scripts/collect-diff.ts
-    id: collect-diff
-
-checks:
-  - path: checks/report-schema.json
-    id: report-schema
-    kind: json-schema
-  - path: checks/forbidden-paths.yml
-    id: forbidden-paths
-    kind: path-policy
-
+scripts: []
+checks: []
 functions: []
 
 policies:
@@ -188,6 +289,187 @@ export function codingGuidelinesMd(): string {
 }
 
 // ---------------------------------------------------------------------------
+// skills/code-change/knowledge/workflow-guide.md
+// ---------------------------------------------------------------------------
+
+export function workflowGuideMd(): string {
+  return `# Workflow Guide
+
+This guide describes the code-change workflow structure and explains what each
+job is expected to produce.
+
+## Workflow DAG
+
+\`\`\`
+intake
+  └── code-map
+        └── risk-scan
+              └── plan
+                    ├── architecture-design [optional, activation: manual]
+                    └── implement (optional_needs: architecture-design)
+                          ├── static-check
+                          ├── unit-test
+                          └── review
+                                └── summarize
+\`\`\`
+
+## report.json Contract
+
+Every agent step must write a \`report.json\` to the run artifact directory.
+The report must include the following fields:
+
+- \`outputs\`: key-value pairs of step outputs.
+- \`artifacts\`: list of artifact file paths produced during this step.
+- \`signals\`: list of signal names to emit (e.g. \`review_rejected\`).
+- \`summary\`: a short human-readable summary of what was done.
+
+Example:
+\`\`\`json
+{
+  "outputs": { "key": "value" },
+  "artifacts": ["path/to/artifact.md"],
+  "signals": [],
+  "summary": "Completed intake analysis."
+}
+\`\`\`
+
+## Job Expectations
+
+- **intake**: Analyze the task description. Output an intake-summary artifact.
+- **code-map**: Map the relevant code areas. Output a code-map artifact.
+- **risk-scan**: Automated check that code-map artifact exists and is valid.
+- **plan**: Create an implementation plan. Output a plan artifact. May emit
+  \`needs_architecture_design\` signal to activate the architecture-design job.
+- **architecture-design** (optional): Produce an architecture design artifact
+  when activated by signal.
+- **implement**: Implement the change. Has retry support (max 3 attempts).
+- **static-check**: Automated typecheck and lint (script step).
+- **unit-test**: Automated test run (script step).
+- **review**: Review the implementation. May emit \`review_rejected\` signal to
+  retry the implement job.
+- **summarize**: Summarize the completed change. Output a summary artifact.
+
+## Signals
+
+- \`needs_architecture_design\`: Emitted by plan or review. Activates the
+  optional architecture-design job.
+- \`review_rejected\`: Emitted by review. Retries the implement job (up to 3
+  total attempts).
+
+## Stop After Completing
+
+Each agent step must stop after writing report.json. Do not proceed to
+subsequent steps autonomously.
+`;
+}
+
+// ---------------------------------------------------------------------------
+// skills/code-change/prompts/intake.md
+// ---------------------------------------------------------------------------
+
+export function intakeMd(): string {
+  return `# Intake Step Prompt
+
+You are the intake agent for a code-change workflow step.
+
+## Task
+
+Analyze the task description provided in the workflow inputs and produce an
+intake summary that will guide subsequent steps.
+
+## What to Read
+
+- The task description from \`inputs.task\`.
+- The coding guidelines knowledge file for context.
+
+## Output Requirements
+
+Write a \`report.json\` with the following fields:
+
+- \`outputs\`: include \`task_summary\` (short restatement of the task) and
+  \`scope\` (estimated scope: small/medium/large).
+- \`artifacts\`: list any artifact files you produce.
+- \`signals\`: leave empty unless you detect a blocking issue.
+- \`summary\`: a short human-readable summary of the task.
+
+The report schema is described in the workflow-guide knowledge file.
+
+Stop after completing this step — do not proceed to subsequent steps autonomously.
+`;
+}
+
+// ---------------------------------------------------------------------------
+// skills/code-change/prompts/code-map.md
+// ---------------------------------------------------------------------------
+
+export function codeMapMd(): string {
+  return `# Code Map Step Prompt
+
+You are the code-map agent for a code-change workflow step.
+
+## Task
+
+Analyze the codebase structure and identify the files, modules, and areas
+most relevant to the task.
+
+## What to Read
+
+- The intake summary artifact from the previous step.
+- The coding guidelines knowledge file.
+
+## Output Requirements
+
+Write a \`report.json\` with the following fields:
+
+- \`outputs\`: include \`files\` (list of relevant file paths) and
+  \`modules\` (list of relevant module names).
+- \`artifacts\`: list the code-map artifact file you produce.
+- \`signals\`: leave empty unless you detect a blocking issue.
+- \`summary\`: a short description of the code areas identified.
+
+The report schema is described in the workflow-guide knowledge file.
+
+Stop after completing this step — do not proceed to subsequent steps autonomously.
+`;
+}
+
+// ---------------------------------------------------------------------------
+// skills/code-change/prompts/plan.md
+// ---------------------------------------------------------------------------
+
+export function planMd(): string {
+  return `# Plan Step Prompt
+
+You are the planning agent for a code-change workflow step.
+
+## Task
+
+Create a detailed implementation plan based on the intake summary and code map.
+
+## What to Read
+
+- The intake summary artifact.
+- The code-map artifact.
+- The coding guidelines knowledge file.
+
+## Output Requirements
+
+Write a \`report.json\` with the following fields:
+
+- \`outputs\`: include \`plan_summary\` and \`steps\` (ordered list of
+  implementation steps).
+- \`artifacts\`: list the plan artifact file you produce.
+- \`signals\`: emit \`needs_architecture_design\` if the change requires
+  significant architectural decisions.
+- \`summary\`: a short description of the implementation plan.
+
+The report schema is described in the workflow-guide knowledge file.
+
+Stop after completing this step — do not proceed to subsequent steps autonomously.
+`;
+}
+
+// ---------------------------------------------------------------------------
 // skills/code-change/prompts/implement.md
 // ---------------------------------------------------------------------------
 
@@ -200,14 +482,21 @@ You are the implementation agent for a code-change workflow step.
 
 Implement the requested change based on the task description and available context.
 
+## What to Read
+
+- The intake summary, code-map, and plan artifacts.
+- The architecture design artifact if available.
+- The coding guidelines knowledge file.
+
 ## Output Requirements
 
-You must output a \`report.json\` matching the report schema defined in
-\`checks/report-schema.json\`. The report must include:
+You must output a \`report.json\` matching the report schema described in the
+workflow-guide knowledge file. The report must include:
 
 - \`outputs\`: key-value pairs of step outputs (e.g. summary, file paths).
 - \`artifacts\`: list of artifact references produced during this step.
-- \`signals\`: list of signals to emit (e.g. \`blocked\` if blocked).
+- \`signals\`: list of signals to emit (e.g. \`review_rejected\` is not for
+  this step — leave empty unless unexpected).
 - \`summary\`: a short human-readable summary of what was done.
 
 ## Instructions
@@ -234,14 +523,22 @@ You are the review agent for a code-change workflow step.
 Review the implementation produced in the previous step for correctness,
 quality, and adherence to the coding guidelines.
 
+## What to Read
+
+- The implementation artifacts from the implement step.
+- The plan artifact to verify the implementation matches the plan.
+- The coding guidelines knowledge file.
+
 ## Output Requirements
 
-You must output a \`report.json\` matching the report schema defined in
-\`checks/report-schema.json\`. The report must include:
+You must output a \`report.json\` matching the report schema described in the
+workflow-guide knowledge file. The report must include:
 
 - \`outputs\`: key-value pairs of review findings (e.g. approved, issues).
 - \`artifacts\`: list of artifact references (e.g. review notes).
-- \`signals\`: list of signals to emit (e.g. \`blocked\` if issues require rework).
+- \`signals\`: emit \`review_rejected\` if the implementation has issues that
+  require rework; emit \`needs_architecture_design\` if architectural changes
+  are needed.
 - \`summary\`: a short human-readable summary of the review outcome.
 
 ## Instructions
@@ -251,6 +548,42 @@ You must output a \`report.json\` matching the report schema defined in
 3. Identify any issues, risks, or improvements.
 4. Write the report.json with all required fields populated.
 5. Stop after completing this step — do not proceed to subsequent steps autonomously.
+`;
+}
+
+// ---------------------------------------------------------------------------
+// skills/code-change/prompts/summarize.md
+// ---------------------------------------------------------------------------
+
+export function summarizeMd(): string {
+  return `# Summarize Step Prompt
+
+You are the summary agent for a code-change workflow step.
+
+## Task
+
+Produce a final summary of the completed code change for human review and
+documentation purposes.
+
+## What to Read
+
+- All artifacts from previous steps (intake summary, code-map, plan,
+  implementation, review).
+- The workflow-guide knowledge file for context.
+
+## Output Requirements
+
+Write a \`report.json\` with the following fields:
+
+- \`outputs\`: include \`summary\` (complete change summary) and
+  \`files_changed\` (list of modified files).
+- \`artifacts\`: list the summary artifact file you produce.
+- \`signals\`: leave empty.
+- \`summary\`: a concise human-readable summary of the entire change.
+
+The report schema is described in the workflow-guide knowledge file.
+
+Stop after completing this step — do not proceed to subsequent steps autonomously.
 `;
 }
 

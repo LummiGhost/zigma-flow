@@ -12,15 +12,20 @@ import { join } from "node:path";
 import { getPackageInfo } from "../utils/index.js";
 import {
   codeChangeWorkflowYml,
+  codeMapMd,
   codingGuidelinesMd,
   collectDiffTs,
   configJsonTemplate,
   forbiddenPathsYml,
   implementMd,
+  intakeMd,
+  planMd,
   reportSchemaJson,
   reviewMd,
   skillLockJsonTemplate,
-  skillYml
+  skillYml,
+  summarizeMd,
+  workflowGuideMd
 } from "./templates.js";
 
 // ---------------------------------------------------------------------------
@@ -140,8 +145,16 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
       join(dotZigma, "skills", "code-change", "knowledge", "coding-guidelines.md"),
       codingGuidelinesMd()
     ],
+    [
+      join(dotZigma, "skills", "code-change", "knowledge", "workflow-guide.md"),
+      workflowGuideMd()
+    ],
+    [join(dotZigma, "skills", "code-change", "prompts", "intake.md"), intakeMd()],
+    [join(dotZigma, "skills", "code-change", "prompts", "code-map.md"), codeMapMd()],
+    [join(dotZigma, "skills", "code-change", "prompts", "plan.md"), planMd()],
     [join(dotZigma, "skills", "code-change", "prompts", "implement.md"), implementMd()],
     [join(dotZigma, "skills", "code-change", "prompts", "review.md"), reviewMd()],
+    [join(dotZigma, "skills", "code-change", "prompts", "summarize.md"), summarizeMd()],
     [join(dotZigma, "skills", "code-change", "scripts", "collect-diff.ts"), collectDiffTs()],
     [
       join(dotZigma, "skills", "code-change", "checks", "report-schema.json"),

@@ -259,7 +259,15 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     const nextAttempt = currentAttempt + 1;
 
     if (nextAttempt > maxAttempts) {
-      // Exhausted — set status blocked, no job_retrying event
+      // Exhausted — read on_exceeded.status from workflow config (default: blocked)
+      const onExceededStatus: "blocked" | "failed" =
+        retryConfig !== undefined &&
+        typeof retryConfig["on_exceeded"] === "object" &&
+        retryConfig["on_exceeded"] !== null &&
+        (retryConfig["on_exceeded"] as Record<string, unknown>)["status"] === "failed"
+          ? "failed"
+          : "blocked";
+
       const updatedState: RunState = {
         ...state,
         last_event_id: signalReceivedId,
@@ -267,7 +275,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
           ...state.jobs,
           [targetJobId]: {
             ...targetJobState,
-            status: "blocked",
+            status: onExceededStatus,
           },
         },
       };
@@ -295,6 +303,12 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     delete retryJobState.current_step;
     retryJobState.attempt = nextAttempt;
     retryJobState.retry_reason = reason;
+    // Store retry_with data as retry_inputs (wholesale replacement, not merge)
+    if (typeof action === "object" && "retry_with" in action && action.retry_with !== undefined) {
+      retryJobState.retry_inputs = { ...action.retry_with };
+    } else {
+      delete retryJobState.retry_inputs;
+    }
 
     const updatedState: RunState = {
       ...state,

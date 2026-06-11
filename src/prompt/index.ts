@@ -189,6 +189,31 @@ export function buildAgentPrompt(bundle: ContextBundle): string {
   lines.push("完成当前 step 后停止 — stop after completing this step.");
   lines.push("");
 
+  // ## Report Schema
+  lines.push("## Report Schema");
+  lines.push("");
+  lines.push(
+    `完成当前步骤后，将结果写入约定路径的 \`report.json\`（路径见上方 "Output"）。`
+  );
+  lines.push("");
+  lines.push("文件必须是合法 JSON，包含以下顶层字段：");
+  lines.push("");
+  lines.push("```json");
+  lines.push("{");
+  lines.push(`  "outputs": {},`);
+  lines.push(`  "artifacts": [],`);
+  lines.push(`  "signals": [],`);
+  lines.push(`  "summary": ""`);
+  lines.push("}");
+  lines.push("```");
+  lines.push("");
+  lines.push("字段说明：");
+  lines.push(`- \`"outputs"\`：当前步骤的输出值，键名见上方 "Functions" 中的 outputs 字段。`);
+  lines.push(`- \`"artifacts"\`：本步骤生成的大型输出（日志、diff、构建产物），以路径引用方式提供。`);
+  lines.push(`- \`"signals"\`：对工作流流程变化的结构化请求（见上方 "Available Workflow Signals"）。`);
+  lines.push(`- \`"summary"\`：本步骤的简短执行摘要。`);
+  lines.push("");
+
   return lines.join("\n");
 }
 

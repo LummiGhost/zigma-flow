@@ -231,7 +231,7 @@ describe("runInit integration", () => {
     expect((entry?.hash ?? "").length).toBeGreaterThan(0);
   });
 
-  it("code-change.yml contains skills, signals, agent/script/router job (T-INIT-9)", async () => {
+  it("code-change.yml contains skills, signals, agent/script/check job (T-INIT-9)", async () => {
     const { error } = await safeRunInit(tempDir);
     expect(error).toBeUndefined();
 
@@ -246,7 +246,7 @@ describe("runInit integration", () => {
     expect(yml).toMatch(/^jobs:/m);
     expect(yml).toMatch(/type:\s*agent/);
     expect(yml).toMatch(/type:\s*script/);
-    expect(yml).toMatch(/type:\s*router/);
+    expect(yml).toMatch(/type:\s*check/);
   });
 
   it("skill.yml declares knowledge, prompts, scripts, checks, functions, policies (T-INIT-10)", async () => {

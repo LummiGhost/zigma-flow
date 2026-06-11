@@ -1208,3 +1208,293 @@ describe("acceptAgentReport — signal path outputs persistence (T-ACCEPT-13)", 
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// T-ACCEPT-14: signal path retry_job — source job advances to completed
+// ---------------------------------------------------------------------------
+//
+// WF-P10-ENGINE-FIX (TD-P10-ACCEPT-ADVANCE):
+// After `applyRoutingAction` dispatches a `retry_job` action, the SOURCE job
+// (the job that submitted the report) is left in "running" by P9.
+// `acceptAgentReport` MUST call `advanceJob(sourceJobId)` to advance the
+// source job to "completed" (single-step agent job → terminal advanceJob
+// path). The fix lives entirely in `src/engine/accept.ts`.
+//
+// Red-phase note: BEFORE the fix is applied, this test fails on the
+// assertion `state.jobs["review"].status === "completed"` because P9's
+// signal-path return-after-dispatch leaves review in "running".
+// ---------------------------------------------------------------------------
+
+/**
+ * Workflow: `implement` (1 agent step, retry: max_attempts: 3) +
+ * `review` (1 agent step, needs: [implement]).
+ * Signal: `review_rejected` allowed_from [review], action retry_job: implement.
+ */
+const AGENT_REVIEW_RETRY_YAML = `\
+name: accept-review-retry
+version: "0.1.0"
+signals:
+  review_rejected:
+    severity: medium
+    priority: 50
+    allowed_from:
+      - review
+    action:
+      retry_job: implement
+jobs:
+  implement:
+    retry:
+      max_attempts: 3
+    steps:
+      - id: implement-step
+        type: agent
+        uses: zigma/implement-skill
+  review:
+    needs:
+      - implement
+    steps:
+      - id: review-step
+        type: agent
+        uses: zigma/review-skill
+`;
+
+describe("acceptAgentReport — signal path retry_job advances source job (T-ACCEPT-14)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "after retry_job signal dispatch, source job (review) transitions running → completed; target job (implement) transitions to ready with incremented attempt; events ordered signal_received → job_retrying → job_completed (T-ACCEPT-14, UC-ACCEPT-14, FP-ENGFIX-RETRY-ADV, FP-ENGFIX-NO-REGRESSION)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_REVIEW_RETRY_YAML,
+        "accept-review-retry"
+      );
+
+      // Set up: implement is completed (attempt 1), review is running on
+      // its single agent step (attempt 1). retry_job will reset implement
+      // to ready/attempt-2 while review must advance to completed.
+      await setJobState(runDir, "implement", {
+        status: "completed",
+        attempt: 1,
+      });
+      await setJobState(runDir, "review", {
+        status: "running",
+        current_step: "review-step",
+        attempt: 1,
+      });
+
+      await writeReport(runDir, "review", 1, "review-step", {
+        outputs: { decision: "rejected" },
+        artifacts: [],
+        signals: [
+          {
+            type: "review_rejected",
+            reason: "tests are insufficient",
+          },
+        ],
+        summary: "review complete — rejected",
+      });
+
+      await callAcceptAgentReport({
+        runDir,
+        runId,
+        jobId: "review",
+        clock: new FakeClock(),
+      });
+
+      // ── Source job (review) must be completed (THIS IS THE RED ASSERT). ──
+      const snap = await readStateSnapshot(runDir);
+      const review = snap.jobs["review"]!;
+      expect(review.status).toBe("completed");
+
+      // ── Target job (implement) must be ready, attempt incremented. ──
+      const implement = snap.jobs["implement"]!;
+      expect(implement.status).toBe("ready");
+      expect(implement.attempt).toBe(2);
+
+      // ── Events: signal_received → job_retrying → job_completed (review). ──
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+
+      const sigIdx = types.lastIndexOf("signal_received");
+      const retryIdx = types.lastIndexOf("job_retrying");
+      const completedIdx = types.lastIndexOf("job_completed");
+
+      expect(sigIdx).toBeGreaterThanOrEqual(0);
+      expect(retryIdx).toBeGreaterThan(sigIdx);
+      expect(completedIdx).toBeGreaterThan(retryIdx);
+
+      // signal_received carries the workflow signal name (not action discriminator).
+      expect(events[sigIdx]!.payload).toMatchObject({
+        signal: "review_rejected",
+        from_job: "review",
+        from_step: "review-step",
+      });
+
+      // job_completed must target the source (review), not implement.
+      expect(events[completedIdx]!.job).toBe("review");
+
+      // last_event_id must point to the events.jsonl tail (the source
+      // job_completed event).
+      expect(snap.last_event_id).toBe(events[events.length - 1]!.id);
+      expect(snap.last_event_id).toBe(events[completedIdx]!.id);
+
+      // NO agent_report_accepted on the signal-dispatch path.
+      expect(events.filter((e) => e.type === "agent_report_accepted")).toHaveLength(0);
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-ACCEPT-15: signal path activate_job — source job advances to completed
+// ---------------------------------------------------------------------------
+//
+// WF-P10-ENGINE-FIX (TD-P10-ACCEPT-ADVANCE):
+// Same source-job advancement contract as T-ACCEPT-14, but for the
+// `activate_job` action: after `applyRoutingAction` activates the optional
+// target job, `acceptAgentReport` MUST advance the source job to
+// "completed". The fix lives entirely in `src/engine/accept.ts`.
+//
+// Red-phase note: BEFORE the fix is applied, this test fails on the
+// assertion `state.jobs["plan"].status === "completed"` because P9's
+// signal-path return-after-dispatch leaves plan in "running".
+// ---------------------------------------------------------------------------
+
+/**
+ * Workflow: `plan` (1 agent step) + `architecture-design`
+ * (1 agent step, activation: "manual", needs: [plan]).
+ * Signal: `needs_architecture_design` allowed_from [plan],
+ *   action activate_job: architecture-design.
+ */
+const AGENT_PLAN_ACTIVATE_YAML = `\
+name: accept-plan-activate
+version: "0.1.0"
+signals:
+  needs_architecture_design:
+    severity: medium
+    priority: 50
+    allowed_from:
+      - plan
+    action:
+      activate_job: architecture-design
+jobs:
+  plan:
+    steps:
+      - id: plan-step
+        type: agent
+        uses: zigma/plan-skill
+  architecture-design:
+    activation: manual
+    needs:
+      - plan
+    steps:
+      - id: design-step
+        type: agent
+        uses: zigma/architecture-skill
+`;
+
+describe("acceptAgentReport — signal path activate_job advances source job (T-ACCEPT-15)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "after activate_job signal dispatch, source job (plan) transitions running → completed; target job (architecture-design) is ready or waiting per DAG; events ordered signal_received → job_activated → job_completed (T-ACCEPT-15, UC-ACCEPT-15, FP-ENGFIX-ACTIVATE-ADV, FP-ENGFIX-NO-REGRESSION)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_PLAN_ACTIVATE_YAML,
+        "accept-plan-activate"
+      );
+
+      // Set up: plan is running on its single agent step (attempt 1).
+      // architecture-design is inactive (set by createRun via activation
+      // declaration; verified below). activate_job will flip architecture-design
+      // to ready/waiting while plan must advance to completed.
+      await setJobState(runDir, "plan", {
+        status: "running",
+        current_step: "plan-step",
+        attempt: 1,
+      });
+
+      // Sanity check: bootstrapping placed architecture-design at "inactive"
+      // because of the activation declaration.
+      const initialSnap = await readStateSnapshot(runDir);
+      expect(initialSnap.jobs["architecture-design"]!.status).toBe("inactive");
+
+      await writeReport(runDir, "plan", 1, "plan-step", {
+        outputs: { suggested_design: "module-split" },
+        artifacts: [],
+        signals: [
+          {
+            type: "needs_architecture_design",
+            reason: "module coupling uncertain",
+          },
+        ],
+        summary: "plan complete",
+      });
+
+      await callAcceptAgentReport({
+        runDir,
+        runId,
+        jobId: "plan",
+        clock: new FakeClock(),
+      });
+
+      // ── Source job (plan) must be completed (THIS IS THE RED ASSERT). ──
+      const snap = await readStateSnapshot(runDir);
+      const plan = snap.jobs["plan"]!;
+      expect(plan.status).toBe("completed");
+
+      // ── Target job (architecture-design) becomes ready (preferred) or
+      //    waiting (DAG order-sensitive fallback). ──────────────────────────
+      const archDesign = snap.jobs["architecture-design"]!;
+      expect(["ready", "waiting"]).toContain(archDesign.status);
+      expect(archDesign.activated).toBe(true);
+
+      // ── Events: signal_received → job_activated → job_completed (plan). ──
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+
+      const sigIdx = types.lastIndexOf("signal_received");
+      const activatedIdx = types.lastIndexOf("job_activated");
+      const completedIdx = types.lastIndexOf("job_completed");
+
+      expect(sigIdx).toBeGreaterThanOrEqual(0);
+      expect(activatedIdx).toBeGreaterThan(sigIdx);
+      expect(completedIdx).toBeGreaterThan(activatedIdx);
+
+      // signal_received carries the workflow signal name (not action discriminator).
+      expect(events[sigIdx]!.payload).toMatchObject({
+        signal: "needs_architecture_design",
+        from_job: "plan",
+        from_step: "plan-step",
+      });
+
+      // job_completed must target the source (plan).
+      expect(events[completedIdx]!.job).toBe("plan");
+
+      // last_event_id must point to the events.jsonl tail (the source
+      // job_completed event).
+      expect(snap.last_event_id).toBe(events[events.length - 1]!.id);
+      expect(snap.last_event_id).toBe(events[completedIdx]!.id);
+
+      // NO agent_report_accepted on the signal-dispatch path.
+      expect(events.filter((e) => e.type === "agent_report_accepted")).toHaveLength(0);
+    }
+  );
+});

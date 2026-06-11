@@ -11,7 +11,9 @@ import {
   type RunInitSummary,
   type WriteFileResult
 } from "../../src/init/index.js";
+import { loadSkillPack } from "../../src/skill-pack/index.js";
 import { getPackageInfo } from "../../src/utils/index.js";
+import { loadWorkflow, type WorkflowDefinition } from "../../src/workflow/index.js";
 
 /**
  * Init filesystem and integration tests for WF-P1-INIT (Step 1: cases-and-tests).
@@ -298,5 +300,254 @@ describe("runInit integration", () => {
 
     const forbidden = await readFile(join(base, "checks", "forbidden-paths.yml"), "utf-8");
     expect(forbidden.trim().length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * P10 code-change template tests (WF-P10-WORKFLOW, Step 1: cases-and-tests).
+ *
+ * These tests are red until Step 2 rewrites src/init/templates.ts and updates
+ * src/init/index.ts to emit the new file set.
+ *
+ * Reference:
+ *   - docs/phases/p10-code-change-workflow/02-development-plan.md
+ *     §3 (AD-P10-001..AD-P10-005), §4 (WF-P10-WORKFLOW)
+ *   - docs/phases/p10-code-change-workflow/workflows/wf-p10-workflow/01-cases-and-tests.md
+ *   - docs/prd.md §11 (Skill Pack), §12 (Workflow YAML), §16 (data dir), §20 (P10)
+ */
+
+describe("code-change template (WF-P10-WORKFLOW)", () => {
+  let tempDir: string;
+  let dotZigma: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "zigma-flow-init-p10-"));
+    dotZigma = join(tempDir, ".zigma-flow");
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function readWorkflowYml(): Promise<string> {
+    return readFile(join(dotZigma, "workflows", "code-change.yml"), "utf-8");
+  }
+
+  async function loadGeneratedWorkflow(): Promise<WorkflowDefinition> {
+    const yml = await readWorkflowYml();
+    return loadWorkflow(yml);
+  }
+
+  // ---------- TC-WORKFLOW-1 ----------
+  it("runInit writes the full P10 file set (TC-WORKFLOW-1)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const expected = [
+      "config.json",
+      "skill-lock.json",
+      join("workflows", "code-change.yml"),
+      join("skills", "code-change", "skill.yml"),
+      join("skills", "code-change", "knowledge", "workflow-guide.md"),
+      join("skills", "code-change", "knowledge", "coding-guidelines.md"),
+      join("skills", "code-change", "prompts", "intake.md"),
+      join("skills", "code-change", "prompts", "code-map.md"),
+      join("skills", "code-change", "prompts", "plan.md"),
+      join("skills", "code-change", "prompts", "implement.md"),
+      join("skills", "code-change", "prompts", "review.md"),
+      join("skills", "code-change", "prompts", "summarize.md")
+    ];
+
+    for (const rel of expected) {
+      const full = join(dotZigma, rel);
+      expect(await pathExists(full), `missing ${rel}`).toBe(true);
+    }
+  });
+
+  // ---------- TC-WORKFLOW-2 ----------
+  it("generated workflow YAML parses via loadWorkflow() (TC-WORKFLOW-2)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const yml = await readWorkflowYml();
+    // loadWorkflow throws on validation failure; if the template uses
+    // unsupported features (e.g. ${{ steps.* }} or undeclared expose aliases)
+    // this will throw.
+    const wf = loadWorkflow(yml);
+    expect(wf.name).toBeDefined();
+    expect(wf.jobs).toBeDefined();
+  });
+
+  // ---------- TC-WORKFLOW-3 ----------
+  it("workflow declares exactly the 10 expected jobs (TC-WORKFLOW-3)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const jobs = Object.keys(wf.jobs).sort();
+    expect(jobs).toEqual(
+      [
+        "architecture-design",
+        "code-map",
+        "implement",
+        "intake",
+        "plan",
+        "review",
+        "risk-scan",
+        "static-check",
+        "summarize",
+        "unit-test"
+      ].sort()
+    );
+  });
+
+  // ---------- TC-WORKFLOW-4 ----------
+  it("every agent step exposes the 'code' skill (TC-WORKFLOW-4)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    expect(wf.skills).toBeDefined();
+    expect(Object.keys(wf.skills ?? {})).toContain("code");
+
+    const agentJobs = [
+      "intake",
+      "code-map",
+      "plan",
+      "architecture-design",
+      "implement",
+      "review",
+      "summarize"
+    ];
+
+    for (const jobName of agentJobs) {
+      const job = wf.jobs[jobName];
+      expect(job, `job ${jobName} missing`).toBeDefined();
+      const step = job!.steps[0];
+      expect(step, `job ${jobName} has no steps`).toBeDefined();
+      expect(step!.type, `job ${jobName} first step type`).toBe("agent");
+      expect(step!.expose?.skills, `job ${jobName} expose.skills`).toBeDefined();
+      expect(step!.expose?.skills, `job ${jobName} expose.skills`).toContain("code");
+    }
+  });
+
+  // ---------- TC-WORKFLOW-5 ----------
+  it("DAG edges match the documented graph (TC-WORKFLOW-5)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+
+    const needsOf = (id: string): string[] => {
+      const job = wf.jobs[id];
+      return (job?.needs ?? []).slice().sort();
+    };
+
+    expect(needsOf("intake")).toEqual([]);
+    expect(needsOf("code-map")).toEqual(["intake"]);
+    expect(needsOf("risk-scan")).toEqual(["code-map"]);
+    expect(needsOf("plan")).toEqual(["risk-scan"]);
+    expect(needsOf("architecture-design")).toEqual(["plan"]);
+    expect(needsOf("implement")).toEqual(["plan"]);
+    expect(needsOf("static-check")).toEqual(["implement"]);
+    expect(needsOf("unit-test")).toEqual(["implement"]);
+    expect(needsOf("review")).toEqual(["static-check", "unit-test"]);
+    expect(needsOf("summarize")).toEqual(["review"]);
+  });
+
+  // ---------- TC-WORKFLOW-6 ----------
+  it("architecture-design declares activation: 'manual' (TC-WORKFLOW-6)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const job = wf.jobs["architecture-design"];
+    expect(job).toBeDefined();
+    expect(job?.activation).toBe("manual");
+  });
+
+  // ---------- TC-WORKFLOW-7 ----------
+  it("implement has optional_needs and retry config (TC-WORKFLOW-7)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const job = wf.jobs["implement"];
+    expect(job).toBeDefined();
+    expect(job?.optional_needs).toEqual(["architecture-design"]);
+
+    const retry = job?.retry as Record<string, unknown> | undefined;
+    expect(retry).toBeDefined();
+    expect(retry?.["max_attempts"]).toBe(3);
+
+    const onExceeded = retry?.["on_exceeded"] as Record<string, unknown> | undefined;
+    expect(onExceeded).toBeDefined();
+    expect(onExceeded?.["status"]).toBe("failed");
+  });
+
+  // ---------- TC-WORKFLOW-8 ----------
+  it("signals review_rejected and needs_architecture_design are declared (TC-WORKFLOW-8)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    expect(wf.signals).toBeDefined();
+
+    const reviewRejected = wf.signals?.["review_rejected"];
+    expect(reviewRejected, "review_rejected signal missing").toBeDefined();
+    expect(reviewRejected?.allowed_from).toEqual(["review"]);
+    expect(reviewRejected?.action).toEqual({ retry_job: "implement" });
+
+    const needsArch = wf.signals?.["needs_architecture_design"];
+    expect(needsArch, "needs_architecture_design signal missing").toBeDefined();
+    expect((needsArch?.allowed_from ?? []).slice().sort()).toEqual(["plan", "review"]);
+    expect(needsArch?.action).toEqual({ activate_job: "architecture-design" });
+  });
+
+  // ---------- TC-WORKFLOW-9 ----------
+  it("static-check and unit-test use inline script steps (TC-WORKFLOW-9)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+
+    for (const jobName of ["static-check", "unit-test"]) {
+      const job = wf.jobs[jobName];
+      expect(job, `job ${jobName} missing`).toBeDefined();
+      expect(job!.steps.length, `job ${jobName} step count`).toBe(1);
+
+      const step = job!.steps[0]!;
+      expect(step.type, `job ${jobName} step.type`).toBe("script");
+      expect(typeof step.run, `job ${jobName} step.run`).toBe("string");
+      expect((step.run ?? "").length).toBeGreaterThan(0);
+      // No Skill Pack uses: routing — AD-P10-002.
+      expect(step.uses ?? "").not.toMatch(/^skill:\/\//);
+      expect(step.on_failure).toBe("fail");
+    }
+  });
+
+  // ---------- TC-WORKFLOW-10 ----------
+  it("generated Skill Pack passes loadSkillPack() validation (TC-WORKFLOW-10)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const packRoot = join(dotZigma, "skills", "code-change");
+    const def = await loadSkillPack(packRoot);
+
+    expect(def.id).toBe("zigma.code-change");
+    expect(def.kind).toBe("skill-pack");
+    expect(def.version).toBe("1.0.0");
+
+    const knowledgeIds = (def.knowledge ?? []).map((k) => k.id).sort();
+    expect(knowledgeIds).toEqual(["coding-guidelines", "workflow-guide"]);
+
+    const promptIds = (def.prompts ?? []).map((p) => p.id).sort();
+    expect(promptIds).toEqual(
+      ["code-map", "implement", "intake", "plan", "review", "summarize"].sort()
+    );
+
+    expect(def.scripts ?? []).toEqual([]);
+    expect(def.checks ?? []).toEqual([]);
+    expect(def.functions ?? []).toEqual([]);
   });
 });

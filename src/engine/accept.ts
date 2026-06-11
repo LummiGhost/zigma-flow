@@ -292,12 +292,21 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
     });
 
     // Advance the source job after signal dispatch — lazy import avoids circular dependency.
-    // For retry_job / activate_job the source job remains "running" after applyRoutingAction;
-    // advanceJob transitions it to completed. For continue, advanceJob is already called
-    // inside applyRoutingAction (no-op here). For fail/block, advanceJob is a no-op
-    // (terminal guard). For goto_job, source is already completed (no-op here).
-    const { advanceJob } = await import("./index.js");
-    await advanceJob({ runDir, runId, jobId, clock });
+    // Only fire for object routing actions (retry_job / activate_job) where the source job
+    // remains "running" after applyRoutingAction and needs to be advanced to completed.
+    // - continue: advanceJob is already called inside applyRoutingAction (calling again
+    //   would double-advance multi-step source jobs).
+    // - fail/block: source is already in a terminal state (advanceJob would be a no-op,
+    //   but skip for clarity).
+    // - goto_job: source is already completed inside applyRoutingAction (no-op here).
+    const isObjectRoutingAction =
+      typeof action === "object" &&
+      action !== null &&
+      ("retry_job" in action || "activate_job" in action);
+    if (isObjectRoutingAction) {
+      const { advanceJob } = await import("./index.js");
+      await advanceJob({ runDir, runId, jobId, clock });
+    }
 
     return;
   }

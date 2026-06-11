@@ -116,12 +116,10 @@ jobs:
     steps:
       - id: validate
         type: check
-        kind: file-exists
-        path: "."
-      - id: route
-        type: router
-        cases:
-          default: continue
+        uses: zigma/file-exists
+        with:
+          file: "."
+        on_fail: fail
 
   plan:
     needs:

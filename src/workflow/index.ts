@@ -38,6 +38,25 @@ export type RouterAction =
   | { status: "blocked" | "failed" };
 
 // ---------------------------------------------------------------------------
+// SignalDeclaration schema (WF-P9-ACCEPT)
+// ---------------------------------------------------------------------------
+
+const SignalDeclarationSchema = z.object({
+  severity: z.string().optional(),
+  priority: z.number().optional(),
+  allowed_from: z.array(z.string()).optional(),
+  action: RouterActionSchema.optional(),
+}).passthrough();
+
+export interface SignalDeclaration {
+  severity?: string;
+  priority?: number;
+  allowed_from?: string[];
+  action?: RouterAction;
+  [key: string]: unknown;
+}
+
+// ---------------------------------------------------------------------------
 // Step schemas
 // ---------------------------------------------------------------------------
 
@@ -124,7 +143,7 @@ const WorkflowSchema = z.object({
   on: z.record(z.string(), z.unknown()).optional(),
   skills: z.record(z.string(), z.unknown()).optional(),
   permissions: z.record(z.string(), z.unknown()).optional(),
-  signals: z.record(z.string(), z.unknown()).optional(),
+  signals: z.record(z.string(), SignalDeclarationSchema).optional(),
   jobs: z.record(z.string(), JobSchema),
 });
 
@@ -134,7 +153,7 @@ export interface WorkflowDefinition {
   on?: Record<string, unknown>;
   skills?: Record<string, unknown>;
   permissions?: Record<string, unknown>;
-  signals?: Record<string, unknown>;
+  signals?: Record<string, SignalDeclaration>;
   jobs: Record<string, JobDefinition>;
 }
 

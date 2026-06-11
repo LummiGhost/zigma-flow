@@ -19,6 +19,7 @@ import { runAction } from "./commands/run.js";
 import { statusAction } from "./commands/status.js";
 import { promptAction } from "./commands/prompt.js";
 import { stepAction } from "./commands/step.js";
+import { nextAction } from "./commands/next.js";
 import { SystemClock } from "./run/index.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -98,6 +99,19 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       await stepAction({
         zigmaflowDir: process.cwd(),
         ...(options.job !== undefined ? { job: options.job } : {}),
+        clock: new SystemClock(),
+      });
+    });
+
+  program
+    .command("next")
+    .description("Accept the agent report for the current step of a job and advance the run.")
+    .requiredOption("--job <job>", "Job id whose agent report should be accepted.")
+    .exitOverride()
+    .action(async (options: { job: string }) => {
+      await nextAction({
+        zigmaflowDir: process.cwd(),
+        jobId: options.job,
         clock: new SystemClock(),
       });
     });

@@ -38,6 +38,12 @@ export interface ApplyRoutingActionOpts {
   action: RouterAction;
   reason: string;
   clock: Clock;
+  /**
+   * Optional override for the `signal` field in the `signal_received` event payload.
+   * When provided (e.g. from acceptAgentReport), the workflow signal type name is used
+   * instead of the action discriminator. (WF-P9-ACCEPT)
+   */
+  signalName?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +83,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<void> {
-  const { runDir, runId, sourceJobId, sourceStepId, attempt, action, reason, clock } = opts;
+  const { runDir, runId, sourceJobId, sourceStepId, attempt, action, reason, clock, signalName } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -183,7 +189,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     step: sourceStepId,
     attempt,
     payload: {
-      signal: actionDiscriminator(action),
+      signal: signalName ?? actionDiscriminator(action),
       from_job: sourceJobId,
       from_step: sourceStepId,
     },

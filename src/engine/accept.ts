@@ -23,7 +23,7 @@
  *   - docs/mvp-contracts.md §2.3, §2.4, §2.6
  */
 
-import { dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { readFile } from "node:fs/promises";
 
 import { parse as parseYaml } from "yaml";
@@ -130,7 +130,13 @@ function validateReportShape(parsed: unknown): AgentReport {
   const signals: Array<{ type: string; reason?: string }> = (
     obj["signals"] as Array<Record<string, unknown>>
   ).map((s) => {
-    const entry: { type: string; reason?: string } = { type: String(s["type"] ?? "") };
+    if (typeof s["type"] !== "string" || s["type"].length === 0) {
+      throw new ValidationError(
+        `Invalid signal entry: "type" field must be a non-empty string`,
+        { details: { signal: s } }
+      );
+    }
+    const entry: { type: string; reason?: string } = { type: s["type"] };
     if (s["reason"] !== undefined) {
       entry.reason = String(s["reason"]);
     }
@@ -254,7 +260,23 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
       selectedSignal.reason ??
       `Agent submitted signal "${selectedSignal.type}" from job "${jobId}"`;
 
-    // ── 6. Dispatch selected signal via applyRoutingAction ────────────────────
+    // ── 6. Persist outputs before signal dispatch ─────────────────────────────
+    // applyRoutingAction re-reads the snapshot internally, so we write outputs
+    // to disk first so they are included in the state it reads and spreads.
+
+    const stateWithOutputs: RunState = {
+      ...state,
+      jobs: {
+        ...state.jobs,
+        [jobId]: {
+          ...jobState,
+          outputs: report.outputs,
+        },
+      },
+    };
+    await stateStore.writeSnapshot(runDir, stateWithOutputs);
+
+    // ── 7. Dispatch selected signal via applyRoutingAction ────────────────────
     // (NO agent_report_accepted on the signal path)
 
     await applyRoutingAction({

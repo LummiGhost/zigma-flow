@@ -1150,3 +1150,61 @@ describe("acceptAgentReport — signal without reason (T-ACCEPT-12)", () => {
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// T-ACCEPT-13: signal path — outputs persist to JobState.outputs
+// ---------------------------------------------------------------------------
+
+describe("acceptAgentReport — signal path outputs persistence (T-ACCEPT-13)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "writes report.outputs to state.jobs[jobId].outputs even when a signal is dispatched (T-ACCEPT-13, UC-ACCEPT-2, FP-ACCEPT-OUTPUTS-PERSIST)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_WITH_SIGNAL_YAML,
+        "accept-with-signal"
+      );
+
+      await setJobState(runDir, "plan", {
+        status: "running",
+        current_step: "plan",
+        attempt: 1,
+      });
+
+      const outputs = { plan: "proposed architecture", confidence: 0.9 };
+      await writeReport(runDir, "plan", 1, "plan", {
+        outputs,
+        artifacts: [],
+        signals: [
+          {
+            type: "needs_architecture_design",
+            reason: "module coupling uncertain",
+          },
+        ],
+        summary: "plan complete",
+      });
+
+      await callAcceptAgentReport({
+        runDir,
+        runId,
+        jobId: "plan",
+        clock: new FakeClock(),
+      });
+
+      const snap = await readStateSnapshot(runDir);
+      const persisted = readOutputs(snap, "plan");
+      expect(persisted).toBeDefined();
+      expect(persisted).toEqual(outputs);
+    }
+  );
+});

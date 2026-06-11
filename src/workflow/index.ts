@@ -20,7 +20,7 @@ import { FilesystemError, ValidationError, WorkflowError } from "../utils/index.
 const RouterActionLiteralSchema = z.enum(["continue", "fail", "block"]);
 
 const RouterActionObjectSchema = z.union([
-  z.object({ retry_job: z.string() }),
+  z.object({ retry_job: z.string(), retry_with: z.record(z.string(), z.string()).optional() }),
   z.object({ activate_job: z.string() }),
   z.object({ goto_job: z.string() }),
   z.object({ status: z.enum(["blocked", "failed"]) }),
@@ -32,7 +32,7 @@ export type RouterAction =
   | "continue"
   | "fail"
   | "block"
-  | { retry_job: string }
+  | { retry_job: string; retry_with?: Record<string, string> }
   | { activate_job: string }
   | { goto_job: string }
   | { status: "blocked" | "failed" };

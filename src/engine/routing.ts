@@ -259,16 +259,55 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     const nextAttempt = currentAttempt + 1;
 
     if (nextAttempt > maxAttempts) {
-      // Exhausted — set status blocked, no job_retrying event
+      // Exhausted — read on_exceeded.status from workflow config (default: blocked)
+      const onExceededStatus: "blocked" | "failed" =
+        retryConfig !== undefined &&
+        typeof retryConfig["on_exceeded"] === "object" &&
+        retryConfig["on_exceeded"] !== null &&
+        (retryConfig["on_exceeded"] as Record<string, unknown>)["status"] === "failed"
+          ? "failed"
+          : "blocked";
+
+      // Emit terminal event (job_blocked or job_failed)
+      const terminalEventId = getNextEventId();
+      if (onExceededStatus === "failed") {
+        await eventWriter.appendEvent(runDir, {
+          id: terminalEventId,
+          run_id: runId,
+          type: "job_failed",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: targetJobId,
+          step: null,
+          attempt: currentAttempt,
+          payload: { job_id: targetJobId, reason },
+        });
+      } else {
+        await eventWriter.appendEvent(runDir, {
+          id: terminalEventId,
+          run_id: runId,
+          type: "job_blocked",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: targetJobId,
+          step: null,
+          attempt: currentAttempt,
+          payload: { job_id: targetJobId, reason },
+        });
+      }
+
+      // Clear retry_inputs and current_step from terminal state (no future retry)
+      const terminalJobState = { ...targetJobState };
+      terminalJobState.status = onExceededStatus;
+      delete terminalJobState.retry_inputs;
+      delete terminalJobState.current_step;
+
       const updatedState: RunState = {
         ...state,
-        last_event_id: signalReceivedId,
+        last_event_id: terminalEventId,
         jobs: {
           ...state.jobs,
-          [targetJobId]: {
-            ...targetJobState,
-            status: "blocked",
-          },
+          [targetJobId]: terminalJobState,
         },
       };
       await stateStore.writeSnapshot(runDir, updatedState);
@@ -295,6 +334,12 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     delete retryJobState.current_step;
     retryJobState.attempt = nextAttempt;
     retryJobState.retry_reason = reason;
+    // Store retry_with data as retry_inputs (wholesale replacement, not merge)
+    if (typeof action === "object" && "retry_with" in action && action.retry_with !== undefined) {
+      retryJobState.retry_inputs = { ...action.retry_with };
+    } else {
+      delete retryJobState.retry_inputs;
+    }
 
     const updatedState: RunState = {
       ...state,

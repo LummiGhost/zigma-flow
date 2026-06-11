@@ -6,7 +6,7 @@
  */
 
 // ---------------------------------------------------------------------------
-// ZigmaFlowEventType — the 19 MVP event type tags (closed string union)
+// ZigmaFlowEventType — the 21 MVP event type tags (closed string union)
 // ---------------------------------------------------------------------------
 
 export type ZigmaFlowEventType =
@@ -28,10 +28,12 @@ export type ZigmaFlowEventType =
   | "run_completed"
   | "run_cancelled"
   | "job_activated"
-  | "job_skipped";
+  | "job_skipped"
+  | "job_blocked"
+  | "job_failed";
 
 /**
- * Runtime tuple of all 19 event type tags.
+ * Runtime tuple of all 21 event type tags.
  * Length is statically checked by the test suite.
  */
 export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
@@ -54,6 +56,8 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "run_cancelled",
   "job_activated",
   "job_skipped",
+  "job_blocked",
+  "job_failed",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -167,6 +171,16 @@ export interface JobSkippedPayload {
   reason: string;
 }
 
+export interface JobBlockedPayload {
+  job_id: string;
+  reason: string;
+}
+
+export interface JobFailedPayload {
+  job_id: string;
+  reason: string;
+}
+
 // ---------------------------------------------------------------------------
 // EventEnvelope — the common envelope wrapping every event
 // ---------------------------------------------------------------------------
@@ -205,7 +219,9 @@ export type ZigmaFlowEvent =
   | (EventEnvelope & { type: "run_completed"; payload: RunCompletedPayload })
   | (EventEnvelope & { type: "run_cancelled"; payload: RunCancelledPayload })
   | (EventEnvelope & { type: "job_activated"; payload: JobActivatedPayload })
-  | (EventEnvelope & { type: "job_skipped"; payload: JobSkippedPayload });
+  | (EventEnvelope & { type: "job_skipped"; payload: JobSkippedPayload })
+  | (EventEnvelope & { type: "job_blocked"; payload: JobBlockedPayload })
+  | (EventEnvelope & { type: "job_failed"; payload: JobFailedPayload });
 
 // ---------------------------------------------------------------------------
 // nextEventId — sequential event id formatter

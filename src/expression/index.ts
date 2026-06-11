@@ -19,6 +19,7 @@
 export interface ExpressionContext {
   inputs: Record<string, string>;
   run: { id: string; workflow: string };
+  retry?: { inputs: Record<string, string> };
 }
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,19 @@ export function resolveExpression(template: string, ctx: ExpressionContext): str
         return ctx.inputs[key]!;
       }
       // Key missing from ctx.inputs — leave literal.
+      return fullMatch;
+    }
+
+    // ${{ retry.inputs.<key> }}
+    if (expr.startsWith("retry.inputs.")) {
+      const key = expr.slice("retry.inputs.".length);
+      if (
+        key.length > 0 &&
+        ctx.retry !== undefined &&
+        Object.prototype.hasOwnProperty.call(ctx.retry.inputs, key)
+      ) {
+        return ctx.retry.inputs[key]!;
+      }
       return fullMatch;
     }
 

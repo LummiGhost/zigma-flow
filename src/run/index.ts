@@ -57,6 +57,7 @@ export interface JobState {
   activated?: boolean;           // true after activate_job transition (WF-P8-SIGNALS)
   activation_reason?: string;    // reason from opts.reason on activate_job (WF-P8-SIGNALS)
   retry_reason?: string;         // reason from opts.reason on retry_job (WF-P8-SIGNALS)
+  retry_inputs?: Record<string, string>; // retry_with payload from the router action that triggered this retry
 }
 
 export interface RunState {

@@ -1,0 +1,145 @@
+# Zigma Flow — Agent Workflow Runtime
+
+A local, single-process TypeScript CLI that orchestrates multi-job workflows for Agent-assisted software development. It breaks complex tasks into discrete, auditable steps so an AI agent (like Claude Code) only handles one step at a time, preventing context overload and skipped gates.
+
+## Quick Start
+
+```bash
+# Install (or use a local path)
+npm install -g zigma-flow
+
+# Initialize a project
+cd my-project
+zigma-flow init
+
+# Validate the generated workflow
+zigma-flow validate .zigma-flow/workflows/code-change.yml
+
+# Start a run
+zigma-flow run code-change --task "Add null check to parse function in src/parser.ts"
+
+# Check status
+zigma-flow status
+```
+
+## How It Works
+
+A **workflow** is a DAG of **jobs**. Each job contains one or more **steps**, which are the smallest execution units. Steps come in four kinds: Agent steps (require LLM judgment), Script steps (shell commands), Check steps (deterministic validation), and Router steps (conditional branching). The workflow YAML lives in `.zigma-flow/workflows/` and is read by the Engine at runtime.
+
+When a job becomes ready, the Engine determines what kind of step to run next. For **Agent steps**, you generate a prompt with `zigma-flow prompt --job <id>`, paste it into your AI agent (e.g. Claude Code), and the agent writes a structured `report.json` to the artifact path shown in the prompt output. You then run `zigma-flow next --job <id>` to have the Engine read the report, validate it, process any signals, and advance the run. For **Script and Check steps**, `zigma-flow step --job <id>` runs the step automatically — no agent involvement needed.
+
+The Engine owns all state transitions. Agents cannot directly modify workflow state; they can only emit **signals** in their `report.json`. The Engine evaluates signals against declared rules and decides whether to activate an optional job, retry a previous job, or continue normally. All state changes are written to an event log under `.zigma-flow/runs/`, making every run auditable and replayable.
+
+## CLI Commands
+
+| Command | Purpose |
+|---------|---------|
+| `init` | Initialize `.zigma-flow/` scaffold in the current directory |
+| `validate <path>` | Validate a workflow YAML or Skill Pack manifest |
+| `run <workflow> --task <description>` | Create a new workflow run |
+| `status` | Show current run status (latest run by default) |
+| `prompt --job <id>` | Generate the agent prompt for a job's current step |
+| `step --job <id>` | Execute a script, check, or router step automatically |
+| `next --job <id>` | Accept the agent report and advance the run to the next step |
+
+## code-change Workflow
+
+The built-in `code-change` workflow covers the full lifecycle of a code change, from understanding the task to a final review.
+
+```
+intake → code-map → risk-scan → plan ─┬─ [architecture-design?]
+                                       │
+                                       └─ implement → static-check ─┐
+                                                   → unit-test ─────┴→ review → summarize
+```
+
+| Job | Kind | Description |
+|-----|------|-------------|
+| `intake` | Agent | Analyze the task description; produce an intake-summary artifact |
+| `code-map` | Agent | Map relevant files and modules; produce a code-map artifact |
+| `risk-scan` | Check | Validate that the code-map artifact exists and is well-formed |
+| `plan` | Agent | Create an implementation plan; may emit `needs_architecture_design` |
+| `architecture-design` | Agent | Produce architecture artifact (optional; activated by signal) |
+| `implement` | Agent | Implement the change; up to 3 retry attempts |
+| `static-check` | Script | Run typecheck and lint (replace placeholder with your actual command) |
+| `unit-test` | Script | Run the test suite (replace placeholder with your actual command) |
+| `review` | Agent | Review the implementation; may emit `review_rejected` |
+| `summarize` | Agent | Produce a final change summary artifact |
+
+**Signals:**
+
+- `needs_architecture_design` — emitted by `plan` or `review`. The Engine activates the optional `architecture-design` job, which `implement` will wait for before starting.
+- `review_rejected` — emitted by `review`. The Engine retries the `implement` job (up to 3 total attempts). If attempts are exhausted, the run fails.
+
+## Typical Workflow Session
+
+```bash
+# 1. Start the run
+zigma-flow run code-change --task "Add null check to parse function in src/parser.ts"
+
+# 2. Check which job is ready
+zigma-flow status
+
+# 3. Generate the prompt for the intake job
+zigma-flow prompt --job intake
+# Output includes the artifact path where report.json must be written,
+# e.g. .zigma-flow/runs/<run-id>/intake/analyze/report.json
+
+# 4. Paste the prompt into Claude Code (or another agent).
+#    The agent reads context, does its work, and writes report.json to the shown path.
+
+# 5. Accept the report and advance
+zigma-flow next --job intake
+
+# 6. Repeat for code-map and plan (both Agent steps)
+zigma-flow prompt --job code-map
+zigma-flow next --job code-map
+
+zigma-flow prompt --job plan
+zigma-flow next --job plan
+
+# 7. risk-scan is a Check step — run it automatically
+zigma-flow step --job risk-scan
+
+# 8. Continue through implement, then run the script steps
+zigma-flow prompt --job implement
+zigma-flow next --job implement
+
+zigma-flow step --job static-check
+zigma-flow step --job unit-test
+
+# 9. Review — agent may emit review_rejected to trigger a retry of implement
+zigma-flow prompt --job review
+zigma-flow next --job review
+
+# 10. Final summary
+zigma-flow prompt --job summarize
+zigma-flow next --job summarize
+
+# Run is complete
+zigma-flow status
+```
+
+The artifact path for each `report.json` is printed by `zigma-flow prompt`. The agent must write its output to exactly that path before you run `next`.
+
+## Customizing the Workflow
+
+After `zigma-flow init`, edit `.zigma-flow/workflows/code-change.yml` to:
+
+- Add new jobs by declaring them under `jobs:` and setting `needs:` dependencies
+- Change retry limits by updating `retry.max_attempts` on a job
+- Add new signals by declaring them under `signals:` with an `action`
+- Update script steps to run your actual typecheck and test commands (the generated `static-check` and `unit-test` steps contain placeholder `echo` commands)
+
+Skill Pack prompts and knowledge files live in `.zigma-flow/skills/code-change/` and can be edited to match your project's conventions.
+
+## Development
+
+```bash
+pnpm install
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+Requirements: Node >= 20.11.0, pnpm 10+.

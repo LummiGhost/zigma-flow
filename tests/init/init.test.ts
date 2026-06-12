@@ -539,7 +539,7 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
     expect(def.version).toBe("1.0.0");
 
     const knowledgeIds = (def.knowledge ?? []).map((k) => k.id).sort();
-    expect(knowledgeIds).toEqual(["coding-guidelines", "workflow-guide"]);
+    expect(knowledgeIds).toEqual(["coding-guidelines", "common-failure-patterns", "workflow-guide"].sort());
 
     const promptIds = (def.prompts ?? []).map((p) => p.id).sort();
     expect(promptIds).toEqual(
@@ -692,7 +692,7 @@ describe("P11 Skill Pack refinement (WF-P11-SKILL-PACK)", () => {
 
     const implement = wf.jobs["implement"];
     expect(implement, "implement job missing").toBeDefined();
-    expect(implement!.steps.length).toBeGreaterThanOrEqual(3);
+    expect(implement!.steps.length).toBeGreaterThanOrEqual(2);
 
     // First step must still be an agent step so TC-WORKFLOW-4 continues to hold.
     expect(implement!.steps[0]!.type).toBe("agent");

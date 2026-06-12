@@ -164,13 +164,7 @@ jobs:
       - id: collect-diff
         type: script
         run: "git diff HEAD"
-        on_failure: continue
-      - id: check-diff
-        type: check
-        uses: zigma/file-exists
-        with:
-          file: "."
-        on_fail: continue
+        on_failure: fail
 
   static-check:
     needs:
@@ -238,6 +232,8 @@ knowledge:
     path: knowledge/coding-guidelines.md
   - id: workflow-guide
     path: knowledge/workflow-guide.md
+  - id: common-failure-patterns
+    path: knowledge/common-failure-patterns.md
 
 prompts:
   - id: intake

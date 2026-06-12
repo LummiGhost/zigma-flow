@@ -14,6 +14,11 @@
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
+    "test:unit": "vitest run tests/artifact tests/check tests/context tests/dag tests/events tests/expression tests/git tests/prompt tests/router tests/run tests/script tests/workflow",
+    "test:integration": "vitest run tests/commands tests/engine tests/init",
+    "test:e2e": "vitest run tests/dogfood tests/cli",
+    "test:ci": "vitest run",
+    "smoke": "node dist/cli.js --help",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit"
   },

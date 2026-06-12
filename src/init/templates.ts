@@ -161,6 +161,16 @@ jobs:
         expose:
           skills:
             - code
+      - id: collect-diff
+        type: script
+        run: "git diff HEAD"
+        on_failure: continue
+      - id: check-diff
+        type: check
+        uses: zigma/file-exists
+        with:
+          file: "."
+        on_fail: continue
 
   static-check:
     needs:
@@ -245,7 +255,40 @@ prompts:
 
 scripts: []
 checks: []
-functions: []
+
+functions:
+  - id: implement-by-plan
+    description: Execute plan steps to modify code according to a given implementation plan
+    inputs:
+      plan:
+        type: string
+        description: "Implementation plan to execute"
+      context:
+        type: string
+        description: "Additional context or constraints for the implementation"
+    outputs:
+      summary:
+        type: string
+        description: "Summary of changes made"
+      files_changed:
+        type: string
+        description: "Comma-separated list of modified files"
+  - id: review-change
+    description: Review code changes for quality, correctness, and adherence to guidelines
+    inputs:
+      diff:
+        type: string
+        description: "Git diff of changes to review"
+      plan:
+        type: string
+        description: "Original implementation plan for comparison"
+    outputs:
+      verdict:
+        type: string
+        description: "approved, rejected, or needs_architecture_design"
+      issues:
+        type: string
+        description: "Description of issues found; empty string if approved"
 
 policies:
   default_permissions:
@@ -278,11 +321,96 @@ export function codingGuidelinesMd(): string {
 - Import only what you need; avoid wildcard imports.
 - Keep imports grouped: Node built-ins first, then external packages, then internal modules.
 
+## Incremental Changes
+
+- Make small, incremental changes rather than large rewrites. Each small step should
+  compile, pass tests, and be independently reviewable before moving to the next.
+- Prefer tight edit loops: modify one logical unit at a time, verify it works,
+  then proceed. Avoid sweeping multi-file refactors in a single step.
+
 ## Testing
 
 - Write tests alongside implementation; aim for high coverage on business logic.
 - Use descriptive test names that explain the expected behavior.
 - Test edge cases and failure paths, not just the happy path.
+
+## State and Runtime File Restrictions
+
+You must not modify any files under \`.zigma-flow/\`. You must not modify
+\`state.json\`, \`config.json\`, \`skill-lock.json\`, or any other runtime
+infrastructure file. These files are owned by the Zigma Flow runtime and must
+never be changed by agent or script steps.
+
+Do not modify the \`.zigma-flow/runs/\` directory or any of its contents.
+Do not modify \`.zigma-flow/state.json\`. Violations are treated as forbidden
+actions and will fail the step.
+`;
+}
+
+// ---------------------------------------------------------------------------
+// skills/code-change/knowledge/common-failure-patterns.md
+// ---------------------------------------------------------------------------
+
+export function commonFailurePatternsMd(): string {
+  return `# Common Failure Patterns
+
+This file documents known failure patterns that agent steps must avoid.
+Review these patterns before beginning any implementation or review step.
+
+## 1. Skipping Steps
+
+**Pattern**: Jumping from planning directly to implementation without following
+the defined workflow steps, or skipping intermediate steps (e.g., going from
+intake straight to implement without code-map and plan).
+
+**Why it fails**: Each step produces artifacts that subsequent steps depend on.
+Skipping steps means missing context, producing incomplete outputs, and
+triggering validation failures downstream.
+
+**Correct approach**: Follow the workflow DAG exactly. Complete each step in
+order, write \`report.json\` with all required fields, and stop before
+proceeding.
+
+## 2. Making Unverified Changes
+
+**Pattern**: Modifying files without verifying that the changes compile or
+pass existing tests before writing the \`report.json\`.
+
+**Why it fails**: Unverified changes cause downstream static-check and
+unit-test jobs to fail, triggering retry loops and wasting attempts.
+
+**Correct approach**: After each change, verify compilation and test
+compatibility. Only report success after confirming the change is valid.
+
+## 3. Unauthorized Modifications
+
+**Pattern**: Modifying files that are off-limits:
+- \`.zigma-flow/runs/\` — runtime run state directory
+- \`.zigma-flow/state.json\` — workflow state managed by the engine
+- \`.zigma-flow/config.json\` — runtime configuration
+- \`.zigma-flow/skill-lock.json\` — skill lock file
+- Any other file under \`.zigma-flow/\`
+
+**Why it fails**: These files are owned by the Zigma Flow runtime. Modifying
+them bypasses engine state transitions and corrupts workflow state. This
+triggers a PermissionError and fails the step immediately.
+
+**Correct approach**: Never touch files under \`.zigma-flow/\`. Write outputs
+only to the locations specified by the workflow and skill pack.
+
+## 4. Missing or Incomplete Reports
+
+**Pattern**: Not writing \`report.json\` after completing a step, or writing a
+\`report.json\` that is missing required fields (\`outputs\`, \`artifacts\`,
+\`signals\`, \`summary\`).
+
+**Why it fails**: The engine validates \`report.json\` against the required
+schema. Missing files or empty required fields cause the step to be marked as
+failed, even if the underlying work was done correctly.
+
+**Correct approach**: Always write a complete \`report.json\` as the final
+action of every agent step. Ensure all required fields are populated with
+meaningful values, not empty strings or null.
 `;
 }
 
@@ -497,6 +625,15 @@ workflow-guide knowledge file. The report must include:
   this step — leave empty unless unexpected).
 - \`summary\`: a short human-readable summary of what was done.
 
+## Forbidden Actions
+
+You must not modify files under \`.zigma-flow/\`. You must not modify
+\`state.json\`, \`config.json\`, or any runtime infrastructure file. You must
+not modify \`.zigma-flow/runs/\` or any file under \`.zigma-flow/\`.
+
+Do not modify lock files, CI configuration files, or any file outside the
+scope of the implementation plan without explicit authorization.
+
 ## Instructions
 
 1. Read the task description and understand the required change.
@@ -527,16 +664,24 @@ quality, and adherence to the coding guidelines.
 - The plan artifact to verify the implementation matches the plan.
 - The coding guidelines knowledge file.
 
+## Output Verdicts
+
+Your report outputs must include a \`verdict\` field set to one of:
+- \`approved\` — the change meets quality standards
+- \`rejected\` — the change needs rework; emit \`review_rejected\` signal
+- \`needs_architecture_design\` — architectural changes are required; emit
+  \`needs_architecture_design\` signal
+
 ## Output Requirements
 
 You must output a \`report.json\` matching the report schema described in the
 workflow-guide knowledge file. The report must include:
 
-- \`outputs\`: key-value pairs of review findings (e.g. approved, issues).
+- \`outputs\`: key-value pairs of review findings, including the \`verdict\`
+  field (one of: \`approved\`, \`rejected\`, \`needs_architecture_design\`).
 - \`artifacts\`: list of artifact references (e.g. review notes).
-- \`signals\`: emit \`review_rejected\` if the implementation has issues that
-  require rework; emit \`needs_architecture_design\` if architectural changes
-  are needed.
+- \`signals\`: emit \`review_rejected\` if verdict is \`rejected\`; emit
+  \`needs_architecture_design\` if verdict is \`needs_architecture_design\`.
 - \`summary\`: a short human-readable summary of the review outcome.
 
 ## Instructions
@@ -573,8 +718,9 @@ documentation purposes.
 
 Write a \`report.json\` with the following fields:
 
-- \`outputs\`: include \`summary\` (complete change summary) and
-  \`files_changed\` (list of modified files).
+- \`outputs\`: include \`final_summary\` (complete narrative of what was changed
+  and why) and \`remaining_risks\` (list of outstanding risks or follow-up
+  items, empty array if none).
 - \`artifacts\`: list the summary artifact file you produce.
 - \`signals\`: leave empty.
 - \`summary\`: a concise human-readable summary of the entire change.
@@ -590,23 +736,23 @@ Stop after completing this step — do not proceed to subsequent steps autonomou
 // ---------------------------------------------------------------------------
 
 export function collectDiffTs(): string {
-  return `/**
- * collect-diff script
- *
- * Placeholder script for the collect-diff step. In a real workflow run this
- * script collects the git diff of the current workspace and writes it as an
- * artifact for downstream steps.
- *
- * This file is a template generated by \`zigma-flow init\`. Replace the body
- * with your actual diff-collection logic.
- */
+  return `import { execSync } from "node:child_process";
 
-// Example: collect the diff using a git command.
-// import { execSync } from "node:child_process";
-// const diff = execSync("git diff HEAD", { encoding: "utf-8" });
-// process.stdout.write(JSON.stringify({ diff }));
+function run(cmd: string): string {
+  try {
+    return execSync(cmd, { encoding: "utf-8" }).trim();
+  } catch {
+    return "";
+  }
+}
 
-export {};
+const diff = run("git diff HEAD");
+const changedFilesRaw = run("git diff --name-only HEAD");
+const changed_files = changedFilesRaw ? changedFilesRaw.split("\\n").filter(Boolean) : [];
+
+process.stdout.write(
+  JSON.stringify({ changed_files, diff }, null, 2) + "\\n"
+);
 `;
 }
 

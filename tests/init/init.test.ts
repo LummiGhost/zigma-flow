@@ -548,7 +548,7 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
 
     expect(def.scripts ?? []).toEqual([]);
     expect(def.checks ?? []).toEqual([]);
-    expect(def.functions ?? []).toEqual([]);
+    expect((def.functions ?? []).length).toBeGreaterThanOrEqual(2);
   });
 });
 

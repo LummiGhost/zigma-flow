@@ -551,3 +551,186 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
     expect(def.functions ?? []).toEqual([]);
   });
 });
+
+/**
+ * P11 Skill Pack refinement tests (WF-P11-SKILL-PACK, Step 1: cases-and-tests).
+ *
+ * These tests are red until Step 2 updates src/init/templates.ts and
+ * src/init/index.ts to ship the refined Skill Pack content + multi-step
+ * implement job.
+ *
+ * Reference:
+ *   - docs/phases/p11-skill-pack-refinement/02-development-plan.md
+ *     §1 acceptance, §3 AD-P11-S-001..005, §4 WF-P11-SKILL-PACK
+ *   - docs/phases/p11-skill-pack-refinement/workflows/wf-p11-skill-pack/01-cases-and-tests.md
+ *   - docs/prd.md §9, §10, §11, §12, §20
+ */
+
+describe("P11 Skill Pack refinement (WF-P11-SKILL-PACK)", () => {
+  let tempDir: string;
+  let dotZigma: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "zigma-flow-init-p11-"));
+    dotZigma = join(tempDir, ".zigma-flow");
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  // ---------- T-P11-1 ----------
+  it("runInit writes knowledge/common-failure-patterns.md (T-P11-1)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const cfpPath = join(
+      dotZigma,
+      "skills",
+      "code-change",
+      "knowledge",
+      "common-failure-patterns.md"
+    );
+    expect(await pathExists(cfpPath)).toBe(true);
+
+    const body = await readFile(cfpPath, "utf-8");
+    expect(body.trim().length).toBeGreaterThan(0);
+  });
+
+  // ---------- T-P11-2 ----------
+  it("coding-guidelines.md mentions small-step and state-file restrictions (T-P11-2)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const text = await readFile(
+      join(dotZigma, "skills", "code-change", "knowledge", "coding-guidelines.md"),
+      "utf-8"
+    );
+
+    // "small step" / "incremental" guidance is required so the agent prefers
+    // tight edit loops over sweeping rewrites.
+    expect(text).toMatch(/small[\s-]?step|incremental/i);
+
+    // Must clearly forbid touching state / runtime files under .zigma-flow.
+    expect(text).toMatch(/state|runtime|\.zigma-flow/i);
+    expect(text).toMatch(/must not|do not modify|forbidden|never modify|禁止/i);
+  });
+
+  // ---------- T-P11-3 ----------
+  it("implement.md contains forbidden-action guidance (T-P11-3)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const text = await readFile(
+      join(dotZigma, "skills", "code-change", "prompts", "implement.md"),
+      "utf-8"
+    );
+
+    expect(text).toMatch(/must not|do not modify|forbidden|禁止/i);
+  });
+
+  // ---------- T-P11-4 ----------
+  it("review.md specifies approved/rejected/needs_architecture_design output (T-P11-4)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const text = await readFile(
+      join(dotZigma, "skills", "code-change", "prompts", "review.md"),
+      "utf-8"
+    );
+
+    // The output spec must clearly enumerate the three verdict tokens. The
+    // word-boundary check for `rejected` excludes incidental matches inside
+    // the signal name `review_rejected`, which the current template already
+    // mentions in passing.
+    expect(text).toMatch(/\bapproved\b/);
+    expect(text).toMatch(/(^|[^_])\brejected\b/);
+    expect(text).toContain("needs_architecture_design");
+  });
+
+  // ---------- T-P11-5 ----------
+  it("summarize.md requires final_summary and remaining_risks outputs (T-P11-5)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const text = await readFile(
+      join(dotZigma, "skills", "code-change", "prompts", "summarize.md"),
+      "utf-8"
+    );
+
+    expect(text).toContain("final_summary");
+    expect(text).toContain("remaining_risks");
+  });
+
+  // ---------- T-P11-6 ----------
+  it("skill.yml functions section is non-empty and contains implement-by-plan (T-P11-6)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const packRoot = join(dotZigma, "skills", "code-change");
+    const def = await loadSkillPack(packRoot);
+
+    const functions = (def.functions ?? []) as Array<{ id?: unknown }>;
+    expect(functions.length).toBeGreaterThan(0);
+
+    const ids = functions
+      .map((f) => (typeof f.id === "string" ? f.id : ""))
+      .filter((s) => s.length > 0);
+    expect(ids).toContain("implement-by-plan");
+  });
+
+  // ---------- T-P11-7 ----------
+  it("implement job has at least 3 steps and starts with an agent step (T-P11-7)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const yml = await readFile(
+      join(dotZigma, "workflows", "code-change.yml"),
+      "utf-8"
+    );
+    const wf = loadWorkflow(yml);
+
+    const implement = wf.jobs["implement"];
+    expect(implement, "implement job missing").toBeDefined();
+    expect(implement!.steps.length).toBeGreaterThanOrEqual(3);
+
+    // First step must still be an agent step so TC-WORKFLOW-4 continues to hold.
+    expect(implement!.steps[0]!.type).toBe("agent");
+  });
+
+  // ---------- T-P11-8 ----------
+  it("collect-diff.ts contains an active git diff invocation (T-P11-8)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const raw = await readFile(
+      join(dotZigma, "skills", "code-change", "scripts", "collect-diff.ts"),
+      "utf-8"
+    );
+
+    // Strip single-line `// ...` comments so the assertion catches active
+    // executable code, not a commented-out example. Block comments (/* ... */)
+    // are also dropped via a non-greedy regex.
+    const withoutBlockComments = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+    const activeLines = withoutBlockComments
+      .split(/\r?\n/)
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+
+    expect(activeLines).toMatch(/git diff/);
+  });
+
+  // ---------- T-P11-9 ----------
+  it("skill.yml functions length is at least 2 (TC-WORKFLOW-10 successor) (T-P11-9)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const packRoot = join(dotZigma, "skills", "code-change");
+    const def = await loadSkillPack(packRoot);
+
+    // AD-P11-S-003: functions declares at least implement-by-plan and
+    // review-change. This case replaces the legacy TC-WORKFLOW-10 assertion
+    // `expect(def.functions ?? []).toEqual([])`.
+    expect((def.functions ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+});

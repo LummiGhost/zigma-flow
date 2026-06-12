@@ -1,3 +1,11 @@
 export { initAction } from "./init.js";
 export { promptAction } from "./prompt.js";
 export { stepAction } from "./step.js";
+export { retryAction } from "./retry.js";
+export type { RetryActionOpts } from "./retry.js";
+export { abortAction } from "./abort.js";
+export type { AbortActionOpts } from "./abort.js";
+export { listRunsAction } from "./list-runs.js";
+export type { ListRunsActionOpts } from "./list-runs.js";
+export { showAction } from "./show.js";
+export type { ShowActionOpts } from "./show.js";

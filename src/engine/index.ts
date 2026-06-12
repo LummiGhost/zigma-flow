@@ -35,6 +35,10 @@ import { nextEventId as formatEventId } from "../events/index.js";
 
 export { applyRoutingAction } from "./routing.js";
 export type { ApplyRoutingActionOpts } from "./routing.js";
+export { retryJob } from "./retryJob.js";
+export type { RetryJobOpts } from "./retryJob.js";
+export { abortRun } from "./abort.js";
+export type { AbortRunOpts } from "./abort.js";
 
 export interface CreateRunInputs {
   workflowPath: string;

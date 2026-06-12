@@ -20,6 +20,10 @@ import { statusAction } from "./commands/status.js";
 import { promptAction } from "./commands/prompt.js";
 import { stepAction } from "./commands/step.js";
 import { nextAction } from "./commands/next.js";
+import { retryAction } from "./commands/retry.js";
+import { abortAction } from "./commands/abort.js";
+import { listRunsAction } from "./commands/list-runs.js";
+import { showAction } from "./commands/show.js";
 import { SystemClock } from "./run/index.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -112,6 +116,86 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       await nextAction({
         zigmaflowDir: process.cwd(),
         jobId: options.job,
+        clock: new SystemClock(),
+      });
+    });
+
+  program
+    .command("retry")
+    .description("Retry a job in the active run that is in a terminal state.")
+    .requiredOption("--job <job>", "Job id to retry.")
+    .option("--reason <reason>", "Human-readable reason for the retry.")
+    .option("--with <inputs>", "JSON string of retry inputs (wholesale replacement).")
+    .exitOverride()
+    .action(async (options: { job: string; reason?: string; with?: string }) => {
+      let retryInputs: Record<string, string> | undefined;
+      if (options.with !== undefined) {
+        try {
+          const parsed = JSON.parse(options.with);
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            throw new Error("not an object");
+          }
+          const invalidValues = Object.values(parsed as object).filter(v => typeof v !== "string");
+          if (invalidValues.length > 0) {
+            throw new Error("values must be strings");
+          }
+          retryInputs = parsed as Record<string, string>;
+        } catch {
+          console.error(`--with must be a JSON object with string values (e.g., '{"key": "value"}')`);
+          process.exitCode = 2;
+          return;
+        }
+      }
+      await retryAction({
+        zigmaflowDir: process.cwd(),
+        jobId: options.job,
+        ...(options.reason !== undefined ? { reason: options.reason } : {}),
+        ...(retryInputs !== undefined ? { retryInputs } : {}),
+        clock: new SystemClock(),
+      });
+    });
+
+  program
+    .command("abort")
+    .description("Cancel the active run without deleting artifacts.")
+    .option("--reason <reason>", "Human-readable reason for the abort.")
+    .exitOverride()
+    .action(async (options: { reason?: string }) => {
+      await abortAction({
+        zigmaflowDir: process.cwd(),
+        clock: new SystemClock(),
+        ...(options.reason !== undefined ? { reason: options.reason } : {}),
+      });
+    });
+
+  program
+    .command("list-runs")
+    .description("List all runs in the .zigma-flow/runs/ directory.")
+    .exitOverride()
+    .action(async () => {
+      await listRunsAction({ zigmaflowDir: process.cwd() });
+    });
+
+  program
+    .command("show [run-id]")
+    .description("Show details of a run (run info, jobs, last 5 events).")
+    .exitOverride()
+    .action(async (runId?: string) => {
+      await showAction({
+        zigmaflowDir: process.cwd(),
+        ...(runId !== undefined ? { runId } : {}),
+      });
+    });
+
+  program
+    .command("check")
+    .description("Execute the current check step of the active run (alias for step).")
+    .option("--job <job>", "Job id to execute (defaults to the single ready job).")
+    .exitOverride()
+    .action(async (options: { job?: string }) => {
+      await stepAction({
+        zigmaflowDir: process.cwd(),
+        ...(options.job !== undefined ? { job: options.job } : {}),
         clock: new SystemClock(),
       });
     });

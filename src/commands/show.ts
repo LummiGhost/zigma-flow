@@ -10,13 +10,13 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 import { parse as parseYaml } from "yaml";
 
 import { readActiveRun, LocalStateStore } from "../run/index.js";
 import type { RunState } from "../run/index.js";
-import { ConfigError } from "../utils/index.js";
+import { ConfigError, UserInputError } from "../utils/index.js";
 
 // ---------------------------------------------------------------------------
 // showAction options
@@ -69,7 +69,11 @@ export async function showAction(opts: ShowActionOpts): Promise<void> {
     runId = activeRunId;
   }
 
-  const runDir = join(runsDir, runId);
+  const runDir = resolve(runsDir, runId);
+  const runsPrefix = resolve(runsDir) + sep;
+  if (!runDir.startsWith(runsPrefix) && runDir !== resolve(runsDir)) {
+    throw new UserInputError(`Invalid run id: ${runId}`);
+  }
 
   // 2. Read run.yml
   let runYml: Record<string, unknown> = {};
@@ -117,7 +121,10 @@ export async function showAction(opts: ShowActionOpts): Promise<void> {
     const allEvents = eventsText
       .split("\n")
       .filter((l) => l.trim().length > 0)
-      .map((l) => JSON.parse(l) as EventEnvelope);
+      .flatMap((l) => {
+        try { return [JSON.parse(l) as EventEnvelope]; }
+        catch { return []; }
+      });
     lastEvents = allEvents.slice(-5);
   } catch {
     // events.jsonl missing or unreadable — show empty
@@ -133,7 +140,7 @@ export async function showAction(opts: ShowActionOpts): Promise<void> {
     (typeof runYml["created_at"] === "string" ? runYml["created_at"] : null) ??
     state.created_at;
   const task =
-    (typeof runYml["task"] === "string" ? runYml["task"] : null) ?? state.task;
+    (typeof runYml["task"] === "string" ? runYml["task"] : null) ?? state.task ?? "[unknown]";
   const status = state.status ?? "unknown";
 
   stdout(`Run:      ${runId}`);

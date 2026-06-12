@@ -82,7 +82,15 @@ export async function retryAction(opts: RetryActionOpts): Promise<void> {
     ...(retryInputs !== undefined ? { retryInputs } : {}),
   });
 
+  // 4. Check resulting status — exhausted retries leave job blocked/failed
   const snap = await stateStore.readSnapshot(runDir);
-  const attempt = snap?.jobs[jobId]?.attempt ?? 1;
+  const newJobStatus = snap?.jobs[jobId]?.status;
+  if (newJobStatus === "blocked" || newJobStatus === "failed") {
+    console.error(`Job '${jobId}' max attempts exceeded — status: ${newJobStatus}.`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const attempt = snap?.jobs[jobId]?.attempt ?? "?";
   console.log(`Job '${jobId}' retried (attempt ${attempt}).`);
 }

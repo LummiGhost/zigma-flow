@@ -131,10 +131,18 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       let retryInputs: Record<string, string> | undefined;
       if (options.with !== undefined) {
         try {
-          retryInputs = JSON.parse(options.with) as Record<string, string>;
+          const parsed = JSON.parse(options.with);
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            throw new Error("not an object");
+          }
+          const invalidValues = Object.values(parsed as object).filter(v => typeof v !== "string");
+          if (invalidValues.length > 0) {
+            throw new Error("values must be strings");
+          }
+          retryInputs = parsed as Record<string, string>;
         } catch {
-          console.error(`Invalid JSON for --with: ${options.with}`);
-          process.exitCode = 1;
+          console.error(`--with must be a JSON object with string values (e.g., '{"key": "value"}')`);
+          process.exitCode = 2;
           return;
         }
       }

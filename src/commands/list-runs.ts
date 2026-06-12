@@ -13,6 +13,8 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { parse as parseYaml } from "yaml";
+
 // ---------------------------------------------------------------------------
 // listRunsAction options
 // ---------------------------------------------------------------------------
@@ -82,7 +84,6 @@ export async function listRunsAction(opts: ListRunsActionOpts): Promise<void> {
         // Read run.yml for workflow name (fallback to state.workflow)
         let workflowName: string = typeof state["workflow"] === "string" ? state["workflow"] : "[unknown]";
         try {
-          const { parse: parseYaml } = await import("yaml");
           const runYmlText = await readFile(join(runDir, "run.yml"), "utf-8");
           const runYml = parseYaml(runYmlText) as Record<string, unknown>;
           const wf = runYml["workflow"] as Record<string, unknown> | undefined;

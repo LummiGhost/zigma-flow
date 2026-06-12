@@ -15,6 +15,7 @@ import {
   codeMapMd,
   codingGuidelinesMd,
   collectDiffTs,
+  commonFailurePatternsMd,
   configJsonTemplate,
   forbiddenPathsYml,
   implementMd,
@@ -148,6 +149,10 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
     [
       join(dotZigma, "skills", "code-change", "knowledge", "workflow-guide.md"),
       workflowGuideMd()
+    ],
+    [
+      join(dotZigma, "skills", "code-change", "knowledge", "common-failure-patterns.md"),
+      commonFailurePatternsMd()
     ],
     [join(dotZigma, "skills", "code-change", "prompts", "intake.md"), intakeMd()],
     [join(dotZigma, "skills", "code-change", "prompts", "code-map.md"), codeMapMd()],

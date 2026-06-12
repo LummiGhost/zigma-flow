@@ -460,8 +460,10 @@ describe("TC-DOGFOOD-3: full happy-path run", () => {
 
       // 6. implement (needs: plan; optional_needs: architecture-design)
       //    architecture-design is inactive → implement can proceed once plan completes
-      //    agent step id: "implement"
+      //    P11: implement has 3 steps: agent (implement), script (collect-diff), check (check-diff)
+      //    After agent step, engine advances to collect-diff; running script step completes the job.
       await runAgentJob(runDir, runId, "implement", "implement", wfJobs, clock);
+      await runExecutedJob(runDir, runId, "implement", wfJobs, sandbox.projectDir, clock, mockRunner);
       expect((await readStateSnapshot(runDir)).jobs["implement"]!.status).toBe("completed");
 
       // 7. static-check (needs: implement) — script step id: "check"
@@ -560,8 +562,10 @@ describe("TC-DOGFOOD-4: review_rejected signal path", () => {
       await runExecutedJob(runDir, runId, "risk-scan", wfJobs, sandbox.projectDir, clock, mockCheckRunner);
       // 4. plan
       await runAgentJob(runDir, runId, "plan", "plan", wfJobs, clock);
-      // 5. implement (attempt 1)
+      // 5. implement (attempt 1) — 3 steps: agent, script, check
+      //    After agent step, engine advances to collect-diff; running script step completes the job.
       await runAgentJob(runDir, runId, "implement", "implement", wfJobs, clock);
+      await runExecutedJob(runDir, runId, "implement", wfJobs, sandbox.projectDir, clock, mockRunner);
       // 6. static-check
       await runExecutedJob(runDir, runId, "static-check", wfJobs, sandbox.projectDir, clock, mockRunner);
       // 7. unit-test
@@ -619,6 +623,9 @@ describe("TC-DOGFOOD-4: review_rejected signal path", () => {
       // Now run implement attempt 2 through to completion (verify retry works)
       // implement is already at ready/attempt 2 — just need to run it
       await runAgentJobAttempt(runDir, runId, "implement", "implement", 2, clock);
+      // P11: implement has 3 steps — after agent step, engine advances to collect-diff (script)
+      //      running the script step completes the job.
+      await runExecutedJob(runDir, runId, "implement", wfJobs, sandbox.projectDir, clock, mockRunner);
       expect((await readStateSnapshot(runDir)).jobs["implement"]!.status).toBe("completed");
 
       // Then run static-check and unit-test again (they need re-running after retry)

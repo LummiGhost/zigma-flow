@@ -47,6 +47,7 @@ import {
 import { createRun } from "../../src/engine/index.js";
 import {
   buildAgentPrompt,
+  validatePromptHandoff,
   writePromptArtifact,
 } from "../../src/prompt/index.js";
 import { promptAction } from "../../src/commands/prompt.js";
@@ -537,6 +538,82 @@ describe("buildAgentPrompt — confinement", () => {
     expect(out).not.toMatch(/^name:\s/m);
     expect(out).not.toMatch(/^version:\s/m);
     expect(out).not.toMatch(/^jobs:\s/m);
+  });
+});
+
+describe("validatePromptHandoff — quality gate", () => {
+  it("accepts a complete generated prompt with no errors", () => {
+    const bundle = makeContextBundle({
+      inputs: { task: "fix the handoff prompt" },
+      permissions: { contents: "read", commands: "none", workflow_state: "none" },
+      repositoryWorkspace: { mode: "read-only" },
+    });
+    const out = buildAgentPrompt(bundle);
+
+    const result = validatePromptHandoff(out, bundle);
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("fails when the Step Instructions section is missing", () => {
+    const bundle = makeContextBundle();
+    const out = buildAgentPrompt(bundle).replace(/^## Step Instructions[\s\S]*?(?=^## Exposed Capabilities)/m, "");
+
+    const result = validatePromptHandoff(out, bundle);
+
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "missing_step_instructions" }),
+      ]),
+    );
+  });
+
+  it("fails when the canonical report.json path is missing", () => {
+    const bundle = makeContextBundle();
+    const out = buildAgentPrompt(bundle).replace(
+      ".zigma-flow/runs/20260608-0001/jobs/plan/attempts/1/steps/draft/report.json",
+      ".zigma-flow/runs/20260608-0001/report.json",
+    );
+
+    const result = validatePromptHandoff(out, bundle);
+
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "missing_report_path" }),
+      ]),
+    );
+  });
+
+  it("warns when the original task input text is absent", () => {
+    const bundle = makeContextBundle({ inputs: { task: "preserve this task text" } });
+    const out = buildAgentPrompt(bundle).replace("preserve this task text", "redacted task");
+
+    const result = validatePromptHandoff(out, bundle);
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "missing_task_input" }),
+      ]),
+    );
+  });
+
+  it("warns when a read-only prompt exposes edits: write wording", () => {
+    const bundle = makeContextBundle({
+      permissions: { contents: "read", edits: "write" },
+      repositoryWorkspace: { mode: "read-only" },
+    });
+    const out = `${buildAgentPrompt(bundle)}\n- edits: write\n`;
+
+    const result = validatePromptHandoff(out, bundle);
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "read_only_edits_write" }),
+      ]),
+    );
   });
 });
 

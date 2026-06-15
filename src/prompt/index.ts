@@ -25,6 +25,16 @@ import { artifactId } from "../artifact/artifactMetadata.js";
 import type { Clock } from "../run/index.js";
 import { artifactFileRelativePath } from "../artifact/index.js";
 
+export interface PromptHandoffIssue {
+  code: string;
+  message: string;
+}
+
+export interface PromptHandoffQualityResult {
+  errors: PromptHandoffIssue[];
+  warnings: PromptHandoffIssue[];
+}
+
 // ---------------------------------------------------------------------------
 // buildAgentPrompt
 // ---------------------------------------------------------------------------
@@ -50,12 +60,7 @@ import { artifactFileRelativePath } from "../artifact/index.js";
  */
 export function buildAgentPrompt(bundle: ContextBundle): string {
   const lines: string[] = [];
-  const reportPath = posix.join(
-    ".zigma-flow",
-    "runs",
-    bundle.runId,
-    artifactFileRelativePath(bundle.jobId, bundle.attempt, bundle.stepId, "report.json")
-  );
+  const reportPath = canonicalReportPath(bundle);
 
   // H1 — step header
   lines.push(`# ${bundle.jobId}/${bundle.stepId} Agent Prompt`);
@@ -291,6 +296,98 @@ export function buildAgentPrompt(bundle: ContextBundle): string {
   lines.push("");
 
   return lines.join("\n");
+}
+
+export function validatePromptHandoff(
+  promptText: string,
+  bundle: ContextBundle,
+): PromptHandoffQualityResult {
+  const errors: PromptHandoffIssue[] = [];
+  const warnings: PromptHandoffIssue[] = [];
+
+  const requiredIds = [
+    { code: "missing_run_id", label: "run id", value: bundle.runId },
+    { code: "missing_job_id", label: "job id", value: bundle.jobId },
+    { code: "missing_step_id", label: "step id", value: bundle.stepId },
+  ];
+  for (const item of requiredIds) {
+    if (!promptText.includes(item.value)) {
+      errors.push({
+        code: item.code,
+        message: `Prompt handoff is missing the current ${item.label} "${item.value}".`,
+      });
+    }
+  }
+
+  const stepInstructions = markdownSection(promptText, "Step Instructions");
+  if (stepInstructions === undefined || stepInstructions.trim().length === 0) {
+    errors.push({
+      code: "missing_step_instructions",
+      message: 'Prompt handoff must include a non-empty "## Step Instructions" section.',
+    });
+  }
+
+  const reportPath = canonicalReportPath(bundle);
+  if (!promptText.includes(reportPath)) {
+    errors.push({
+      code: "missing_report_path",
+      message: `Prompt handoff must include the canonical report path "${reportPath}".`,
+    });
+  }
+
+  const task = bundle.inputs["task"];
+  if (task !== undefined && task.length > 0 && !promptText.includes(task)) {
+    warnings.push({
+      code: "missing_task_input",
+      message: "Prompt handoff does not contain the original task input text.",
+    });
+  }
+
+  if (getWorkspaceMode(bundle) === "read-only" && /\bedits\s*:\s*write\b|\*\*edits\*\*/i.test(promptText)) {
+    warnings.push({
+      code: "read_only_edits_write",
+      message: 'Read-only prompt handoff should not contain an "edits: write" permission.',
+    });
+  }
+
+  if (
+    bundle.permissions["commands"] === "none" &&
+    /\b(run|execute)\s+(a\s+)?(shell\s+)?command\b/i.test(promptText)
+  ) {
+    warnings.push({
+      code: "commands_none_shell_instruction",
+      message: 'Prompt handoff grants "commands: none" but appears to ask the agent to run a shell command.',
+    });
+  }
+
+  return { errors, warnings };
+}
+
+function canonicalReportPath(bundle: ContextBundle): string {
+  return posix.join(
+    ".zigma-flow",
+    "runs",
+    bundle.runId,
+    artifactFileRelativePath(bundle.jobId, bundle.attempt, bundle.stepId, "report.json"),
+  );
+}
+
+function markdownSection(markdown: string, title: string): string | undefined {
+  const header = new RegExp(`^##\\s+${escapeRegExp(title)}\\s*$`, "m");
+  const match = header.exec(markdown);
+  if (match === null || match.index === undefined) {
+    return undefined;
+  }
+
+  const contentStart = match.index + match[0].length;
+  const rest = markdown.slice(contentStart);
+  const nextHeader = /^##\s+/m.exec(rest);
+  const content = nextHeader === null ? rest : rest.slice(0, nextHeader.index);
+  return content.trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function getWorkspaceMode(bundle: ContextBundle): string | undefined {

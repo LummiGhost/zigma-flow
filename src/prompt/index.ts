@@ -44,6 +44,8 @@ import { artifactFileRelativePath } from "../artifact/index.js";
  *     ### Tools
  *   ## Available Workflow Signals
  *   ## Permissions and Forbidden Actions
+ *     ### Repository Workspace Permissions
+ *     ### Runtime Artifact Permissions
  *   ## Output
  */
 export function buildAgentPrompt(bundle: ContextBundle): string {
@@ -190,15 +192,37 @@ export function buildAgentPrompt(bundle: ContextBundle): string {
   lines.push("## Permissions and Forbidden Actions");
   lines.push("");
   const permissions = bundle.permissions as PermissionSet;
-  const permEntries = Object.entries(permissions);
-  if (permEntries.length === 0) {
-    lines.push("(none specified — default deny)");
+
+  lines.push("### Repository Workspace Permissions");
+  lines.push("");
+  const workspaceMode = getWorkspaceMode(bundle);
+  if (workspaceMode === "read-only") {
+    lines.push(
+      "- This job operates in read-only mode. You must not modify files in the repository."
+    );
+  } else if (canModifyRepositoryFiles(permissions, workspaceMode)) {
+    lines.push("- This job may modify repository files according to the task.");
   } else {
-    for (const [key, value] of permEntries) {
-      lines.push(`- **${key}**: ${String(value)}`);
-    }
+    lines.push(
+      "- This job does not grant repository file modifications unless the workflow explicitly allows them."
+    );
+  }
+  if (permissions["contents"] === "read") {
+    lines.push("- Repository contents may be read for this step.");
   }
   lines.push("");
+
+  lines.push("### Runtime Artifact Permissions");
+  lines.push("");
+  lines.push("- Canonical report path: `report.json` in the step artifacts directory.");
+  lines.push(
+    "- You must write `report.json` to the canonical path above. This is a runtime artifact, not a repository file modification."
+  );
+  lines.push(
+    "- Writing the step report is part of the step contract and is always allowed, regardless of repository workspace write permission."
+  );
+  lines.push("");
+
   lines.push("**Forbidden**: You cannot modify workflow state.");
   lines.push("");
 
@@ -252,6 +276,31 @@ export function buildAgentPrompt(bundle: ContextBundle): string {
   lines.push("");
 
   return lines.join("\n");
+}
+
+function getWorkspaceMode(bundle: ContextBundle): string | undefined {
+  const mode = bundle.repositoryWorkspace?.mode;
+  if (typeof mode !== "string") {
+    return undefined;
+  }
+  const normalized = mode.trim().toLowerCase();
+  if (normalized === "readonly") {
+    return "read-only";
+  }
+  return normalized;
+}
+
+function canModifyRepositoryFiles(
+  permissions: PermissionSet,
+  workspaceMode: string | undefined,
+): boolean {
+  if (workspaceMode === "read-only") {
+    return false;
+  }
+  if (["write", "writable", "read-write", "read/write"].includes(workspaceMode ?? "")) {
+    return true;
+  }
+  return permissions["edits"] === "write";
 }
 
 // ---------------------------------------------------------------------------

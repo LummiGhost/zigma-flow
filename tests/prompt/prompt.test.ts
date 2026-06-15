@@ -440,6 +440,47 @@ describe("buildAgentPrompt — section rendering", () => {
     // load-bearing per PRD FR-006 and architecture §10.
     expect(out.toLowerCase()).toContain("cannot modify workflow state");
   });
+
+  it("separates read-only repository workspace permission from runtime artifact permission (T-RENDER-5, UC-RENDER-5)", () => {
+    const out = buildAgentPrompt(
+      makeContextBundle({
+        permissions: {
+          contents: "read",
+          edits: "write",
+          workflow_state: "none",
+        },
+        repositoryWorkspace: { mode: "read-only" },
+      }),
+    );
+
+    expect(out).toMatch(/^###\s+Repository Workspace Permissions/m);
+    expect(out).toContain(
+      "This job operates in read-only mode. You must not modify files in the repository.",
+    );
+    expect(out).not.toContain("edits: write");
+    expect(out).not.toContain("**edits**");
+    expect(out).toMatch(/^###\s+Runtime Artifact Permissions/m);
+    expect(out).toContain(
+      "You must write `report.json` to the canonical path above. This is a runtime artifact, not a repository file modification.",
+    );
+    expect(out).toContain("step contract and is always allowed");
+  });
+
+  it("states that writable jobs may modify repository files according to the task (T-RENDER-6, UC-RENDER-6)", () => {
+    const out = buildAgentPrompt(
+      makeContextBundle({
+        permissions: {
+          contents: "read",
+          edits: "write",
+          workflow_state: "none",
+        },
+      }),
+    );
+
+    expect(out).toContain("This job may modify repository files according to the task.");
+    expect(out).not.toContain("edits: write");
+    expect(out).not.toContain("**edits**");
+  });
 });
 
 describe("buildAgentPrompt — confinement", () => {

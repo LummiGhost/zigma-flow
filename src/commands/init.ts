@@ -19,6 +19,6 @@ export async function initAction(): Promise<void> {
   }
 
   for (const file of result.files) {
-    console.log(`${file.status === "created" ? "created" : "skipped"}: ${file.path}`);
+    console.log(`${file.status}: ${file.path}`);
   }
 }

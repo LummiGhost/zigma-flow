@@ -6,7 +6,7 @@
  * prompt, script, check, artifact, run, events, workspace, git, or expression.
  */
 
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { getPackageInfo } from "../utils/index.js";
@@ -35,7 +35,7 @@ import {
 
 export interface WriteFileResult {
   readonly path: string;
-  readonly status: "created" | "skipped";
+  readonly status: "created" | "updated" | "skipped";
 }
 
 export interface CreateDirectoryResult {
@@ -176,6 +176,7 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
     const result = await writeFileIfMissing(filePath, content);
     files.push(result);
   }
+  files.push(await ensureZigmaFlowGitignore(options.cwd));
 
   return {
     alreadyInitialized,
@@ -195,4 +196,50 @@ async function directoryExists(dirPath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+const zigmaFlowGitignoreComment = "# Zigma Flow runtime state (do not commit)";
+const zigmaFlowGitignoreEntries = [".zigma-flow/runs/", ".zigma-flow/config.json"] as const;
+
+async function ensureZigmaFlowGitignore(cwd: string): Promise<WriteFileResult> {
+  const gitignorePath = join(cwd, ".gitignore");
+  const defaultBlock = [
+    zigmaFlowGitignoreComment,
+    ...zigmaFlowGitignoreEntries
+  ].join("\n") + "\n";
+
+  let existing: string;
+  try {
+    existing = await readFile(gitignorePath, "utf-8");
+  } catch (error: unknown) {
+    if (isNodeErrnoException(error) && error.code === "ENOENT") {
+      await writeFile(gitignorePath, defaultBlock, "utf-8");
+      return { path: gitignorePath, status: "created" };
+    }
+    throw error;
+  }
+
+  const existingLines = existing
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const missingEntries = zigmaFlowGitignoreEntries.filter(
+    (entry) => !existingLines.includes(entry)
+  );
+
+  if (missingEntries.length === 0) {
+    return { path: gitignorePath, status: "skipped" };
+  }
+
+  const appendLines = existingLines.includes(zigmaFlowGitignoreComment)
+    ? missingEntries
+    : [zigmaFlowGitignoreComment, ...missingEntries];
+  const base = existing.length === 0 || existing.endsWith("\n") ? existing : `${existing}\n`;
+  const separator = base.length === 0 || base.endsWith("\n\n") ? "" : "\n";
+  await writeFile(gitignorePath, `${base}${separator}${appendLines.join("\n")}\n`, "utf-8");
+  return { path: gitignorePath, status: "updated" };
+}
+
+function isNodeErrnoException(error: unknown): error is { readonly code: string } {
+  return typeof error === "object" && error !== null && "code" in error;
 }

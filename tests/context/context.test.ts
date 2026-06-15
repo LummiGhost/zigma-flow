@@ -441,10 +441,88 @@ describe("buildContext capability exposure", () => {
     expect(bundle.capabilities.knowledge.map((k: { id: string }) => k.id)).toEqual(
       expect.arrayContaining(["rules", "layout"])
     );
+    expect(bundle.capabilities.knowledge).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "rules",
+          path: "knowledge/rules.md",
+          readPolicy: "optional",
+          usage: "Project rules",
+        }),
+        expect.objectContaining({
+          id: "layout",
+          path: "knowledge/layout.md",
+          readPolicy: "optional",
+          usage: "Source layout",
+        }),
+      ]),
+    );
 
     expect(bundle.capabilities.prompts.map((p: { id: string }) => p.id)).toContain("implement");
+    expect(bundle.capabilities.prompts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "implement", path: "prompts/implement.md" }),
+      ]),
+    );
     expect(bundle.capabilities.functions.map((f: { id: string }) => f.id)).toContain(
       "implement-by-plan"
+    );
+  });
+
+  it("adds required/optional reading strategy for built-in code-change knowledge (Issue #29)", async () => {
+    const skillYml = [
+      "id: zigma.code-change",
+      "name: Code Change",
+      "version: 1.0.0",
+      "kind: skill-pack",
+      "knowledge:",
+      "  - id: coding-guidelines",
+      "    path: knowledge/coding-guidelines.md",
+      "    description: Coding rules",
+      "  - id: workflow-guide",
+      "    path: knowledge/workflow-guide.md",
+      "    description: Workflow guide",
+      "  - id: common-failure-patterns",
+      "    path: knowledge/common-failure-patterns.md",
+      "    description: Failure patterns",
+      "",
+    ].join("\n");
+    await seedSkillLock(sb.zigmaflowDir, { "zigma.code-change": CANONICAL_LOCK_ENTRY });
+    await seedSkillPack(sb.zigmaflowDir, "code-change", skillYml, {
+      "knowledge/coding-guidelines.md": "# coding",
+      "knowledge/workflow-guide.md": "# workflow",
+      "knowledge/common-failure-patterns.md": "# failures",
+    });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef: makeWorkflowDef(),
+      state: makeRunState(),
+      jobId: "plan",
+    });
+
+    expect(bundle.capabilities.knowledge).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "coding-guidelines",
+          path: "knowledge/coding-guidelines.md",
+          readPolicy: "required",
+          usage: "read before starting this step",
+        }),
+        expect.objectContaining({
+          id: "workflow-guide",
+          path: "knowledge/workflow-guide.md",
+          readPolicy: "required",
+          usage: "report schema and workflow DAG reference",
+        }),
+        expect.objectContaining({
+          id: "common-failure-patterns",
+          path: "knowledge/common-failure-patterns.md",
+          readPolicy: "optional",
+          usage: "consult if unsure about approach, failure handling, or retry behavior",
+        }),
+      ]),
     );
   });
 

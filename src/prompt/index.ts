@@ -116,8 +116,11 @@ export function buildAgentPrompt(bundle: ContextBundle): string {
     lines.push("(none)");
   } else {
     for (const k of bundle.capabilities.knowledge as ExposedKnowledge[]) {
-      const desc = k.description !== undefined ? ` — ${k.description}` : "";
-      lines.push(`- \`${k.id}\`${desc} (skill: ${k.skill})`);
+      const path = k.path !== undefined ? `, path: \`${k.path}\`` : "";
+      const policy = k.readPolicy ?? "optional";
+      const usage = k.usage ?? k.description ?? "reference material for this step";
+      const desc = k.description !== undefined && k.description !== usage ? ` — ${k.description}` : "";
+      lines.push(`- \`${k.id}\` (skill: ${k.skill}${path}) — **${policy}**: ${usage}${desc}`);
     }
   }
   lines.push("");
@@ -129,7 +132,15 @@ export function buildAgentPrompt(bundle: ContextBundle): string {
     lines.push("(none)");
   } else {
     for (const p of bundle.capabilities.prompts as ExposedPrompt[]) {
-      lines.push(`- \`${p.id}\` (skill: ${p.skill})`);
+      const path = p.path !== undefined ? `, path: \`${p.path}\`` : "";
+      const isPrimary =
+        bundle.primaryPrompt !== undefined &&
+        bundle.primaryPrompt.skill === p.skill &&
+        bundle.primaryPrompt.id === p.id;
+      const role = isPrimary
+        ? "primary prompt rendered above in `## Step Instructions`"
+        : "reference prompt only; do not switch tasks unless the current step asks for it";
+      lines.push(`- \`${p.id}\` (skill: ${p.skill}${path}) — ${role}`);
     }
   }
   lines.push("");
@@ -140,6 +151,10 @@ export function buildAgentPrompt(bundle: ContextBundle): string {
   if (bundle.capabilities.functions.length === 0) {
     lines.push("(none)");
   } else {
+    lines.push(
+      "Agent Functions are deterministic execution patterns to follow, not callable runtime APIs. Do not attempt to invoke them as tools."
+    );
+    lines.push("");
     for (const f of bundle.capabilities.functions as ExposedFunction[]) {
       const desc = f.description !== undefined ? ` — ${f.description}` : "";
       lines.push(`- \`${f.id}\`${desc} (skill: ${f.skill})`);

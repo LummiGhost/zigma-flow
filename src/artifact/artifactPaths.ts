@@ -5,7 +5,7 @@
  * WF-P4-ARTIFACT Step 2.
  */
 
-import { join, resolve, relative, isAbsolute, normalize } from "node:path";
+import { join, resolve, relative, isAbsolute, normalize, posix } from "node:path";
 
 import { ArtifactError } from "../utils/index.js";
 
@@ -54,6 +54,35 @@ export function assertPathSafe(runDir: string, relPath: string): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Returns the canonical step artifact path relative to a run directory,
+ * using POSIX separators for portable rendering and metadata.
+ *
+ * `jobs/<job>/attempts/<attempt>/steps/<step>`
+ */
+export function artifactStepRelativePath(
+  job: string,
+  attempt: number,
+  step: string
+): string {
+  return posix.join("jobs", job, "attempts", String(attempt), "steps", step);
+}
+
+/**
+ * Returns the canonical artifact file path relative to a run directory,
+ * using POSIX separators for portable rendering and metadata.
+ *
+ * `jobs/<job>/attempts/<attempt>/steps/<step>/<filename>`
+ */
+export function artifactFileRelativePath(
+  job: string,
+  attempt: number,
+  step: string,
+  filename: string
+): string {
+  return posix.join(artifactStepRelativePath(job, attempt, step), filename);
+}
+
+/**
  * Returns the canonical step artifacts directory:
  * `<runDir>/jobs/<job>/attempts/<attempt>/steps/<step>`
  */
@@ -78,7 +107,7 @@ export function artifactPath(
   step: string,
   filename: string
 ): string {
-  const relPath = join("jobs", job, "attempts", String(attempt), "steps", step, filename);
+  const relPath = artifactFileRelativePath(job, attempt, step, filename);
   assertPathSafe(runDir, relPath);
   return join(runDir, relPath);
 }

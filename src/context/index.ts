@@ -91,6 +91,7 @@ export interface ContextBundle {
   runId: string;
   jobId: string;
   stepId: string;
+  attempt: number;
   stepType: StepKind;
   capabilities: ExposedCapabilities;
   inputs: Record<string, string>;
@@ -469,6 +470,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     runId: state.run_id,
     jobId,
     stepId,
+    attempt: jobState?.attempt ?? 1,
     stepType: step.type as StepKind,
     capabilities,
     inputs: resolvedInputs,

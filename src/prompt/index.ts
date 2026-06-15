@@ -23,6 +23,7 @@ import type {
 import { appendArtifactIndex } from "../artifact/artifactIndex.js";
 import { artifactId } from "../artifact/artifactMetadata.js";
 import type { Clock } from "../run/index.js";
+import { artifactFileRelativePath } from "../artifact/index.js";
 
 // ---------------------------------------------------------------------------
 // buildAgentPrompt
@@ -47,6 +48,12 @@ import type { Clock } from "../run/index.js";
  */
 export function buildAgentPrompt(bundle: ContextBundle): string {
   const lines: string[] = [];
+  const reportPath = posix.join(
+    ".zigma-flow",
+    "runs",
+    bundle.runId,
+    artifactFileRelativePath(bundle.jobId, bundle.attempt, bundle.stepId, "report.json")
+  );
 
   // H1 — step header
   lines.push(`# ${bundle.jobId}/${bundle.stepId} Agent Prompt`);
@@ -198,9 +205,22 @@ export function buildAgentPrompt(bundle: ContextBundle): string {
   // ## Output
   lines.push("## Output");
   lines.push("");
+  lines.push("Write your report to:");
+  lines.push("");
+  lines.push(`  \`${reportPath}\``);
+  lines.push("");
   lines.push(
-    `When your task is complete, write your report to \`report.json\` in the ` +
-    `step artifacts directory. Include your result, any outputs, and evidence of completion.`
+    `This is the canonical step artifact path. Writing to any other location ` +
+    `will cause the engine to reject the report.`
+  );
+  lines.push("");
+  lines.push(
+    `This is a runtime artifact file. Writing it does not modify workflow state ` +
+    `or repository code; the Engine reads it and owns all state transitions.`
+  );
+  lines.push("");
+  lines.push(
+    `Include your result, any outputs, and evidence of completion in \`report.json\`.`
   );
   lines.push("");
   lines.push("完成当前 step 后停止 — stop after completing this step.");

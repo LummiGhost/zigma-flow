@@ -16,7 +16,9 @@ export {
 } from "./artifactIndex.js";
 
 export {
+  artifactFileRelativePath,
   artifactPath,
+  artifactStepRelativePath,
   artifactStepDir,
   assertPathSafe,
 } from "./artifactPaths.js";

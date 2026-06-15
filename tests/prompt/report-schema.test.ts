@@ -52,6 +52,7 @@ function makeContextBundle(overrides: Partial<ContextBundle> = {}): ContextBundl
     runId: FIXED_RUN_ID,
     jobId: "plan",
     stepId: "draft",
+    attempt: 1,
     stepType: "agent",
     capabilities: {
       skills: [],

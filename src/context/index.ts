@@ -99,6 +99,7 @@ export interface ContextBundle {
   runId: string;
   jobId: string;
   stepId: string;
+  attempt: number;
   stepType: StepKind;
   capabilities: ExposedCapabilities;
   primaryPrompt?: PrimaryPrompt;
@@ -560,6 +561,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     runId: state.run_id,
     jobId,
     stepId,
+    attempt: jobState?.attempt ?? 1,
     stepType: step.type as StepKind,
     capabilities,
     ...(primaryPrompt !== undefined ? { primaryPrompt } : {}),

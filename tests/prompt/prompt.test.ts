@@ -81,6 +81,7 @@ function makeContextBundle(overrides: Partial<ContextBundle> = {}): ContextBundl
     runId: FIXED_RUN_ID,
     jobId: "plan",
     stepId: "draft",
+    attempt: 1,
     stepType: "agent",
     primaryPrompt: {
       skill: "code",
@@ -415,6 +416,21 @@ describe("buildAgentPrompt — section rendering", () => {
     const out = buildAgentPrompt(makeContextBundle());
     expect(out).toContain("完成当前 step 后停止");
     expect(out).toContain("report.json");
+  });
+
+  it("renders the canonical POSIX report.json path under jobs/<job>/attempts/ (T-RENDER-5, UC-RENDER-4)", () => {
+    const out = buildAgentPrompt(
+      makeContextBundle({ runId: "20260615-0003", jobId: "intake", stepId: "analyze", attempt: 2 }),
+    );
+
+    expect(out).toContain(
+      ".zigma-flow/runs/20260615-0003/jobs/intake/attempts/2/steps/analyze/report.json",
+    );
+    expect(out).toContain("jobs/intake/attempts/");
+    expect(out).not.toContain("jobs\\intake\\attempts\\");
+    expect(out).toContain("canonical step artifact path");
+    expect(out).toContain("engine to reject the report");
+    expect(out).toContain("runtime artifact file");
   });
 
   it("includes an explicit 'cannot modify workflow state' forbidden-action line (T-RENDER-4, UC-RENDER-4)", () => {

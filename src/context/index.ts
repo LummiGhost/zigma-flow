@@ -87,6 +87,10 @@ export interface SignalSpec {
 
 export type PermissionSet = Record<string, unknown>;
 
+export interface RepositoryWorkspacePermissions {
+  mode?: string;
+}
+
 export interface ContextBundle {
   runId: string;
   jobId: string;
@@ -97,6 +101,7 @@ export interface ContextBundle {
   artifacts: ArtifactSummary[];
   signals: SignalSpec[];
   permissions: PermissionSet;
+  repositoryWorkspace?: RepositoryWorkspacePermissions;
 }
 
 export interface BuildContextOpts {
@@ -461,6 +466,11 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     ...(jobDef.permissions ?? {}),
   };
 
+  const repositoryWorkspace: RepositoryWorkspacePermissions = {};
+  if (typeof jobDef.workspace?.["mode"] === "string") {
+    repositoryWorkspace.mode = jobDef.workspace["mode"];
+  }
+
   // -----------------------------------------------------------------------
   // Assemble and return bundle
   // -----------------------------------------------------------------------
@@ -475,5 +485,6 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     artifacts,
     signals,
     permissions,
+    repositoryWorkspace,
   };
 }

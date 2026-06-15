@@ -431,6 +431,35 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
     }
   });
 
+  it("every agent step maps workflow task input into step inputs (TC-WORKFLOW-4B)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const yml = await readWorkflowYml();
+    const taskInputMappings = yml.match(/task:\s*"\$\{\{\s*inputs\.task\s*\}\}"/g) ?? [];
+    expect(taskInputMappings).toHaveLength(7);
+
+    const wf = loadWorkflow(yml);
+    const agentJobs = [
+      "intake",
+      "code-map",
+      "plan",
+      "architecture-design",
+      "implement",
+      "review",
+      "summarize"
+    ];
+
+    for (const jobName of agentJobs) {
+      const job = wf.jobs[jobName];
+      expect(job, `job ${jobName} missing`).toBeDefined();
+      const step = job!.steps[0];
+      expect(step, `job ${jobName} has no steps`).toBeDefined();
+      expect(step!.type, `job ${jobName} first step type`).toBe("agent");
+      expect(step!.with?.task, `job ${jobName} with.task`).toBe("${{ inputs.task }}");
+    }
+  });
+
   // ---------- TC-WORKFLOW-5 ----------
   it("DAG edges match the documented graph (TC-WORKFLOW-5)", async () => {
     const { error } = await safeRunInit(tempDir);

@@ -92,6 +92,8 @@ jobs:
     steps:
       - id: analyze
         type: agent
+        with:
+          task: "\${{ inputs.task }}"
         expose:
           skills:
             - code
@@ -104,6 +106,8 @@ jobs:
     steps:
       - id: map
         type: agent
+        with:
+          task: "\${{ inputs.task }}"
         expose:
           skills:
             - code
@@ -129,6 +133,8 @@ jobs:
     steps:
       - id: plan
         type: agent
+        with:
+          task: "\${{ inputs.task }}"
         expose:
           skills:
             - code
@@ -142,6 +148,8 @@ jobs:
     steps:
       - id: design
         type: agent
+        with:
+          task: "\${{ inputs.task }}"
         expose:
           skills:
             - code
@@ -158,6 +166,8 @@ jobs:
     steps:
       - id: implement
         type: agent
+        with:
+          task: "\${{ inputs.task }}"
         expose:
           skills:
             - code
@@ -197,6 +207,8 @@ jobs:
     steps:
       - id: review
         type: agent
+        with:
+          task: "\${{ inputs.task }}"
         expose:
           skills:
             - code
@@ -209,6 +221,8 @@ jobs:
     steps:
       - id: summarize
         type: agent
+        with:
+          task: "\${{ inputs.task }}"
         expose:
           skills:
             - code

@@ -10,6 +10,9 @@ P12 covers two quality gate items:
   (TC-DOGFOOD-1..5 in `tests/dogfood/code-change.test.ts`)
 - **P12.2** — Test classification scripts and build smoke test
   (`package.json` scripts: `test:unit`, `test:integration`, `test:e2e`, `test:ci`, `smoke`)
+- **P12.3 prompt handoff gate** — `zigma-flow prompt` must reject prompts
+  that are not minimally handoff-ready before the user gives them to an
+  external Agent.
 
 ---
 
@@ -115,3 +118,26 @@ Usage:
 ```
 pnpm build && pnpm smoke
 ```
+
+---
+
+## P12.3 — Prompt Handoff Quality Gate
+
+`zigma-flow prompt` is handoff-ready only when the generated `current-step.md`
+passes the minimum quality gate below:
+
+- Contains the current `run_id`, `job_id`, and `step_id`.
+- Contains a non-empty `## Step Instructions` section.
+- Contains the canonical POSIX `report.json` path under
+  `.zigma-flow/runs/<run_id>/jobs/<job_id>/attempts/<attempt>/steps/<step_id>/report.json`.
+- Warns if the original `task` input text is missing.
+- Warns if a read-only prompt still exposes misleading `edits: write` wording.
+- Warns if `commands: none` is paired with wording that asks the Agent to run
+  shell commands.
+
+Regression coverage:
+
+- `tests/prompt/prompt.test.ts` covers the pure prompt handoff validator.
+- `tests/dogfood/prompt-handoff-quality.test.ts` captures the P12.3 failure
+  shape where `current-step.md` lists prompt names but lacks
+  `## Step Instructions`.

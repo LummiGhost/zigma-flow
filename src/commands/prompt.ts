@@ -10,7 +10,7 @@
  *      - If --job is provided, validate it exists in the workflow → UserInputError if not.
  *      - Otherwise auto-detect: exactly one ready job → UserInputError if zero or >1.
  *   6. Assert the current step of that job is an agent step → WorkflowError if not.
- *   7. buildContext → buildAgentPrompt → writePromptArtifact.
+ *   7. buildContext → buildAgentPrompt → prompt handoff quality gate → writePromptArtifact.
  *   8. Append prompt_generated event (evt-NNN) to events.jsonl.
  *   9. Transition job status from "ready" to "running" in state.json.
  *  10. Print path to current-step.md.
@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import { buildContext } from "../context/index.js";
-import { buildAgentPrompt, writePromptArtifact } from "../prompt/index.js";
+import { buildAgentPrompt, validatePromptHandoff, writePromptArtifact } from "../prompt/index.js";
 import {
   JsonlEventWriter,
   LocalStateStore,
@@ -37,6 +37,7 @@ import {
   ConfigError,
   StateError,
   UserInputError,
+  ValidationError,
   WorkflowError,
 } from "../utils/index.js";
 import { nextEventId } from "../events/index.js";
@@ -193,8 +194,25 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
   // Fix P2-1: read attempt from job state rather than hard-coding 1
   const attempt = state.jobs[jobId]?.attempt ?? 1;
 
-  // 7. Build and write prompt (must happen before state mutation)
+  // 7. Build, quality-gate, and write prompt (must happen before state mutation)
   const promptText = buildAgentPrompt(bundle);
+  const handoffQuality = validatePromptHandoff(promptText, bundle);
+  if (handoffQuality.errors.length > 0) {
+    throw new ValidationError("Prompt handoff quality gate failed", {
+      details: {
+        runId: activeRunId,
+        jobId,
+        stepId: bundle.stepId,
+        errors: handoffQuality.errors,
+        warnings: handoffQuality.warnings,
+      },
+      suggestion: "Regenerate the prompt after fixing the prompt/context builder output.",
+    });
+  }
+  for (const warning of handoffQuality.warnings) {
+    console.warn(`Prompt handoff quality warning: ${warning.message}`);
+  }
+
   const { artifactRef } = await writePromptArtifact({
     runDir,
     runId: activeRunId,

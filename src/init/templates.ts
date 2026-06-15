@@ -184,7 +184,7 @@ jobs:
     steps:
       - id: check
         type: script
-        run: "echo 'static-check placeholder: replace with pnpm typecheck && pnpm lint'"
+        run: "pnpm typecheck && pnpm lint"
         on_failure: fail
 
   unit-test:
@@ -195,7 +195,7 @@ jobs:
     steps:
       - id: test
         type: script
-        run: "echo 'unit-test placeholder: replace with pnpm test:ci'"
+        run: "pnpm test:ci"
         on_failure: fail
 
   review:

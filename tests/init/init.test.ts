@@ -539,6 +539,10 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
     expect(error).toBeUndefined();
 
     const wf = await loadGeneratedWorkflow();
+    const expectedCommands = new Map([
+      ["static-check", "pnpm typecheck && pnpm lint"],
+      ["unit-test", "pnpm test:ci"]
+    ]);
 
     for (const jobName of ["static-check", "unit-test"]) {
       const job = wf.jobs[jobName];
@@ -548,7 +552,9 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
       const step = job!.steps[0]!;
       expect(step.type, `job ${jobName} step.type`).toBe("script");
       expect(typeof step.run, `job ${jobName} step.run`).toBe("string");
-      expect((step.run ?? "").length).toBeGreaterThan(0);
+      expect(step.run, `job ${jobName} step.run`).toBe(expectedCommands.get(jobName));
+      expect(step.run, `job ${jobName} must not use placeholder echo`).not.toMatch(/\becho\b/);
+      expect(step.run, `job ${jobName} must not mention placeholder`).not.toMatch(/placeholder/i);
       // No Skill Pack uses: routing — AD-P10-002.
       expect(step.uses ?? "").not.toMatch(/^skill:\/\//);
       expect(step.on_failure).toBe("fail");

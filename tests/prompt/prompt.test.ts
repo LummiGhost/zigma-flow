@@ -82,6 +82,13 @@ function makeContextBundle(overrides: Partial<ContextBundle> = {}): ContextBundl
     jobId: "plan",
     stepId: "draft",
     stepType: "agent",
+    primaryPrompt: {
+      skill: "code",
+      id: "plan",
+      path: "prompts/plan.md",
+      content: "# Primary Plan Prompt\n\nCreate a concrete implementation plan.",
+      source: "job.id",
+    },
     capabilities: {
       skills: [
         { alias: "code", skillId: "zigma.code-change", version: "1.0.0" },
@@ -323,12 +330,14 @@ describe("buildAgentPrompt — section rendering", () => {
   it("renders all six required sections in order (T-RENDER-1, UC-RENDER-1)", () => {
     const out = buildAgentPrompt(makeContextBundle());
 
-    // Order of section headers: Responsibility → Inputs → Capabilities →
-    // Signals → Permissions → Output. The H1 step header precedes them all.
+    // Order of section headers: Responsibility → Inputs → Step Instructions
+    // → Capabilities → Signals → Permissions → Output. The H1 step header
+    // precedes them all.
     const headers = [
       out.indexOf("# "),                              // H1 step header
       out.search(/^##\s+(Responsibility|当前职责)/m),
       out.search(/^##\s+(Inputs|当前输入)/m),
+      out.search(/^##\s+Step Instructions/m),
       out.search(/^##\s+Exposed Capabilities/m),
       out.search(/^##\s+Available Workflow Signals/m),
       out.search(/^##\s+Permissions and Forbidden Actions/m),
@@ -359,6 +368,19 @@ describe("buildAgentPrompt — section rendering", () => {
     expect(out).toContain("needs_review");
     expect(out).toContain("goal");
     expect(out).toContain("fix the bug");
+  });
+
+  it("renders Step Instructions after Inputs and includes primary prompt markdown (Issue #25)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+
+    const inputsIdx = out.search(/^##\s+Inputs/m);
+    const instructionsIdx = out.search(/^##\s+Step Instructions/m);
+    const capabilitiesIdx = out.search(/^##\s+Exposed Capabilities/m);
+
+    expect(instructionsIdx).toBeGreaterThan(inputsIdx);
+    expect(capabilitiesIdx).toBeGreaterThan(instructionsIdx);
+    expect(out).toContain("# Primary Plan Prompt");
+    expect(out).toContain("Create a concrete implementation plan.");
   });
 
   it("emits (none) markers for empty capabilities and signals (T-RENDER-2, UC-RENDER-2)", () => {

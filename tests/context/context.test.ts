@@ -292,6 +292,30 @@ const CANONICAL_LOCK_ENTRY = {
   hash: "sha256-placeholder",
 };
 
+const PRIMARY_PROMPT_SKILL_YML = [
+  "id: zigma.code-change",
+  "name: Code Change",
+  "version: 1.0.0",
+  "kind: skill-pack",
+  "prompts:",
+  "  - id: plan",
+  "    path: prompts/plan.md",
+  "  - id: draft",
+  "    path: prompts/draft.md",
+  "  - id: intake",
+  "    path: prompts/intake.md",
+  "  - id: review",
+  "    path: prompts/review.md",
+  "",
+].join("\n");
+
+const PRIMARY_PROMPT_SKILL_FILES: Record<string, string> = {
+  "prompts/plan.md": "# Plan Primary\n\nPlan by job id.",
+  "prompts/draft.md": "# Draft Primary\n\nDraft by step id.",
+  "prompts/intake.md": "# Intake Primary\n\nIntake by step id.",
+  "prompts/review.md": "# Review Primary\n\nReview from explicit prompt.",
+};
+
 // ---------------------------------------------------------------------------
 // buildContext — step selection (FP-CTX-STEP, FP-CTX-EDGE)
 // ---------------------------------------------------------------------------
@@ -504,6 +528,151 @@ describe("buildContext capability exposure", () => {
         jobId: "plan",
       })
     ).rejects.toBeInstanceOf(WorkflowError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildContext — primary prompt resolution (Issue #25)
+// ---------------------------------------------------------------------------
+
+describe("buildContext primary prompt resolution", () => {
+  let sb: Sandbox;
+
+  beforeEach(async () => {
+    sb = await makeSandbox();
+    await seedSkillLock(sb.zigmaflowDir, { "zigma.code-change": CANONICAL_LOCK_ENTRY });
+    await seedSkillPack(
+      sb.zigmaflowDir,
+      "code-change",
+      PRIMARY_PROMPT_SKILL_YML,
+      PRIMARY_PROMPT_SKILL_FILES,
+    );
+  });
+
+  afterEach(async () => {
+    await rm(sb.zigmaflowDir, { recursive: true, force: true });
+  });
+
+  it("resolves the primary prompt by job id before step id", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        plan: {
+          steps: [
+            { id: "draft", type: "agent", expose: { skills: ["code"] } },
+          ],
+        },
+      },
+    });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state: makeRunState(),
+      jobId: "plan",
+    });
+
+    expect(bundle.primaryPrompt).toMatchObject({
+      skill: "code",
+      id: "plan",
+      path: "prompts/plan.md",
+      source: "job.id",
+    });
+    expect(bundle.primaryPrompt?.content).toContain("Plan by job id.");
+    expect(bundle.warnings).toBeUndefined();
+  });
+
+  it("resolves the primary prompt by step id when job id does not match", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        analysis: {
+          steps: [
+            { id: "intake", type: "agent", expose: { skills: ["code"] } },
+          ],
+        },
+      },
+    });
+    const state = makeRunState({
+      jobs: { analysis: { status: "ready", current_step: "intake" } as never },
+    });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "analysis",
+    });
+
+    expect(bundle.primaryPrompt).toMatchObject({
+      skill: "code",
+      id: "intake",
+      path: "prompts/intake.md",
+      source: "step.id",
+    });
+    expect(bundle.primaryPrompt?.content).toContain("Intake by step id.");
+    expect(bundle.warnings).toBeUndefined();
+  });
+
+  it("resolves an explicit workflow step prompt before job id and step id", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              prompt: "review",
+              expose: { skills: ["code"] },
+            },
+          ],
+        },
+      },
+    });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state: makeRunState(),
+      jobId: "plan",
+    });
+
+    expect(bundle.primaryPrompt).toMatchObject({
+      skill: "code",
+      id: "review",
+      path: "prompts/review.md",
+      source: "step.prompt",
+    });
+    expect(bundle.primaryPrompt?.content).toContain("Review from explicit prompt.");
+    expect(bundle.warnings).toBeUndefined();
+  });
+
+  it("emits a warning and generated-context fallback when no primary prompt matches", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        noMatch: {
+          steps: [
+            { id: "unknown", type: "agent", expose: { skills: ["code"] } },
+          ],
+        },
+      },
+    });
+    const state = makeRunState({
+      jobs: { noMatch: { status: "ready", current_step: "unknown" } as never },
+    });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "noMatch",
+    });
+
+    expect(bundle.primaryPrompt).toBeUndefined();
+    expect(bundle.warnings?.[0]).toContain("No primary prompt resolved");
+    expect(bundle.warnings?.[0]).toContain("Falling back");
   });
 });
 

@@ -35,6 +35,7 @@ import type { Clock } from "../run/index.js";
  *   # <job>/<step> Agent Prompt
  *   ## Responsibility (当前职责)
  *   ## Inputs (当前输入)
+ *   ## Step Instructions
  *   ## Exposed Capabilities
  *     ### Knowledge
  *     ### Prompts
@@ -76,6 +77,22 @@ export function buildAgentPrompt(bundle: ContextBundle): string {
     for (const [key, value] of inputEntries) {
       lines.push(`- **${key}**: ${value}`);
     }
+  }
+  lines.push("");
+
+  // ## Step Instructions
+  lines.push("## Step Instructions");
+  lines.push("");
+  if (bundle.warnings !== undefined) {
+    for (const warning of bundle.warnings) {
+      lines.push(`> Warning: ${warning}`);
+    }
+    lines.push("");
+  }
+  if (bundle.primaryPrompt !== undefined) {
+    lines.push(bundle.primaryPrompt.content.trimEnd());
+  } else {
+    lines.push("No primary prompt was resolved. Use the generated inputs and exposed capabilities below as fallback context.");
   }
   lines.push("");
 

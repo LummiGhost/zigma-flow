@@ -47,6 +47,14 @@ export interface ExposedPrompt {
   id: string;
 }
 
+export interface PrimaryPrompt {
+  skill: string;
+  id: string;
+  path: string;
+  content: string;
+  source: "step.prompt" | "job.id" | "step.id";
+}
+
 export interface ExposedFunction {
   skill: string;
   id: string;
@@ -93,6 +101,8 @@ export interface ContextBundle {
   stepId: string;
   stepType: StepKind;
   capabilities: ExposedCapabilities;
+  primaryPrompt?: PrimaryPrompt;
+  warnings?: string[];
   inputs: Record<string, string>;
   artifacts: ArtifactSummary[];
   signals: SignalSpec[];
@@ -227,6 +237,42 @@ function isEnoent(e: unknown): boolean {
   );
 }
 
+interface PromptCandidate {
+  id: string;
+  source: PrimaryPrompt["source"];
+}
+
+function primaryPromptCandidates(jobId: string, stepId: string, stepPrompt: unknown): PromptCandidate[] {
+  const candidates: PromptCandidate[] = [];
+  const seen = new Set<string>();
+
+  if (typeof stepPrompt === "string" && stepPrompt.trim().length > 0) {
+    const id = stepPrompt.trim();
+    candidates.push({ id, source: "step.prompt" });
+    seen.add(id);
+  }
+
+  for (const candidate of [
+    { id: jobId, source: "job.id" as const },
+    { id: stepId, source: "step.id" as const },
+  ]) {
+    if (!seen.has(candidate.id)) {
+      candidates.push(candidate);
+      seen.add(candidate.id);
+    }
+  }
+
+  return candidates;
+}
+
+function promptIdMatches(alias: string, promptId: string, candidate: string): boolean {
+  return (
+    promptId === candidate ||
+    `${alias}.${promptId}` === candidate ||
+    `${alias}/${promptId}` === candidate
+  );
+}
+
 // ---------------------------------------------------------------------------
 // buildContext
 // ---------------------------------------------------------------------------
@@ -290,6 +336,8 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
   };
 
   let capabilities: ExposedCapabilities = emptyCapabilities;
+  let primaryPrompt: PrimaryPrompt | undefined;
+  const warnings: string[] = [];
 
   if (step.type === "agent" && step.expose?.skills !== undefined && step.expose.skills.length > 0) {
     const exposedSkills: ExposedSkillRef[] = [];
@@ -337,6 +385,27 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
         });
       }
 
+      if (primaryPrompt === undefined) {
+        for (const candidate of primaryPromptCandidates(jobId, stepId, step.prompt)) {
+          const promptExport = (pack.prompts ?? []).find((p) =>
+            promptIdMatches(alias, p.id, candidate.id)
+          );
+          if (promptExport === undefined) {
+            continue;
+          }
+
+          const content = await readFile(join(packRoot, promptExport.path), "utf-8");
+          primaryPrompt = {
+            skill: alias,
+            id: promptExport.id,
+            path: promptExport.path,
+            content,
+            source: candidate.source,
+          };
+          break;
+        }
+      }
+
       // Collect function entries (defensively project from unknown[])
       for (const f of pack.functions ?? []) {
         if (typeof f === "object" && f !== null && typeof (f as Record<string, unknown>)["id"] === "string") {
@@ -381,6 +450,28 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
       functions: exposedFunctions,
       tools: exposedTools,
     };
+
+    if (primaryPrompt === undefined) {
+      const candidates = primaryPromptCandidates(jobId, stepId, step.prompt).map((c) => c.id);
+      warnings.push(
+        `No primary prompt resolved for job "${jobId}" step "${stepId}". ` +
+        `Tried prompt ids: ${candidates.join(", ")}. Falling back to generated step context.`
+      );
+    } else if (
+      typeof step.prompt === "string" &&
+      step.prompt.trim().length > 0 &&
+      !promptIdMatches(primaryPrompt.skill, primaryPrompt.id, step.prompt.trim())
+    ) {
+      warnings.push(
+        `Declared primary prompt "${step.prompt.trim()}" was not found in exposed Skill Pack prompts; ` +
+        `fell back to ${primaryPrompt.source} prompt "${primaryPrompt.id}".`
+      );
+    }
+  } else if (step.type === "agent") {
+    warnings.push(
+      `No primary prompt resolved for job "${jobId}" step "${stepId}" because the agent step exposes no skills. ` +
+      `Falling back to generated step context.`
+    );
   }
 
   // -----------------------------------------------------------------------
@@ -471,6 +562,8 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     stepId,
     stepType: step.type as StepKind,
     capabilities,
+    ...(primaryPrompt !== undefined ? { primaryPrompt } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
     inputs: resolvedInputs,
     artifacts,
     signals,

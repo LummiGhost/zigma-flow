@@ -64,6 +64,7 @@ const StepBaseSchema = z.object({
   id: z.string(),
   type: z.enum(["agent", "script", "check", "router", "workflow", "human"]),
   uses: z.string().optional(),
+  prompt: z.string().optional(),
   expose: z
     .object({
       skills: z.array(z.string()).optional(),
@@ -91,6 +92,7 @@ export interface StepDefinition {
   id: string;
   type: "agent" | "script" | "check" | "router" | "workflow" | "human";
   uses?: string;
+  prompt?: string;
   expose?: { skills?: string[]; knowledge?: string[]; [key: string]: unknown };
   with?: Record<string, unknown>;
   outputs?: Record<string, unknown>;

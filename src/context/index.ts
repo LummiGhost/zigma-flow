@@ -39,12 +39,16 @@ export interface ExposedSkillRef {
 export interface ExposedKnowledge {
   skill: string;    // workflow-level alias
   id: string;
+  path?: string;
   description?: string;
+  readPolicy?: "required" | "optional";
+  usage?: string;
 }
 
 export interface ExposedPrompt {
   skill: string;
   id: string;
+  path?: string;
 }
 
 export interface PrimaryPrompt {
@@ -279,6 +283,31 @@ function promptIdMatches(alias: string, promptId: string, candidate: string): bo
   );
 }
 
+function knowledgeReadGuidance(id: string, description?: string): Pick<ExposedKnowledge, "readPolicy" | "usage"> {
+  switch (id) {
+    case "coding-guidelines":
+      return {
+        readPolicy: "required",
+        usage: "read before starting this step",
+      };
+    case "workflow-guide":
+      return {
+        readPolicy: "required",
+        usage: "report schema and workflow DAG reference",
+      };
+    case "common-failure-patterns":
+      return {
+        readPolicy: "optional",
+        usage: "consult if unsure about approach, failure handling, or retry behavior",
+      };
+    default:
+      return {
+        readPolicy: "optional",
+        usage: description ?? "reference material for this step",
+      };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // buildContext
 // ---------------------------------------------------------------------------
@@ -376,7 +405,12 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
 
       // Collect knowledge entries
       for (const k of pack.knowledge ?? []) {
-        const kEntry: ExposedKnowledge = { skill: alias, id: k.id };
+        const kEntry: ExposedKnowledge = {
+          skill: alias,
+          id: k.id,
+          path: k.path,
+          ...knowledgeReadGuidance(k.id, k.description),
+        };
         if (k.description !== undefined) {
           kEntry.description = k.description;
         }
@@ -388,6 +422,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
         exposedPrompts.push({
           skill: alias,
           id: p.id,
+          path: p.path,
         });
       }
 

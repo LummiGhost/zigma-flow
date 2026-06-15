@@ -95,10 +95,27 @@ function makeContextBundle(overrides: Partial<ContextBundle> = {}): ContextBundl
         { alias: "code", skillId: "zigma.code-change", version: "1.0.0" },
       ],
       knowledge: [
-        { skill: "code", id: "rules", description: "Project rules" },
-        { skill: "code", id: "layout", description: "Source layout" },
+        {
+          skill: "code",
+          id: "rules",
+          path: "knowledge/rules.md",
+          description: "Project rules",
+          readPolicy: "required",
+          usage: "read before starting this step",
+        },
+        {
+          skill: "code",
+          id: "layout",
+          path: "knowledge/layout.md",
+          description: "Source layout",
+          readPolicy: "optional",
+          usage: "consult for repository structure",
+        },
       ],
-      prompts: [{ skill: "code", id: "implement" }],
+      prompts: [
+        { skill: "code", id: "plan", path: "prompts/plan.md" },
+        { skill: "code", id: "implement", path: "prompts/implement.md" },
+      ],
       functions: [
         {
           skill: "code",
@@ -363,8 +380,15 @@ describe("buildAgentPrompt — section rendering", () => {
     // Spot-check ids surface in the right buckets.
     expect(out).toContain("rules");
     expect(out).toContain("layout");
+    expect(out).toContain("path: `knowledge/rules.md`");
+    expect(out).toContain("**required**: read before starting this step");
+    expect(out).toContain("**optional**: consult for repository structure");
     expect(out).toContain("implement");
+    expect(out).toContain("path: `prompts/implement.md`");
+    expect(out).toContain("primary prompt rendered above");
+    expect(out).toContain("reference prompt only");
     expect(out).toContain("implement-by-plan");
+    expect(out).toContain("not callable runtime APIs");
     expect(out).toContain("grep");
     expect(out).toContain("needs_review");
     expect(out).toContain("goal");

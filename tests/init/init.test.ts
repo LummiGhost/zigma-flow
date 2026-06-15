@@ -178,6 +178,37 @@ describe("runInit integration", () => {
     }
   });
 
+  it("runInit writes gitignore rules for runtime-only state (T-INIT-13)", async () => {
+    const { result, error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const gitignorePath = join(tempDir, ".gitignore");
+    const gitignore = await readFile(gitignorePath, "utf-8");
+
+    expect(gitignore).toContain("# Zigma Flow runtime state (do not commit)");
+    expect(gitignore).toContain(".zigma-flow/runs/");
+    expect(gitignore).toContain(".zigma-flow/config.json");
+    expect(result?.files).toContainEqual({ path: gitignorePath, status: "created" });
+  });
+
+  it("runInit preserves existing gitignore content and appends missing runtime rules (T-INIT-14)", async () => {
+    const gitignorePath = join(tempDir, ".gitignore");
+    await writeFile(gitignorePath, "node_modules/\n", "utf-8");
+
+    const first = await safeRunInit(tempDir);
+    expect(first.error).toBeUndefined();
+    expect(first.result?.files).toContainEqual({ path: gitignorePath, status: "updated" });
+
+    const second = await safeRunInit(tempDir);
+    expect(second.error).toBeUndefined();
+    expect(second.result?.files).toContainEqual({ path: gitignorePath, status: "skipped" });
+
+    const gitignore = await readFile(gitignorePath, "utf-8");
+    expect(gitignore).toContain("node_modules/");
+    expect(gitignore.match(/\.zigma-flow\/runs\//g)).toHaveLength(1);
+    expect(gitignore.match(/\.zigma-flow\/config\.json/g)).toHaveLength(1);
+  });
+
   it("runInit emits already-initialized hint when config.json exists (T-INIT-5 / UC-CMD-3)", async () => {
     const dotZigma = join(tempDir, ".zigma-flow");
     await createDirectories([dotZigma]).catch(() => {

@@ -97,6 +97,14 @@ export interface PromptGeneratedPayload {
   job_id: string;
   step_id: string;
   prompt_artifact: string;
+  prompt_packet_artifacts?: {
+    system: string;
+    task: string;
+    step: string;
+    context: string;
+    output: string;
+    manifest: string;
+  };
 }
 
 export interface AgentReportAcceptedPayload {

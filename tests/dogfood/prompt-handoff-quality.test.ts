@@ -95,13 +95,32 @@ describe("P12.3 prompt handoff quality regression", () => {
       });
 
       const prompt = await readFile(join(runsDir, runId, "current-step.md"), "utf-8");
+      const packetDir = join(
+        runsDir,
+        runId,
+        "jobs",
+        "intake",
+        "attempts",
+        "1",
+        "steps",
+        "analyze",
+        "prompt-packet",
+      );
+      const stepBlock = await readFile(join(packetDir, "step.md"), "utf-8");
+      const manifest = JSON.parse(await readFile(join(packetDir, "packet.json"), "utf-8")) as {
+        backend_composition: { composition_order: string[] };
+        blocks: Array<{ id: string; path: string }>;
+      };
 
       expect(prompt).toMatch(/^##\s+System Prompt/m);
       expect(prompt).toMatch(/^##\s+Task Prompt/m);
       expect(prompt).toMatch(/^##\s+Workflow Step Prompt/m);
       expect(prompt).toMatch(/^##\s+Context Blocks/m);
       expect(prompt).toMatch(/^##\s+Output Contract/m);
-      expect(prompt).toContain("# Intake Step Prompt");
+      expect(prompt.match(/^#\s+/gm)).toHaveLength(1);
+      expect(prompt).toContain("### Intake Step Prompt");
+      expect(prompt).not.toMatch(/^#\s+Intake Step Prompt/m);
+      expect(prompt).not.toMatch(/^##\s+Task$/m);
       expect(prompt).toContain("Overall run task");
       expect(prompt).toContain("canonical step artifact path");
       expect(prompt).toContain(
@@ -109,6 +128,21 @@ describe("P12.3 prompt handoff quality regression", () => {
       );
       expect(prompt).toContain("This job operates in read-only mode.");
       expect(prompt).not.toContain("edits: write");
+      expect(stepBlock).toContain("# Intake Step Prompt");
+      expect(manifest.backend_composition.composition_order).toEqual([
+        "system",
+        "task",
+        "step",
+        "context",
+        "output",
+      ]);
+      expect(manifest.blocks.map((block) => block.path)).toEqual([
+        "jobs/intake/attempts/1/steps/analyze/prompt-packet/system.md",
+        "jobs/intake/attempts/1/steps/analyze/prompt-packet/task.md",
+        "jobs/intake/attempts/1/steps/analyze/prompt-packet/step.md",
+        "jobs/intake/attempts/1/steps/analyze/prompt-packet/context.md",
+        "jobs/intake/attempts/1/steps/analyze/prompt-packet/output.md",
+      ]);
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }

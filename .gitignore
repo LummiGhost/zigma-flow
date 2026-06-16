@@ -7,3 +7,4 @@ coverage/
 # Zigma Flow runtime state (do not commit)
 .zigma-flow/runs/
 .zigma-flow/config.json
+.zigma-flow

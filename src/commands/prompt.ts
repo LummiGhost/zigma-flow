@@ -25,7 +25,12 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import { buildContext } from "../context/index.js";
-import { buildAgentPrompt, validatePromptHandoff, writePromptArtifact } from "../prompt/index.js";
+import {
+  buildPromptPacket,
+  renderPromptPacket,
+  validatePromptPacket,
+  writePromptArtifact,
+} from "../prompt/index.js";
 import {
   JsonlEventWriter,
   LocalStateStore,
@@ -195,8 +200,10 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
   const attempt = state.jobs[jobId]?.attempt ?? 1;
 
   // 7. Build, quality-gate, and write prompt (must happen before state mutation)
-  const promptText = buildAgentPrompt(bundle);
-  const handoffQuality = validatePromptHandoff(promptText, bundle);
+  const packet = buildPromptPacket(bundle);
+  const renderedPrompt = renderPromptPacket(packet, { supportsSystemPrompt: false });
+  const promptText = renderedPrompt.markdown;
+  const handoffQuality = validatePromptPacket(packet, promptText);
   if (handoffQuality.errors.length > 0) {
     throw new ValidationError("Prompt handoff quality gate failed", {
       details: {

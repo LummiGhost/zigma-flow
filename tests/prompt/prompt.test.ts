@@ -47,6 +47,9 @@ import {
 import { createRun } from "../../src/engine/index.js";
 import {
   buildAgentPrompt,
+  buildPromptPacket,
+  renderPromptPacket,
+  validatePromptPacket,
   validatePromptHandoff,
   writePromptArtifact,
 } from "../../src/prompt/index.js";
@@ -84,6 +87,7 @@ function makeContextBundle(overrides: Partial<ContextBundle> = {}): ContextBundl
     stepId: "draft",
     attempt: 1,
     stepType: "agent",
+    runTask: "fix the bug",
     primaryPrompt: {
       skill: "code",
       id: "plan",
@@ -342,74 +346,196 @@ const SEED_EVENTS: Array<Record<string, unknown>> = [
 ];
 
 // ---------------------------------------------------------------------------
+// PromptPacket contract — P12.5
+// ---------------------------------------------------------------------------
+
+describe("PromptPacket contract", () => {
+  it("builds explicit system/task/step/context/output packet layers", () => {
+    const packet = buildPromptPacket(makeContextBundle());
+
+    expect(packet.system.block.title).toBe("System Prompt");
+    expect(packet.system.invariants).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Engine owns all workflow state transitions"),
+      ]),
+    );
+    expect(packet.system.boundaries).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Skill Pack knowledge, prompts, functions, and tools"),
+        expect.stringContaining("cannot modify workflow state"),
+      ]),
+    );
+
+    expect(packet.task).toMatchObject({
+      source: "run.input",
+      task: "fix the bug",
+    });
+    expect(packet.step).toMatchObject({
+      source: "job.id",
+      jobId: "plan",
+      stepId: "draft",
+      promptId: "plan",
+      promptPath: "prompts/plan.md",
+    });
+    expect(packet.output.reportPath).toBe(
+      ".zigma-flow/runs/20260608-0001/jobs/plan/attempts/1/steps/draft/report.json",
+    );
+    expect(packet.output.reportSchema.requiredTopLevelFields).toEqual([
+      "outputs",
+      "artifacts",
+      "signals",
+      "summary",
+    ]);
+  });
+
+  it("creates typed, sorted context blocks without large artifact body injection", () => {
+    const packet = buildPromptPacket(
+      makeContextBundle({
+        artifacts: [
+          {
+            id: "artifact://20260608-0001/jobs/intake/attempts/1/steps/analyze/report",
+            kind: "agent_report",
+            path: "jobs/intake/attempts/1/steps/analyze/report.json",
+            summary: "Intake summary",
+            size: 123,
+            content_type: "application/json",
+          },
+        ],
+      }),
+    );
+
+    const priorities = packet.context.map((block) => block.priority);
+    expect(priorities).toEqual([...priorities].sort((a, b) => b - a));
+    expect(packet.context).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "artifact-summary",
+          source: "artifact://20260608-0001/jobs/intake/attempts/1/steps/analyze/report",
+          freshness: "prior",
+          artifactRef: "artifact://20260608-0001/jobs/intake/attempts/1/steps/analyze/report",
+          path: "jobs/intake/attempts/1/steps/analyze/report.json",
+        }),
+        expect.objectContaining({
+          type: "knowledge-summary",
+          source: "code.rules",
+          freshness: "static",
+        }),
+        expect.objectContaining({
+          type: "workspace-scan",
+          source: "workflow.workspace",
+          freshness: "current",
+        }),
+      ]),
+    );
+    expect(JSON.stringify(packet.context)).not.toContain("# full artifact body");
+  });
+
+  it("renders system-capable backend payloads with system and user separated", () => {
+    const packet = buildPromptPacket(makeContextBundle());
+    const rendered = renderPromptPacket(packet, { supportsSystemPrompt: true });
+
+    expect(rendered.system).toContain("You are a Zigma Flow Agent Step executor.");
+    expect(rendered.user).toMatch(/^# plan\/draft Agent Prompt/);
+    expect(rendered.user).not.toMatch(/^##\s+System Prompt/m);
+    expect(rendered.user).toMatch(/^##\s+Task Prompt/m);
+    expect(rendered.user).toMatch(/^##\s+Workflow Step Prompt/m);
+    expect(rendered.user).toMatch(/^##\s+Context Blocks/m);
+    expect(rendered.user).toMatch(/^##\s+Output Contract/m);
+  });
+
+  it("packet quality gate catches missing output contract and oversized context", () => {
+    const packet = buildPromptPacket(makeContextBundle());
+    const missingOutput = buildAgentPrompt(makeContextBundle()).replace(/^## Output Contract[\s\S]*$/m, "");
+
+    expect(validatePromptPacket(packet, missingOutput).errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "missing_output_contract" }),
+      ]),
+    );
+
+    const oversizedPacket = {
+      ...packet,
+      context: [
+        {
+          id: "huge",
+          type: "artifact-summary" as const,
+          source: "artifact://huge",
+          priority: 100,
+          freshness: "prior" as const,
+          summary: "x".repeat(4_001),
+          artifactRef: "artifact://huge",
+        },
+      ],
+    };
+    const rendered = renderPromptPacket(oversizedPacket).markdown;
+
+    expect(validatePromptPacket(oversizedPacket, rendered).errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "context_block_too_large" }),
+      ]),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildAgentPrompt — FP-PROMPT-RENDER / FP-PROMPT-CONFINE
 // ---------------------------------------------------------------------------
 
 describe("buildAgentPrompt — section rendering", () => {
-  it("renders all six required sections in order (T-RENDER-1, UC-RENDER-1)", () => {
+  it("renders PromptPacket layers in fixed order (T-RENDER-1, UC-RENDER-1)", () => {
     const out = buildAgentPrompt(makeContextBundle());
 
-    // Order of section headers: Responsibility → Inputs → Step Instructions
-    // → Capabilities → Signals → Permissions → Output. The H1 step header
-    // precedes them all.
     const headers = [
-      out.indexOf("# "),                              // H1 step header
-      out.search(/^##\s+(Responsibility|当前职责)/m),
-      out.search(/^##\s+(Inputs|当前输入)/m),
-      out.search(/^##\s+Step Instructions/m),
-      out.search(/^##\s+Exposed Capabilities/m),
-      out.search(/^##\s+Available Workflow Signals/m),
-      out.search(/^##\s+Permissions and Forbidden Actions/m),
-      out.search(/^##\s+Output/m),
+      out.indexOf("# "),
+      out.search(/^##\s+System Prompt/m),
+      out.search(/^##\s+Task Prompt/m),
+      out.search(/^##\s+Workflow Step Prompt/m),
+      out.search(/^##\s+Context Blocks/m),
+      out.search(/^##\s+Output Contract/m),
     ];
     for (const idx of headers) {
       expect(idx, `header missing in:\n${out}`).toBeGreaterThanOrEqual(0);
     }
-    // Strictly increasing order.
     for (let i = 1; i < headers.length; i++) {
       expect(headers[i]!, `header at position ${i} out of order`).toBeGreaterThan(
         headers[i - 1]!,
       );
     }
 
-    // Capabilities sub-section headers and id presence.
-    expect(out).toMatch(/^###\s+Knowledge/m);
-    expect(out).toMatch(/^###\s+Prompts/m);
-    expect(out).toMatch(/^###\s+Functions/m);
-    expect(out).toMatch(/^###\s+Tools/m);
-
-    // Spot-check ids surface in the right buckets.
+    expect(out).toContain("Global invariants");
+    expect(out).toContain("Overall run task");
+    expect(out).toContain("Current workflow scope");
+    expect(out).toContain("workspace-mode");
     expect(out).toContain("rules");
     expect(out).toContain("layout");
     expect(out).toContain("path: `knowledge/rules.md`");
-    expect(out).toContain("**required**: read before starting this step");
-    expect(out).toContain("**optional**: consult for repository structure");
+    expect(out).toContain("required: read before starting this step");
+    expect(out).toContain("optional: consult for repository structure");
     expect(out).toContain("implement");
     expect(out).toContain("path: `prompts/implement.md`");
-    expect(out).toContain("primary prompt rendered above");
-    expect(out).toContain("reference prompt only");
+    expect(out).toContain("Primary step prompt rendered");
+    expect(out).toContain("Reference prompt only");
     expect(out).toContain("implement-by-plan");
-    expect(out).toContain("not callable runtime APIs");
+    expect(out).toContain("not a callable runtime API");
     expect(out).toContain("grep");
     expect(out).toContain("needs_review");
-    expect(out).toContain("goal");
     expect(out).toContain("fix the bug");
   });
 
-  it("renders Step Instructions after Inputs and includes primary prompt markdown (Issue #25)", () => {
+  it("renders Workflow Step Prompt after Task Prompt and includes primary prompt markdown (Issue #25)", () => {
     const out = buildAgentPrompt(makeContextBundle());
 
-    const inputsIdx = out.search(/^##\s+Inputs/m);
-    const instructionsIdx = out.search(/^##\s+Step Instructions/m);
-    const capabilitiesIdx = out.search(/^##\s+Exposed Capabilities/m);
+    const taskIdx = out.search(/^##\s+Task Prompt/m);
+    const stepIdx = out.search(/^##\s+Workflow Step Prompt/m);
+    const contextIdx = out.search(/^##\s+Context Blocks/m);
 
-    expect(instructionsIdx).toBeGreaterThan(inputsIdx);
-    expect(capabilitiesIdx).toBeGreaterThan(instructionsIdx);
+    expect(stepIdx).toBeGreaterThan(taskIdx);
+    expect(contextIdx).toBeGreaterThan(stepIdx);
     expect(out).toContain("# Primary Plan Prompt");
     expect(out).toContain("Create a concrete implementation plan.");
   });
 
-  it("emits (none) markers for empty capabilities and signals (T-RENDER-2, UC-RENDER-2)", () => {
+  it("renders a minimal packet when capabilities and signals are empty (T-RENDER-2, UC-RENDER-2)", () => {
     const bundle = makeContextBundle({
       capabilities: {
         skills: [],
@@ -423,18 +549,10 @@ describe("buildAgentPrompt — section rendering", () => {
     });
     const out = buildAgentPrompt(bundle);
 
-    // Section headers still present.
-    expect(out).toMatch(/^###\s+Knowledge/m);
-    expect(out).toMatch(/^###\s+Prompts/m);
-    expect(out).toMatch(/^###\s+Functions/m);
-    expect(out).toMatch(/^###\s+Tools/m);
-    expect(out).toMatch(/^##\s+Available Workflow Signals/m);
-
-    // Each empty bucket emits a (none) marker.
-    // We expect at least 5 `(none)` occurrences: 4 capability buckets + 1
-    // signals section. Inputs may add a sixth.
-    const noneCount = (out.match(/\(none\)/g) ?? []).length;
-    expect(noneCount).toBeGreaterThanOrEqual(5);
+    expect(out).toMatch(/^##\s+Context Blocks/m);
+    expect(out).toContain("workspace-mode");
+    expect(out).toMatch(/^###\s+Allowed Signals/m);
+    expect(out).toContain("(none)");
   });
 
   it("includes 完成当前 step 后停止 and a report.json reference (T-RENDER-3, UC-RENDER-3)", () => {
@@ -454,7 +572,7 @@ describe("buildAgentPrompt — section rendering", () => {
     expect(out).toContain("jobs/intake/attempts/");
     expect(out).not.toContain("jobs\\intake\\attempts\\");
     expect(out).toContain("canonical step artifact path");
-    expect(out).toContain("engine to reject the report");
+    expect(out).toContain("Engine to reject the report");
     expect(out).toContain("runtime artifact file");
   });
 
@@ -478,17 +596,15 @@ describe("buildAgentPrompt — section rendering", () => {
       }),
     );
 
-    expect(out).toMatch(/^###\s+Repository Workspace Permissions/m);
     expect(out).toContain(
       "This job operates in read-only mode. You must not modify files in the repository.",
     );
     expect(out).not.toContain("edits: write");
     expect(out).not.toContain("**edits**");
-    expect(out).toMatch(/^###\s+Runtime Artifact Permissions/m);
     expect(out).toContain(
-      "You must write `report.json` to the canonical path above. This is a runtime artifact, not a repository file modification.",
+      "Writing report.json to the canonical runtime artifact path is allowed and required.",
     );
-    expect(out).toContain("step contract and is always allowed");
+    expect(out).toContain("This is a runtime artifact file.");
   });
 
   it("states that writable jobs may modify repository files according to the task (T-RENDER-6, UC-RENDER-6)", () => {
@@ -556,15 +672,15 @@ describe("validatePromptHandoff — quality gate", () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it("fails when the Step Instructions section is missing", () => {
+  it("fails when the Workflow Step Prompt section is missing", () => {
     const bundle = makeContextBundle();
-    const out = buildAgentPrompt(bundle).replace(/^## Step Instructions[\s\S]*?(?=^## Exposed Capabilities)/m, "");
+    const out = buildAgentPrompt(bundle).replace(/^## Workflow Step Prompt[\s\S]*?(?=^## Context Blocks)/m, "");
 
     const result = validatePromptHandoff(out, bundle);
 
     expect(result.errors).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "missing_step_instructions" }),
+        expect.objectContaining({ code: "missing_step_prompt" }),
       ]),
     );
   });
@@ -586,7 +702,7 @@ describe("validatePromptHandoff — quality gate", () => {
   });
 
   it("warns when the original task input text is absent", () => {
-    const bundle = makeContextBundle({ inputs: { task: "preserve this task text" } });
+    const bundle = makeContextBundle({ runTask: "preserve this task text" });
     const out = buildAgentPrompt(bundle).replace("preserve this task text", "redacted task");
 
     const result = validatePromptHandoff(out, bundle);

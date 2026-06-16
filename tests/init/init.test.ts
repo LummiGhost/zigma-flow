@@ -295,7 +295,7 @@ describe("runInit integration", () => {
     }
   });
 
-  it("prompt templates include report schema and stop instruction (T-INIT-11)", async () => {
+  it("prompt templates are step-scoped and defer output contract text to PromptPacket (T-INIT-11)", async () => {
     const { error } = await safeRunInit(tempDir);
     expect(error).toBeUndefined();
 
@@ -304,12 +304,10 @@ describe("runInit integration", () => {
         join(tempDir, ".zigma-flow", "skills", "code-change", "prompts", fileName),
         "utf-8"
       );
-      // Output report schema reference is required by arch §9.3 / PRD §11.
-      expect(text.toLowerCase()).toMatch(/report/);
-      expect(text.toLowerCase()).toMatch(/schema/);
-      // "stop after completing" instruction prevents Agent from auto-continuing
-      // beyond its step (PRD §11 stop-after-completing convention).
-      expect(text.toLowerCase()).toContain("stop after completing");
+      expect(text).toContain("## Step-Specific Outputs");
+      expect(text).toContain("The Task Prompt layer");
+      expect(text.toLowerCase()).not.toContain("report schema");
+      expect(text.toLowerCase()).not.toContain("stop after completing");
     }
   });
 
@@ -384,6 +382,7 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
       join("skills", "code-change", "prompts", "intake.md"),
       join("skills", "code-change", "prompts", "code-map.md"),
       join("skills", "code-change", "prompts", "plan.md"),
+      join("skills", "code-change", "prompts", "architecture-design.md"),
       join("skills", "code-change", "prompts", "implement.md"),
       join("skills", "code-change", "prompts", "review.md"),
       join("skills", "code-change", "prompts", "summarize.md")
@@ -459,6 +458,27 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
       expect(step!.type, `job ${jobName} first step type`).toBe("agent");
       expect(step!.expose?.skills, `job ${jobName} expose.skills`).toBeDefined();
       expect(step!.expose?.skills, `job ${jobName} expose.skills`).toContain("code");
+    }
+  });
+
+  it("every agent step declares an explicit primary prompt id (TC-WORKFLOW-4C)", async () => {
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const expectedPromptByJob = new Map([
+      ["intake", "intake"],
+      ["code-map", "code-map"],
+      ["plan", "plan"],
+      ["architecture-design", "architecture-design"],
+      ["implement", "implement"],
+      ["review", "review"],
+      ["summarize", "summarize"],
+    ]);
+
+    for (const [jobName, promptId] of expectedPromptByJob) {
+      const step = wf.jobs[jobName]?.steps[0];
+      expect(step?.prompt, `job ${jobName} prompt`).toBe(promptId);
     }
   });
 
@@ -609,7 +629,7 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
 
     const promptIds = (def.prompts ?? []).map((p) => p.id).sort();
     expect(promptIds).toEqual(
-      ["code-map", "implement", "intake", "plan", "review", "summarize"].sort()
+      ["architecture-design", "code-map", "implement", "intake", "plan", "review", "summarize"].sort()
     );
 
     expect(def.scripts ?? []).toEqual([]);
@@ -683,7 +703,7 @@ describe("P11 Skill Pack refinement (WF-P11-SKILL-PACK)", () => {
   });
 
   // ---------- T-P11-3 ----------
-  it("implement.md contains forbidden-action guidance (T-P11-3)", async () => {
+  it("implement.md keeps implementation scope guidance while system prompt owns forbidden actions (T-P11-3)", async () => {
     const { error } = await safeRunInit(tempDir);
     expect(error).toBeUndefined();
 
@@ -692,7 +712,9 @@ describe("P11 Skill Pack refinement (WF-P11-SKILL-PACK)", () => {
       "utf-8"
     );
 
-    expect(text).toMatch(/must not|do not modify|forbidden|禁止/i);
+    expect(text).toContain("limited to the task scope");
+    expect(text).toContain("preserve runtime state ownership");
+    expect(text.toLowerCase()).not.toContain("forbidden actions");
   });
 
   // ---------- T-P11-4 ----------

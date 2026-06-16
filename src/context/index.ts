@@ -109,10 +109,12 @@ export interface ContextBundle {
   stepId: string;
   attempt: number;
   stepType: StepKind;
+  runTask?: string;
   capabilities: ExposedCapabilities;
   primaryPrompt?: PrimaryPrompt;
   warnings?: string[];
   inputs: Record<string, string>;
+  stepOutputs?: Record<string, unknown>;
   artifacts: ArtifactSummary[];
   signals: SignalSpec[];
   permissions: PermissionSet;
@@ -608,10 +610,12 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     stepId,
     attempt: jobState?.attempt ?? 1,
     stepType: step.type as StepKind,
+    runTask: state.task,
     capabilities,
     ...(primaryPrompt !== undefined ? { primaryPrompt } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     inputs: resolvedInputs,
+    ...(step.outputs !== undefined ? { stepOutputs: step.outputs } : {}),
     artifacts,
     signals,
     permissions,

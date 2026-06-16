@@ -13,6 +13,7 @@ import { getPackageInfo } from "../utils/index.js";
 import {
   codeChangeWorkflowYml,
   codeMapMd,
+  architectureDesignMd,
   codingGuidelinesMd,
   collectDiffTs,
   commonFailurePatternsMd,
@@ -157,6 +158,10 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
     [join(dotZigma, "skills", "code-change", "prompts", "intake.md"), intakeMd()],
     [join(dotZigma, "skills", "code-change", "prompts", "code-map.md"), codeMapMd()],
     [join(dotZigma, "skills", "code-change", "prompts", "plan.md"), planMd()],
+    [
+      join(dotZigma, "skills", "code-change", "prompts", "architecture-design.md"),
+      architectureDesignMd()
+    ],
     [join(dotZigma, "skills", "code-change", "prompts", "implement.md"), implementMd()],
     [join(dotZigma, "skills", "code-change", "prompts", "review.md"), reviewMd()],
     [join(dotZigma, "skills", "code-change", "prompts", "summarize.md"), summarizeMd()],

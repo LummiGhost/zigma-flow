@@ -10,7 +10,8 @@
  *      - If --job is provided, validate it exists in the workflow → UserInputError if not.
  *      - Otherwise auto-detect: exactly one ready job → UserInputError if zero or >1.
  *   6. Assert the current step of that job is an agent step → WorkflowError if not.
- *   7. buildContext → buildAgentPrompt → prompt handoff quality gate → writePromptArtifact.
+ *   7. buildContext → PromptPacket render → prompt handoff quality gate → write prompt artifacts.
+ *      This writes current-step.md plus prompt-packet block files for backend composition.
  *   8. Append prompt_generated event (evt-NNN) to events.jsonl.
  *   9. Transition job status from "ready" to "running" in state.json.
  *  10. Print path to current-step.md.
@@ -30,6 +31,7 @@ import {
   renderPromptPacket,
   validatePromptPacket,
   writePromptArtifact,
+  type PromptPacketArtifactRefs,
 } from "../prompt/index.js";
 import {
   JsonlEventWriter,
@@ -220,13 +222,14 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
     console.warn(`Prompt handoff quality warning: ${warning.message}`);
   }
 
-  const { artifactRef } = await writePromptArtifact({
+  const { artifactRef, packetArtifactRefs } = await writePromptArtifact({
     runDir,
     runId: activeRunId,
     jobId,
     stepId: bundle.stepId,
     attempt,
     prompt: promptText,
+    packet,
     clock,
   });
 
@@ -261,6 +264,9 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
       job_id: jobId,
       step_id: bundle.stepId,
       prompt_artifact: artifactRef,
+      ...(packetArtifactRefs !== undefined
+        ? { prompt_packet_artifacts: promptPacketArtifactRefMap(packetArtifactRefs) }
+        : {}),
     },
   });
 
@@ -283,4 +289,22 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
   // 10. Print output path
   const mirrorPath = join(runDir, "current-step.md");
   console.log(`Prompt written to: ${mirrorPath}`);
+}
+
+function promptPacketArtifactRefMap(refs: PromptPacketArtifactRefs): {
+  system: string;
+  task: string;
+  step: string;
+  context: string;
+  output: string;
+  manifest: string;
+} {
+  return {
+    system: refs.system.artifactRef,
+    task: refs.task.artifactRef,
+    step: refs.step.artifactRef,
+    context: refs.context.artifactRef,
+    output: refs.output.artifactRef,
+    manifest: refs.manifest.artifactRef,
+  };
 }

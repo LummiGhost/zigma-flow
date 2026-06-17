@@ -150,12 +150,20 @@ describe("promptAction (CLI integration) — happy path", () => {
       .filter((l) => l.trim().length > 0);
     const last = JSON.parse(lines[lines.length - 1]!) as {
       type: string;
-      payload: { job_id: string; step_id: string; prompt_artifact: string };
+      payload: {
+        job_id: string;
+        step_id: string;
+        prompt_artifact: string;
+        prompt_packet_artifacts: { manifest: string };
+      };
     };
     expect(last.type).toBe("prompt_generated");
     expect(last.payload.job_id).toBe("plan");
     expect(last.payload.step_id).toBe("draft");
     expect(last.payload.prompt_artifact).toMatch(/^artifact:\/\//);
+    expect(last.payload.prompt_packet_artifacts.manifest).toMatch(
+      /\/prompt-packet\/packet$/,
+    );
 
     // 5. CLI should have printed the path to current-step.md.
     expect(logSpy).toHaveBeenCalled();

@@ -441,6 +441,8 @@ describe("PromptPacket contract", () => {
     expect(rendered.user).toMatch(/^##\s+Workflow Step Prompt/m);
     expect(rendered.user).toMatch(/^##\s+Context Blocks/m);
     expect(rendered.user).toMatch(/^##\s+Output Contract/m);
+    expect(rendered.user).toContain("### Primary Plan Prompt");
+    expect(rendered.user).not.toMatch(/^#\s+Primary Plan Prompt/m);
   });
 
   it("packet quality gate catches missing output contract and oversized context", () => {
@@ -475,6 +477,20 @@ describe("PromptPacket contract", () => {
       ]),
     );
   });
+
+  it("packet quality gate rejects nested top-level headings in composed markdown", () => {
+    const packet = buildPromptPacket(makeContextBundle());
+    const malformed = renderPromptPacket(packet).markdown.replace(
+      "### Primary Plan Prompt",
+      "# Primary Plan Prompt",
+    );
+
+    expect(validatePromptPacket(packet, malformed).errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "prompt_heading_hierarchy" }),
+      ]),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -501,6 +517,7 @@ describe("buildAgentPrompt — section rendering", () => {
         headers[i - 1]!,
       );
     }
+    expect(out.match(/^#\s+/gm)).toHaveLength(1);
 
     expect(out).toContain("Global invariants");
     expect(out).toContain("Overall run task");
@@ -511,11 +528,9 @@ describe("buildAgentPrompt — section rendering", () => {
     expect(out).toContain("path: `knowledge/rules.md`");
     expect(out).toContain("required: read before starting this step");
     expect(out).toContain("optional: consult for repository structure");
-    expect(out).toContain("implement");
-    expect(out).toContain("path: `prompts/implement.md`");
-    expect(out).toContain("Primary step prompt rendered");
-    expect(out).toContain("Reference prompt only");
     expect(out).toContain("implement-by-plan");
+    expect(out).toContain("Primary step prompt rendered");
+    expect(out).not.toContain("Reference prompt only");
     expect(out).toContain("not a callable runtime API");
     expect(out).toContain("grep");
     expect(out).toContain("needs_review");
@@ -531,7 +546,9 @@ describe("buildAgentPrompt — section rendering", () => {
 
     expect(stepIdx).toBeGreaterThan(taskIdx);
     expect(contextIdx).toBeGreaterThan(stepIdx);
-    expect(out).toContain("# Primary Plan Prompt");
+    expect(out).toContain("### Primary Plan Prompt");
+    expect(out).not.toMatch(/^#\s+Primary Plan Prompt/m);
+    expect(out).not.toMatch(/^##\s+Primary Plan Prompt/m);
     expect(out).toContain("Create a concrete implementation plan.");
   });
 
@@ -815,6 +832,88 @@ describe("writePromptArtifact", () => {
       `artifact://${FIXED_RUN_ID}/jobs/plan/attempts/1/steps/draft/current-step`,
     );
   });
+
+  it("writes PromptPacket blocks to separate files with a backend composition manifest", async () => {
+    const packet = buildPromptPacket(makeContextBundle());
+    const promptText = renderPromptPacket(packet).markdown;
+
+    const result = await writePromptArtifact({
+      runDir,
+      runId: FIXED_RUN_ID,
+      jobId: "plan",
+      stepId: "draft",
+      attempt: 1,
+      prompt: promptText,
+      packet,
+      clock: new FakeClock(),
+    });
+
+    expect(result.packetArtifactRefs).toBeDefined();
+    expect(result.packetArtifactRefs!.system.path).toBe(
+      "jobs/plan/attempts/1/steps/draft/prompt-packet/system.md",
+    );
+    expect(result.packetArtifactRefs!.manifest.path).toBe(
+      "jobs/plan/attempts/1/steps/draft/prompt-packet/packet.json",
+    );
+
+    const packetDir = join(
+      runDir,
+      "jobs",
+      "plan",
+      "attempts",
+      "1",
+      "steps",
+      "draft",
+      "prompt-packet",
+    );
+    const systemBlock = await readFile(join(packetDir, "system.md"), "utf-8");
+    const stepBlock = await readFile(join(packetDir, "step.md"), "utf-8");
+    const outputBlock = await readFile(join(packetDir, "output.md"), "utf-8");
+    const manifest = JSON.parse(await readFile(join(packetDir, "packet.json"), "utf-8")) as {
+      schema_version: string;
+      backend_composition: { composition_order: string[]; system_prompt_block: string; user_prompt_blocks: string[] };
+      blocks: Array<{ id: string; path: string; artifact_ref: string }>;
+    };
+
+    expect(systemBlock).toContain("You are a Zigma Flow Agent Step executor.");
+    expect(stepBlock).toContain("# Primary Plan Prompt");
+    expect(outputBlock).toContain("### Report Schema");
+    expect(manifest.schema_version).toBe("prompt-packet-artifacts.v1");
+    expect(manifest.backend_composition).toMatchObject({
+      composition_order: ["system", "task", "step", "context", "output"],
+      system_prompt_block: "system",
+      user_prompt_blocks: ["task", "step", "context", "output"],
+    });
+    expect(manifest.blocks.map((block) => block.id)).toEqual([
+      "system",
+      "task",
+      "step",
+      "context",
+      "output",
+    ]);
+    expect(manifest.blocks.map((block) => block.path)).toEqual([
+      "jobs/plan/attempts/1/steps/draft/prompt-packet/system.md",
+      "jobs/plan/attempts/1/steps/draft/prompt-packet/task.md",
+      "jobs/plan/attempts/1/steps/draft/prompt-packet/step.md",
+      "jobs/plan/attempts/1/steps/draft/prompt-packet/context.md",
+      "jobs/plan/attempts/1/steps/draft/prompt-packet/output.md",
+    ]);
+
+    const indexText = await readFile(join(runDir, "artifacts.jsonl"), "utf-8");
+    const indexEntries = indexText
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as { kind: string; path: string });
+    expect(indexEntries.map((entry) => entry.kind)).toEqual([
+      "prompt",
+      "prompt_packet_system",
+      "prompt_packet_task",
+      "prompt_packet_step",
+      "prompt_packet_context",
+      "prompt_packet_output",
+      "prompt_packet_manifest",
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1066,13 +1165,33 @@ describe("promptAction pipeline", () => {
     const last = JSON.parse(lines[lines.length - 1]!) as {
       id: string;
       type: string;
-      payload: { job_id: string; step_id: string; prompt_artifact: string };
+      payload: {
+        job_id: string;
+        step_id: string;
+        prompt_artifact: string;
+        prompt_packet_artifacts: {
+          system: string;
+          task: string;
+          step: string;
+          context: string;
+          output: string;
+          manifest: string;
+        };
+      };
     };
     expect(last.type).toBe("prompt_generated");
     expect(last.id).toBe("evt-003");
     expect(last.payload.job_id).toBe("plan");
     expect(last.payload.step_id).toBe("draft");
     expect(last.payload.prompt_artifact).toMatch(/^artifact:\/\//);
+    expect(last.payload.prompt_packet_artifacts).toMatchObject({
+      system: expect.stringMatching(/\/prompt-packet\/system$/),
+      task: expect.stringMatching(/\/prompt-packet\/task$/),
+      step: expect.stringMatching(/\/prompt-packet\/step$/),
+      context: expect.stringMatching(/\/prompt-packet\/context$/),
+      output: expect.stringMatching(/\/prompt-packet\/output$/),
+      manifest: expect.stringMatching(/\/prompt-packet\/packet$/),
+    });
   });
 
   it("transitions job status from ready to running and advances last_event_id (T-TRANSITION-1, UC-TRANSITION-1)", async () => {

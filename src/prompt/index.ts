@@ -23,7 +23,10 @@ import type {
 import { appendArtifactIndex } from "../artifact/artifactIndex.js";
 import { artifactId } from "../artifact/artifactMetadata.js";
 import type { Clock } from "../run/index.js";
-import { artifactFileRelativePath } from "../artifact/index.js";
+import {
+  artifactFileRelativePath,
+  type ArtifactMetadata,
+} from "../artifact/index.js";
 
 export interface PromptHandoffIssue {
   code: string;
@@ -129,7 +132,61 @@ export interface RenderedPromptPacket {
   system?: string;
 }
 
+export type PromptPacketArtifactBlock = PromptBlockType | "manifest";
+
+export interface PromptPacketArtifactRef {
+  block: PromptPacketArtifactBlock;
+  artifactRef: string;
+  path: string;
+  kind: string;
+  contentType: string;
+}
+
+export interface PromptPacketArtifactRefs {
+  system: PromptPacketArtifactRef;
+  task: PromptPacketArtifactRef;
+  step: PromptPacketArtifactRef;
+  context: PromptPacketArtifactRef;
+  output: PromptPacketArtifactRef;
+  manifest: PromptPacketArtifactRef;
+}
+
+export interface PromptPacketArtifactManifest {
+  schema_version: "prompt-packet-artifacts.v1";
+  run_id: string;
+  job_id: string;
+  step_id: string;
+  attempt: number;
+  composed_preview: {
+    artifact_ref: string;
+    path: string;
+  };
+  backend_composition: {
+    composition_order: readonly PromptBlockType[];
+    system_prompt_block: "system";
+    user_prompt_blocks: readonly Exclude<PromptBlockType, "system">[];
+    heading_policy: string;
+  };
+  blocks: Array<{
+    id: PromptBlockType;
+    title: string;
+    role: "system" | "user";
+    source: string;
+    priority: number;
+    artifact_ref: string;
+    path: string;
+    content_type: "text/markdown";
+  }>;
+}
+
 const MAX_CONTEXT_BLOCK_CHARS = 4_000;
+const PROMPT_PACKET_BLOCK_ORDER: readonly PromptBlockType[] = [
+  "system",
+  "task",
+  "step",
+  "context",
+  "output",
+];
 
 // ---------------------------------------------------------------------------
 // Packet construction and rendering
@@ -157,9 +214,9 @@ export function renderPromptPacket(
   backendCapabilities: PromptBackendCapabilities = {},
 ): RenderedPromptPacket {
   const supportsSystemPrompt = backendCapabilities.supportsSystemPrompt === true;
-  const userLines = renderUserPromptLines(packet);
 
   if (supportsSystemPrompt) {
+    const userLines = renderUserPromptLines(packet, { includeTitle: true });
     const user = userLines.join("\n");
     return {
       system: packet.system.block.content,
@@ -168,12 +225,13 @@ export function renderPromptPacket(
     };
   }
 
+  const userLines = renderUserPromptLines(packet, { includeTitle: false });
   const markdown = [
     `# ${packet.metadata.jobId}/${packet.metadata.stepId} Prompt Packet`,
     "",
     "## System Prompt",
     "",
-    packet.system.block.content,
+    normalizeEmbeddedMarkdownHeadings(packet.system.block.content),
     "",
     ...userLines,
   ].join("\n");
@@ -286,6 +344,8 @@ export function validatePromptPacket(
     }
   }
 
+  errors.push(...validateHeadingHierarchy(renderedMarkdown, expectedOrder));
+
   if (!renderedMarkdown.includes(packet.output.reportPath)) {
     errors.push({
       code: "missing_report_path",
@@ -345,7 +405,6 @@ function buildAgentSystemPrompt(bundle: ContextBundle): AgentSystemPrompt {
   const invariants = [
     `Execute only job "${bundle.jobId}" step "${bundle.stepId}" for run "${bundle.runId}".`,
     "The Engine owns all workflow state transitions.",
-    "You cannot modify workflow state directly.",
     "Submit structured report data and allowed signals only; the Engine validates and advances the run.",
   ];
   const boundaries = [
@@ -520,15 +579,16 @@ function buildContextBlocks(bundle: ContextBundle): ContextBlock[] {
       bundle.primaryPrompt !== undefined &&
       bundle.primaryPrompt.skill === prompt.skill &&
       bundle.primaryPrompt.id === prompt.id;
+    if (!isPrimary) {
+      continue;
+    }
     const block: ContextBlock = {
       id: `prompt-${prompt.skill}-${prompt.id}`,
       type: "capability-summary",
       source: `${prompt.skill}.${prompt.id}`,
-      priority: isPrimary ? 65 : 35,
+      priority: 65,
       freshness: "static",
-      summary: isPrimary
-        ? "Primary step prompt rendered in the Workflow Step Prompt layer."
-        : "Reference prompt only; do not switch tasks unless the current step asks for it.",
+      summary: "Primary step prompt rendered in the Workflow Step Prompt layer.",
     };
     if (prompt.path !== undefined) {
       block.path = prompt.path;
@@ -537,6 +597,9 @@ function buildContextBlocks(bundle: ContextBundle): ContextBlock[] {
   }
 
   for (const fn of bundle.capabilities.functions as ExposedFunction[]) {
+    if (fn.jobs !== undefined && !fn.jobs.includes(bundle.jobId)) {
+      continue;
+    }
     const desc = fn.description ?? "Agent function pattern";
     blocks.push({
       id: `function-${fn.skill}-${fn.id}`,
@@ -598,50 +661,83 @@ function buildOutputContract(bundle: ContextBundle, reportPath: string): OutputC
   };
 }
 
-function renderUserPromptLines(packet: PromptPacket): string[] {
+function renderUserPromptLines(packet: PromptPacket, opts: { includeTitle: boolean }): string[] {
   const lines: string[] = [];
 
-  lines.push(`# ${packet.metadata.jobId}/${packet.metadata.stepId} Agent Prompt`);
-  lines.push("");
+  if (opts.includeTitle) {
+    lines.push(`# ${packet.metadata.jobId}/${packet.metadata.stepId} Agent Prompt`);
+    lines.push("");
+  }
 
   lines.push("## Task Prompt");
   lines.push("");
-  lines.push(packet.task.block.content);
+  lines.push(normalizeEmbeddedMarkdownHeadings(packet.task.block.content));
   lines.push("");
 
   lines.push("## Workflow Step Prompt");
   lines.push("");
-  lines.push(packet.step.block.content);
+  lines.push(normalizeEmbeddedMarkdownHeadings(packet.step.block.content));
   lines.push("");
 
   lines.push("## Context Blocks");
   lines.push("");
-  if (packet.context.length === 0) {
-    lines.push("(none)");
-  } else {
-    for (const block of packet.context) {
-      lines.push(`### ${block.id}`);
-      lines.push("");
-      lines.push(`- type: ${block.type}`);
-      lines.push(`- source: ${block.source}`);
-      lines.push(`- priority: ${block.priority}`);
-      lines.push(`- freshness: ${block.freshness}`);
-      if (block.artifactRef !== undefined) {
-        lines.push(`- artifact ref: ${block.artifactRef}`);
-      }
-      if (block.path !== undefined) {
-        lines.push(`- path: \`${block.path}\``);
-      }
-      lines.push(`- summary: ${block.summary}`);
-      lines.push("");
-    }
-  }
+  lines.push(...renderContextBlockLines(packet.context));
 
   lines.push("## Output Contract");
   lines.push("");
+  lines.push(...renderOutputContractLines(packet.output));
+
+  return lines;
+}
+
+function renderPromptPacketBlockContent(packet: PromptPacket, type: PromptBlockType): string {
+  switch (type) {
+    case "system":
+      return packet.system.block.content.trimEnd();
+    case "task":
+      return packet.task.block.content.trimEnd();
+    case "step":
+      return packet.step.block.content.trimEnd();
+    case "context":
+      return renderContextBlockLines(packet.context).join("\n").trimEnd();
+    case "output":
+      return renderOutputContractLines(packet.output).join("\n").trimEnd();
+  }
+}
+
+function renderContextBlockLines(context: ContextBlock[]): string[] {
+  const lines: string[] = [];
+  if (context.length === 0) {
+    lines.push("(none)");
+    lines.push("");
+    return lines;
+  }
+
+  for (const block of context) {
+    lines.push(`### ${block.id}`);
+    lines.push("");
+    lines.push(`- type: ${block.type}`);
+    lines.push(`- source: ${block.source}`);
+    lines.push(`- priority: ${block.priority}`);
+    lines.push(`- freshness: ${block.freshness}`);
+    if (block.artifactRef !== undefined) {
+      lines.push(`- artifact ref: ${block.artifactRef}`);
+    }
+    if (block.path !== undefined) {
+      lines.push(`- path: \`${block.path}\``);
+    }
+    lines.push(`- summary: ${block.summary}`);
+    lines.push("");
+  }
+
+  return lines;
+}
+
+function renderOutputContractLines(output: OutputContract): string[] {
+  const lines: string[] = [];
   lines.push("Write your report to:");
   lines.push("");
-  lines.push(`  \`${packet.output.reportPath}\``);
+  lines.push(`  \`${output.reportPath}\``);
   lines.push("");
   lines.push("This is the canonical step artifact path. Writing to any other location will cause the Engine to reject the report.");
   lines.push("This is a runtime artifact file. Writing it does not modify workflow state or repository code; the Engine reads it and owns all state transitions.");
@@ -649,10 +745,10 @@ function renderUserPromptLines(packet: PromptPacket): string[] {
 
   lines.push("### Required Outputs");
   lines.push("");
-  if (packet.output.requiredOutputs.length === 0) {
+  if (output.requiredOutputs.length === 0) {
     lines.push("(none declared)");
   } else {
-    for (const key of packet.output.requiredOutputs) {
+    for (const key of output.requiredOutputs) {
       lines.push(`- \`${key}\``);
     }
   }
@@ -660,10 +756,10 @@ function renderUserPromptLines(packet: PromptPacket): string[] {
 
   lines.push("### Allowed Signals");
   lines.push("");
-  if (packet.output.allowedSignals.length === 0) {
+  if (output.allowedSignals.length === 0) {
     lines.push("(none)");
   } else {
-    for (const signal of packet.output.allowedSignals) {
+    for (const signal of output.allowedSignals) {
       lines.push(`- \`${signal}\``);
     }
   }
@@ -671,7 +767,7 @@ function renderUserPromptLines(packet: PromptPacket): string[] {
 
   lines.push("### Artifact Rules");
   lines.push("");
-  for (const rule of packet.output.artifactRules) {
+  for (const rule of output.artifactRules) {
     lines.push(`- ${rule}`);
   }
   lines.push("");
@@ -694,10 +790,23 @@ function renderUserPromptLines(packet: PromptPacket): string[] {
   lines.push("- `\"signals\"`: structured workflow-change requests from the allowed list above.");
   lines.push("- `\"summary\"`: short execution summary.");
   lines.push("");
-  lines.push(packet.output.stopRequirement);
+  lines.push(output.stopRequirement);
   lines.push("");
-
   return lines;
+}
+
+function normalizeEmbeddedMarkdownHeadings(markdown: string): string {
+  return markdown
+    .split("\n")
+    .map((line) => {
+      const match = /^(#{1,6})(\s+.+)$/.exec(line);
+      if (match === null) {
+        return line;
+      }
+      const level = Math.min(6, match[1]!.length + 2);
+      return `${"#".repeat(level)}${match[2]!}`;
+    })
+    .join("\n");
 }
 
 function canonicalReportPath(bundle: ContextBundle): string {
@@ -730,6 +839,37 @@ function markdownSectionIndex(markdown: string, title: string): number {
   const header = new RegExp(`^##\\s+${escapeRegExp(title)}\\s*$`, "m");
   const match = header.exec(markdown);
   return match?.index ?? -1;
+}
+
+function validateHeadingHierarchy(markdown: string, expectedSections: readonly string[]): PromptHandoffIssue[] {
+  const issues: PromptHandoffIssue[] = [];
+  const topLevelHeadings = [...markdown.matchAll(/^#\s+\S.*$/gm)];
+  if (topLevelHeadings.length !== 1) {
+    issues.push({
+      code: "prompt_heading_hierarchy",
+      message: `Prompt handoff must contain exactly one top-level heading; found ${topLevelHeadings.length}.`,
+    });
+  }
+
+  const expected = new Set(expectedSections);
+  const sectionTitles = [...markdown.matchAll(/^##\s+(.+?)\s*$/gm)].map((match) => match[1]!.trim());
+  const unexpectedSections = sectionTitles.filter((title) => !expected.has(title));
+  if (unexpectedSections.length > 0) {
+    issues.push({
+      code: "prompt_heading_hierarchy",
+      message: `Prompt handoff contains unexpected second-level section(s): ${unexpectedSections.join(", ")}.`,
+    });
+  }
+
+  const duplicateSections = sectionTitles.filter((title, index) => sectionTitles.indexOf(title) !== index);
+  if (duplicateSections.length > 0) {
+    issues.push({
+      code: "prompt_heading_hierarchy",
+      message: `Prompt handoff contains duplicate second-level section(s): ${[...new Set(duplicateSections)].join(", ")}.`,
+    });
+  }
+
+  return issues;
 }
 
 function escapeRegExp(value: string): string {
@@ -809,16 +949,7 @@ function artifactPriority(artifact: ArtifactSummary): number {
 }
 
 function requiredOutputKeys(bundle: ContextBundle): string[] {
-  const keys = new Set<string>();
-  for (const key of Object.keys(bundle.stepOutputs ?? {})) {
-    keys.add(key);
-  }
-  for (const fn of bundle.capabilities.functions as ExposedFunction[]) {
-    for (const key of Object.keys(fn.outputs ?? {})) {
-      keys.add(key);
-    }
-  }
-  return [...keys].sort();
+  return Object.keys(bundle.stepOutputs ?? {}).sort();
 }
 
 function stableIdFragment(value: string): string {
@@ -853,18 +984,22 @@ export interface WritePromptArtifactOpts {
   stepId: string;
   attempt: number;
   prompt: string;
+  packet?: PromptPacket;
   clock: Clock;
 }
 
 export interface WritePromptArtifactResult {
   artifactRef: string;
+  packetArtifactRefs?: PromptPacketArtifactRefs;
 }
 
 /**
  * Write the rendered prompt as:
  *   1. `<runDir>/current-step.md` — top-level mirror for convenient reading
  *   2. `<runDir>/jobs/<job>/attempts/<n>/steps/<step>/current-step.md` — step-scoped artifact
- *   3. Append artifact metadata to `<runDir>/artifacts.jsonl`
+ *   3. If a PromptPacket is supplied, write prompt-packet/{system,task,step,context,output}.md
+ *      plus prompt-packet/packet.json for backend composition
+ *   4. Append artifact metadata to `<runDir>/artifacts.jsonl`
  *
  * Returns `{ artifactRef }` pointing to the step-scoped artifact id.
  * Does NOT write to events.jsonl or state.json.
@@ -872,7 +1007,7 @@ export interface WritePromptArtifactResult {
 export async function writePromptArtifact(
   opts: WritePromptArtifactOpts
 ): Promise<WritePromptArtifactResult> {
-  const { runDir, runId, jobId, stepId, attempt, prompt, clock } = opts;
+  const { runDir, runId, jobId, stepId, attempt, prompt, packet, clock } = opts;
 
   // 1. Write top-level mirror
   const mirrorPath = join(runDir, "current-step.md");
@@ -888,24 +1023,255 @@ export async function writePromptArtifact(
   const relPath = relative(runDir, stepFilePath).split("\\").join(posix.sep);
 
   // 3. Build artifact metadata
-  const size = Buffer.byteLength(prompt, "utf-8");
   const ref = artifactId(runId, jobId, attempt, stepId, "current-step.md");
   const createdAt = clock.now();
-
-  const metadata = {
-    id: ref,
-    run_id: runId,
-    producer: { job: jobId, step: stepId, attempt },
+  const metadata = promptArtifactMetadata({
+    runId,
+    jobId,
+    stepId,
+    attempt,
+    ref,
     kind: "prompt",
     path: relPath,
-    content_type: "text/markdown",
-    size,
-    summary: `Agent prompt for ${jobId}/${stepId}`,
-    created_at: createdAt,
-  };
+    contentType: "text/markdown",
+    content: prompt,
+    summary: `Composed prompt preview for ${jobId}/${stepId}`,
+    createdAt,
+  });
 
   // 4. Append to artifacts.jsonl
   await appendArtifactIndex(runDir, metadata);
 
-  return { artifactRef: ref };
+  if (packet === undefined) {
+    return { artifactRef: ref };
+  }
+
+  const packetArtifactRefs = await writePromptPacketArtifacts({
+    runDir,
+    runId,
+    jobId,
+    stepId,
+    attempt,
+    packet,
+    previewArtifactRef: ref,
+    previewPath: relPath,
+    createdAt,
+  });
+
+  return { artifactRef: ref, packetArtifactRefs };
+}
+
+interface WritePromptPacketArtifactsOpts {
+  runDir: string;
+  runId: string;
+  jobId: string;
+  stepId: string;
+  attempt: number;
+  packet: PromptPacket;
+  previewArtifactRef: string;
+  previewPath: string;
+  createdAt: string;
+}
+
+async function writePromptPacketArtifacts(
+  opts: WritePromptPacketArtifactsOpts,
+): Promise<PromptPacketArtifactRefs> {
+  const { runDir, runId, jobId, stepId, attempt, packet, previewArtifactRef, previewPath, createdAt } = opts;
+  const stepDir = join(runDir, "jobs", jobId, "attempts", String(attempt), "steps", stepId);
+  const packetDir = join(stepDir, "prompt-packet");
+  await mkdir(packetDir, { recursive: true });
+
+  const refs = {} as Record<PromptBlockType, PromptPacketArtifactRef>;
+  for (const blockType of PROMPT_PACKET_BLOCK_ORDER) {
+    const filename = `${blockType}.md`;
+    const relPath = artifactFileRelativePath(jobId, attempt, stepId, posix.join("prompt-packet", filename));
+    const content = ensureTrailingNewline(renderPromptPacketBlockContent(packet, blockType));
+    await writeFile(join(runDir, relPath), content, "utf-8");
+
+    const ref = artifactId(runId, jobId, attempt, stepId, posix.join("prompt-packet", filename));
+    const kind = `prompt_packet_${blockType}`;
+    const artifactRef: PromptPacketArtifactRef = {
+      block: blockType,
+      artifactRef: ref,
+      path: relPath,
+      kind,
+      contentType: "text/markdown",
+    };
+    refs[blockType] = artifactRef;
+
+    await appendArtifactIndex(
+      runDir,
+      promptArtifactMetadata({
+        runId,
+        jobId,
+        stepId,
+        attempt,
+        ref,
+        kind,
+        path: relPath,
+        contentType: "text/markdown",
+        content,
+        summary: `${blockTitle(packet, blockType)} block for ${jobId}/${stepId}`,
+        createdAt,
+      }),
+    );
+  }
+
+  const manifestRef = artifactId(runId, jobId, attempt, stepId, posix.join("prompt-packet", "packet.json"));
+  const manifestPath = artifactFileRelativePath(jobId, attempt, stepId, "prompt-packet/packet.json");
+  const packetRefs: PromptPacketArtifactRefs = {
+    system: refs.system!,
+    task: refs.task!,
+    step: refs.step!,
+    context: refs.context!,
+    output: refs.output!,
+    manifest: {
+      block: "manifest",
+      artifactRef: manifestRef,
+      path: manifestPath,
+      kind: "prompt_packet_manifest",
+      contentType: "application/json",
+    },
+  };
+  const manifest = buildPromptPacketArtifactManifest({
+    packet,
+    previewArtifactRef,
+    previewPath,
+    packetRefs,
+  });
+  const manifestContent = ensureTrailingNewline(JSON.stringify(manifest, null, 2));
+  await writeFile(join(runDir, manifestPath), manifestContent, "utf-8");
+  await appendArtifactIndex(
+    runDir,
+    promptArtifactMetadata({
+      runId,
+      jobId,
+      stepId,
+      attempt,
+      ref: manifestRef,
+      kind: "prompt_packet_manifest",
+      path: manifestPath,
+      contentType: "application/json",
+      content: manifestContent,
+      summary: `Prompt packet artifact manifest for ${jobId}/${stepId}`,
+      createdAt,
+    }),
+  );
+
+  return packetRefs;
+}
+
+function buildPromptPacketArtifactManifest(opts: {
+  packet: PromptPacket;
+  previewArtifactRef: string;
+  previewPath: string;
+  packetRefs: PromptPacketArtifactRefs;
+}): PromptPacketArtifactManifest {
+  const { packet, previewArtifactRef, previewPath, packetRefs } = opts;
+  return {
+    schema_version: "prompt-packet-artifacts.v1",
+    run_id: packet.metadata.runId,
+    job_id: packet.metadata.jobId,
+    step_id: packet.metadata.stepId,
+    attempt: packet.metadata.attempt,
+    composed_preview: {
+      artifact_ref: previewArtifactRef,
+      path: previewPath,
+    },
+    backend_composition: {
+      composition_order: PROMPT_PACKET_BLOCK_ORDER,
+      system_prompt_block: "system",
+      user_prompt_blocks: ["task", "step", "context", "output"],
+      heading_policy:
+        "Prompt block files are source fragments. Backend composition wraps each block in a section and demotes embedded headings below that section.",
+    },
+    blocks: PROMPT_PACKET_BLOCK_ORDER.map((blockType) => {
+      const ref = packetRefs[blockType];
+      return {
+        id: blockType,
+        title: blockTitle(packet, blockType),
+        role: blockType === "system" ? "system" : "user",
+        source: blockSource(packet, blockType),
+        priority: blockPriority(packet, blockType),
+        artifact_ref: ref.artifactRef,
+        path: ref.path,
+        content_type: "text/markdown",
+      };
+    }),
+  };
+}
+
+function promptArtifactMetadata(opts: {
+  runId: string;
+  jobId: string;
+  stepId: string;
+  attempt: number;
+  ref: string;
+  kind: string;
+  path: string;
+  contentType: string;
+  content: string;
+  summary: string;
+  createdAt: string;
+}): ArtifactMetadata {
+  return {
+    id: opts.ref,
+    run_id: opts.runId,
+    producer: { job: opts.jobId, step: opts.stepId, attempt: opts.attempt },
+    kind: opts.kind,
+    path: opts.path,
+    content_type: opts.contentType,
+    size: Buffer.byteLength(opts.content, "utf-8"),
+    summary: opts.summary,
+    created_at: opts.createdAt,
+  };
+}
+
+function blockTitle(packet: PromptPacket, blockType: PromptBlockType): string {
+  switch (blockType) {
+    case "system":
+      return packet.system.block.title;
+    case "task":
+      return packet.task.block.title;
+    case "step":
+      return packet.step.block.title;
+    case "context":
+      return "Context Blocks";
+    case "output":
+      return packet.output.block.title;
+  }
+}
+
+function blockSource(packet: PromptPacket, blockType: PromptBlockType): string {
+  switch (blockType) {
+    case "system":
+      return packet.system.block.source;
+    case "task":
+      return packet.task.block.source;
+    case "step":
+      return packet.step.block.source;
+    case "context":
+      return "context-builder";
+    case "output":
+      return packet.output.block.source;
+  }
+}
+
+function blockPriority(packet: PromptPacket, blockType: PromptBlockType): number {
+  switch (blockType) {
+    case "system":
+      return packet.system.block.priority;
+    case "task":
+      return packet.task.block.priority;
+    case "step":
+      return packet.step.block.priority;
+    case "context":
+      return Math.max(...packet.context.map((block) => block.priority), 0);
+    case "output":
+      return packet.output.block.priority;
+  }
+}
+
+function ensureTrailingNewline(value: string): string {
+  return value.endsWith("\n") ? value : `${value}\n`;
 }

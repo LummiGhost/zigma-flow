@@ -528,11 +528,9 @@ describe("buildAgentPrompt — section rendering", () => {
     expect(out).toContain("path: `knowledge/rules.md`");
     expect(out).toContain("required: read before starting this step");
     expect(out).toContain("optional: consult for repository structure");
-    expect(out).toContain("implement");
-    expect(out).toContain("path: `prompts/implement.md`");
-    expect(out).toContain("Primary step prompt rendered");
-    expect(out).toContain("Reference prompt only");
     expect(out).toContain("implement-by-plan");
+    expect(out).toContain("Primary step prompt rendered");
+    expect(out).not.toContain("Reference prompt only");
     expect(out).toContain("not a callable runtime API");
     expect(out).toContain("grep");
     expect(out).toContain("needs_review");

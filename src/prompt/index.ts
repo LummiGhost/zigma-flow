@@ -405,7 +405,6 @@ function buildAgentSystemPrompt(bundle: ContextBundle): AgentSystemPrompt {
   const invariants = [
     `Execute only job "${bundle.jobId}" step "${bundle.stepId}" for run "${bundle.runId}".`,
     "The Engine owns all workflow state transitions.",
-    "You cannot modify workflow state directly.",
     "Submit structured report data and allowed signals only; the Engine validates and advances the run.",
   ];
   const boundaries = [
@@ -580,15 +579,16 @@ function buildContextBlocks(bundle: ContextBundle): ContextBlock[] {
       bundle.primaryPrompt !== undefined &&
       bundle.primaryPrompt.skill === prompt.skill &&
       bundle.primaryPrompt.id === prompt.id;
+    if (!isPrimary) {
+      continue;
+    }
     const block: ContextBlock = {
       id: `prompt-${prompt.skill}-${prompt.id}`,
       type: "capability-summary",
       source: `${prompt.skill}.${prompt.id}`,
-      priority: isPrimary ? 65 : 35,
+      priority: 65,
       freshness: "static",
-      summary: isPrimary
-        ? "Primary step prompt rendered in the Workflow Step Prompt layer."
-        : "Reference prompt only; do not switch tasks unless the current step asks for it.",
+      summary: "Primary step prompt rendered in the Workflow Step Prompt layer.",
     };
     if (prompt.path !== undefined) {
       block.path = prompt.path;
@@ -597,6 +597,9 @@ function buildContextBlocks(bundle: ContextBundle): ContextBlock[] {
   }
 
   for (const fn of bundle.capabilities.functions as ExposedFunction[]) {
+    if (fn.jobs !== undefined && !fn.jobs.includes(bundle.jobId)) {
+      continue;
+    }
     const desc = fn.description ?? "Agent function pattern";
     blocks.push({
       id: `function-${fn.skill}-${fn.id}`,
@@ -946,16 +949,7 @@ function artifactPriority(artifact: ArtifactSummary): number {
 }
 
 function requiredOutputKeys(bundle: ContextBundle): string[] {
-  const keys = new Set<string>();
-  for (const key of Object.keys(bundle.stepOutputs ?? {})) {
-    keys.add(key);
-  }
-  for (const fn of bundle.capabilities.functions as ExposedFunction[]) {
-    for (const key of Object.keys(fn.outputs ?? {})) {
-      keys.add(key);
-    }
-  }
-  return [...keys].sort();
+  return Object.keys(bundle.stepOutputs ?? {}).sort();
 }
 
 function stableIdFragment(value: string): string {

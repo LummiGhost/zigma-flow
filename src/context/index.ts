@@ -65,6 +65,7 @@ export interface ExposedFunction {
   description?: string;
   inputs?: Record<string, unknown>;
   outputs?: Record<string, unknown>;
+  jobs?: string[];
 }
 
 export interface ExposedTool {
@@ -465,6 +466,12 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
           }
           if (typeof fObj["outputs"] === "object" && fObj["outputs"] !== null) {
             fn.outputs = fObj["outputs"] as Record<string, unknown>;
+          }
+          if (
+            Array.isArray(fObj["jobs"]) &&
+            (fObj["jobs"] as unknown[]).every((j) => typeof j === "string")
+          ) {
+            fn.jobs = fObj["jobs"] as string[];
           }
           exposedFunctions.push(fn);
         }

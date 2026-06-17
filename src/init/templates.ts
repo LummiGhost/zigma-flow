@@ -278,6 +278,8 @@ checks: []
 functions:
   - id: implement-by-plan
     description: Execute plan steps to modify code according to a given implementation plan
+    jobs:
+      - implement
     inputs:
       plan:
         type: string
@@ -294,6 +296,8 @@ functions:
         description: "Comma-separated list of modified files"
   - id: review-change
     description: Review code changes for quality, correctness, and adherence to guidelines
+    jobs:
+      - review
     inputs:
       diff:
         type: string

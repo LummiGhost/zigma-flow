@@ -1342,10 +1342,10 @@ describe("acceptAgentReport — signal path retry_job advances source job (T-ACC
       // job_completed must target the source (review), not implement.
       expect(events[completedIdx]!.job).toBe("review");
 
-      // last_event_id must point to the events.jsonl tail (the source
-      // job_completed event).
+      // last_event_id must point to the events.jsonl tail.
+      // (After dependency propagation, the tail may be job_completed rather than
+      // job_retrying, since implement is already "ready" and not "waiting".)
       expect(snap.last_event_id).toBe(events[events.length - 1]!.id);
-      expect(snap.last_event_id).toBe(events[completedIdx]!.id);
 
       // NO agent_report_accepted on the signal-dispatch path.
       expect(events.filter((e) => e.type === "agent_report_accepted")).toHaveLength(0);
@@ -1488,10 +1488,11 @@ describe("acceptAgentReport — signal path activate_job advances source job (T-
       // job_completed must target the source (plan).
       expect(events[completedIdx]!.job).toBe("plan");
 
-      // last_event_id must point to the events.jsonl tail (the source
-      // job_completed event).
+      // last_event_id must point to the events.jsonl tail. After dependency
+      // propagation, architecture-design's needs are satisfied once plan
+      // completes, so a job_ready event follows job_completed.
       expect(snap.last_event_id).toBe(events[events.length - 1]!.id);
-      expect(snap.last_event_id).toBe(events[completedIdx]!.id);
+      expect(archDesign.status).toBe("ready");
 
       // NO agent_report_accepted on the signal-dispatch path.
       expect(events.filter((e) => e.type === "agent_report_accepted")).toHaveLength(0);

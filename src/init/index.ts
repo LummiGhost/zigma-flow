@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { getPackageInfo } from "../utils/index.js";
 import {
   codeChangeWorkflowYml,
+  codeChangeFastWorkflowYml,
   codeMapMd,
   architectureDesignMd,
   codingGuidelinesMd,
@@ -142,6 +143,7 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
     [configJsonPath, configJsonTemplate(version)],
     [join(dotZigma, "skill-lock.json"), skillLockJsonTemplate(skillYmlContent)],
     [join(dotZigma, "workflows", "code-change.yml"), codeChangeWorkflowYml()],
+    [join(dotZigma, "workflows", "code-change-fast.yml"), codeChangeFastWorkflowYml()],
     [join(dotZigma, "skills", "code-change", "skill.yml"), skillYmlContent],
     [
       join(dotZigma, "skills", "code-change", "knowledge", "coding-guidelines.md"),

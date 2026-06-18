@@ -98,6 +98,7 @@ jobs:
         outputs:
           task_summary: {}
           scope: {}
+          complexity_profile: {}
         expose:
           skills:
             - code
@@ -248,6 +249,110 @@ jobs:
         outputs:
           final_summary: {}
           remaining_risks: {}
+        expose:
+          skills:
+            - code
+`;
+}
+
+// ---------------------------------------------------------------------------
+// workflows/code-change-fast.yml
+// ---------------------------------------------------------------------------
+
+export function codeChangeFastWorkflowYml(): string {
+  return `name: code-change-fast
+version: 0.1.0
+
+on:
+  manual:
+    inputs:
+      task:
+        type: string
+        required: true
+
+skills:
+  code:
+    uses: skill://zigma.code-change@1
+
+permissions:
+  contents: read
+  edits: write
+  commands: none
+  workflow_state: none
+
+jobs:
+  intake:
+    workspace:
+      mode: read-only
+    steps:
+      - id: analyze
+        type: agent
+        prompt: intake
+        with:
+          task: "\${{ inputs.task }}"
+        outputs:
+          task_summary: {}
+          scope: {}
+          complexity_profile: {}
+        expose:
+          skills:
+            - code
+
+  implement:
+    needs:
+      - intake
+    retry:
+      max_attempts: 3
+      on_exceeded:
+        status: failed
+    steps:
+      - id: implement
+        type: agent
+        prompt: implement
+        with:
+          task: "\${{ inputs.task }}"
+        expose:
+          skills:
+            - code
+      - id: collect-diff
+        type: script
+        run: "git diff HEAD"
+        on_failure: fail
+
+  static-check:
+    needs:
+      - implement
+    workspace:
+      mode: read-only
+    steps:
+      - id: check
+        type: script
+        run: "pnpm typecheck && pnpm lint"
+        on_failure: fail
+
+  unit-test:
+    needs:
+      - implement
+    workspace:
+      mode: read-only
+    steps:
+      - id: test
+        type: script
+        run: "pnpm test:ci"
+        on_failure: fail
+
+  summarize:
+    needs:
+      - static-check
+      - unit-test
+    workspace:
+      mode: read-only
+    steps:
+      - id: summarize
+        type: agent
+        prompt: summarize
+        with:
+          task: "\${{ inputs.task }}"
         expose:
           skills:
             - code
@@ -550,6 +655,7 @@ classify.
 
 - \`task_summary\`: short restatement of the requested change.
 - \`scope\`: estimated scope, one of \`small\`, \`medium\`, or \`large\`.
+- \`complexity_profile\`: complexity classification, one of \`trivial\`, \`small\`, \`medium\`, or \`large\`.
 - \`risk_notes\`: short list of visible ambiguity or blocker notes.
 `;
 }

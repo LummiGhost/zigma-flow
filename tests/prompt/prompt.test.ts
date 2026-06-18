@@ -1266,6 +1266,126 @@ describe("promptAction pipeline", () => {
 // (Light coverage; deep purity is asserted in WF-P5-CONTEXT for buildContext.)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// buildContextBlocks — upstream-output blocks (FP-PROMPT-UPSTREAM)
+// ---------------------------------------------------------------------------
+
+describe("buildContextBlocks — upstream-output blocks", () => {
+  it("creates upstream-output context block for each completed upstream job with outputs (T-PROMPT-UPSTREAM-1)", () => {
+    const bundle = makeContextBundle({
+      upstreamOutputs: {
+        intake: { summary: "intake complete", risks: ["dep-a", "dep-b"] },
+      },
+    });
+
+    const packet = buildPromptPacket(bundle);
+    const upstreamBlocks = packet.context.filter((b) => b.type === "upstream-output");
+
+    expect(upstreamBlocks).toHaveLength(1);
+    const block = upstreamBlocks[0]!;
+    expect(block.id).toBe("upstream-output-intake");
+    expect(block.type).toBe("upstream-output");
+    expect(block.source).toBe("job.intake.outputs");
+    expect(block.priority).toBe(72);
+    expect(block.freshness).toBe("prior");
+    expect(block.summary).toContain("intake");
+    expect(block.summary).toContain("summary: intake complete");
+  });
+
+  it("creates one upstream-output block per upstream job (T-PROMPT-UPSTREAM-2)", () => {
+    const bundle = makeContextBundle({
+      upstreamOutputs: {
+        intake: { summary: "done" },
+        review: { decision: "approved" },
+      },
+    });
+
+    const packet = buildPromptPacket(bundle);
+    const upstreamBlocks = packet.context.filter((b) => b.type === "upstream-output");
+
+    expect(upstreamBlocks).toHaveLength(2);
+    const ids = upstreamBlocks.map((b) => b.id);
+    expect(ids).toContain("upstream-output-intake");
+    expect(ids).toContain("upstream-output-review");
+  });
+
+  it("produces no upstream-output blocks when upstreamOutputs is absent (T-PROMPT-UPSTREAM-3)", () => {
+    const bundle = makeContextBundle(); // no upstreamOutputs
+    const packet = buildPromptPacket(bundle);
+    const upstreamBlocks = packet.context.filter((b) => b.type === "upstream-output");
+    expect(upstreamBlocks).toHaveLength(0);
+  });
+
+  it("formats array output values with square brackets in summary (T-PROMPT-UPSTREAM-4)", () => {
+    const bundle = makeContextBundle({
+      upstreamOutputs: {
+        intake: { risks: ["dep-a", "dep-b", "dep-c"] },
+      },
+    });
+
+    const packet = buildPromptPacket(bundle);
+    const block = packet.context.find((b) => b.id === "upstream-output-intake")!;
+    expect(block.summary).toContain("risks: [dep-a, dep-b, dep-c]");
+  });
+
+  it("truncates long string output values to 120 chars (T-PROMPT-UPSTREAM-5)", () => {
+    const longValue = "x".repeat(200);
+    const bundle = makeContextBundle({
+      upstreamOutputs: {
+        intake: { description: longValue },
+      },
+    });
+
+    const packet = buildPromptPacket(bundle);
+    const block = packet.context.find((b) => b.id === "upstream-output-intake")!;
+    // The truncated value is 117 chars + "..."
+    expect(block.summary).toContain("...");
+    // description key plus value truncation
+    expect(block.summary.length).toBeLessThan(200);
+  });
+
+  it("upstream-output blocks are sorted at priority 72 (below workspace-scan 80, above knowledge 70) (T-PROMPT-UPSTREAM-6)", () => {
+    const bundle = makeContextBundle({
+      upstreamOutputs: {
+        intake: { summary: "done" },
+      },
+      capabilities: {
+        skills: [],
+        knowledge: [
+          {
+            skill: "code",
+            id: "rules",
+            path: "knowledge/rules.md",
+            readPolicy: "required",
+            usage: "read before starting",
+          },
+        ],
+        prompts: [],
+        functions: [],
+        tools: [],
+      },
+    });
+
+    const packet = buildPromptPacket(bundle);
+    const workspaceBlock = packet.context.find((b) => b.type === "workspace-scan");
+    const upstreamBlock = packet.context.find((b) => b.type === "upstream-output");
+    const knowledgeBlock = packet.context.find((b) => b.type === "knowledge-summary");
+
+    expect(workspaceBlock).toBeDefined();
+    expect(upstreamBlock).toBeDefined();
+    expect(knowledgeBlock).toBeDefined();
+
+    // workspace-scan (80) > upstream-output (72) > knowledge-required (70)
+    expect(workspaceBlock!.priority).toBeGreaterThan(upstreamBlock!.priority);
+    expect(upstreamBlock!.priority).toBeGreaterThan(knowledgeBlock!.priority);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Side-effect sanity: writePromptArtifact does not perturb unrelated files.
+// (Light coverage; deep purity is asserted in WF-P5-CONTEXT for buildContext.)
+// ---------------------------------------------------------------------------
+
 describe("writePromptArtifact side-effects", () => {
   let runDir: string;
 

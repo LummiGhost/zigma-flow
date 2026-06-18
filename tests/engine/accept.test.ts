@@ -1401,6 +1401,73 @@ jobs:
         uses: zigma/architecture-skill
 `;
 
+// ---------------------------------------------------------------------------
+// T-ACCEPT-16: artifact index contains report.json entry after acceptAgentReport
+// ---------------------------------------------------------------------------
+
+describe("acceptAgentReport — artifact index registration (T-ACCEPT-16)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "artifacts.jsonl contains an entry for report.json after acceptAgentReport on the no-signal path (T-ACCEPT-16)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_NO_SIGNAL_YAML,
+        "accept-no-signal"
+      );
+
+      await setJobState(runDir, "intake", {
+        status: "running",
+        current_step: "intake",
+        attempt: 1,
+      });
+
+      await writeReport(runDir, "intake", 1, "intake", {
+        outputs: { result: "done" },
+        artifacts: [],
+        signals: [],
+        summary: "intake complete",
+      });
+
+      await callAcceptAgentReport({
+        runDir,
+        runId,
+        jobId: "intake",
+        clock: new FakeClock(),
+      });
+
+      // Read artifacts.jsonl
+      const artifactsText = await readFile(join(runDir, "artifacts.jsonl"), "utf-8");
+      const entries = artifactsText
+        .split("\n")
+        .filter((l) => l.trim().length > 0)
+        .map((l) => JSON.parse(l) as Record<string, unknown>);
+
+      // Must have at least one entry for report.json
+      const reportEntry = entries.find(
+        (e) => typeof e["path"] === "string" && (e["path"] as string).endsWith("report.json")
+      );
+      expect(reportEntry).toBeDefined();
+      expect(reportEntry!["kind"]).toBe("agent_report");
+      expect(reportEntry!["run_id"]).toBe(runId);
+      expect(reportEntry!["content_type"]).toBe("application/json");
+      const producer = reportEntry!["producer"] as Record<string, unknown>;
+      expect(producer["job"]).toBe("intake");
+      expect(producer["step"]).toBe("intake");
+      expect(producer["attempt"]).toBe(1);
+    }
+  );
+});
+
 describe("acceptAgentReport — signal path activate_job advances source job (T-ACCEPT-15)", () => {
   let sandbox: Sandbox;
 

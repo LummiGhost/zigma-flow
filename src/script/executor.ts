@@ -17,7 +17,7 @@
  *   - docs/mvp-contracts.md §2.7, §6, §7
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readFile } from "node:fs/promises";
@@ -29,7 +29,7 @@ import type { ProcessRunner } from "./index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { RouterAction } from "../workflow/index.js";
 import { WorkflowError, StateError, SkillPackError } from "../utils/index.js";
-import { artifactStepDir, artifactId } from "../artifact/index.js";
+import { artifactStepDir, artifactId, appendArtifactIndex, artifactFileRelativePath } from "../artifact/index.js";
 import { applyRoutingAction } from "../engine/routing.js";
 
 // ---------------------------------------------------------------------------
@@ -326,6 +326,46 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     JSON.stringify(scriptResult, null, 2),
     "utf-8"
   );
+
+  // ── 7b. Register artifacts in artifact index ──────────────────────────────
+
+  const stdoutSize = await stat(join(stepArtifactDir, "stdout.txt")).then(s => s.size).catch(() => 0);
+  const stderrSize = await stat(join(stepArtifactDir, "stderr.txt")).then(s => s.size).catch(() => 0);
+  const resultSize = await stat(join(stepArtifactDir, "result.json")).then(s => s.size).catch(() => 0);
+
+  await appendArtifactIndex(runDir, {
+    id: stdoutArtifactUri,
+    run_id: runId,
+    producer: { job: jobId, step: stepId, attempt },
+    kind: "script_stdout",
+    path: artifactFileRelativePath(jobId, attempt, stepId, "stdout.txt"),
+    content_type: "text/plain",
+    size: stdoutSize,
+    summary: `stdout for ${jobId}/${stepId}`,
+    created_at: clock.now(),
+  });
+  await appendArtifactIndex(runDir, {
+    id: stderrArtifactUri,
+    run_id: runId,
+    producer: { job: jobId, step: stepId, attempt },
+    kind: "script_stderr",
+    path: artifactFileRelativePath(jobId, attempt, stepId, "stderr.txt"),
+    content_type: "text/plain",
+    size: stderrSize,
+    summary: `stderr for ${jobId}/${stepId}`,
+    created_at: clock.now(),
+  });
+  await appendArtifactIndex(runDir, {
+    id: artifactId(runId, jobId, attempt, stepId, "result.json"),
+    run_id: runId,
+    producer: { job: jobId, step: stepId, attempt },
+    kind: "script_result",
+    path: artifactFileRelativePath(jobId, attempt, stepId, "result.json"),
+    content_type: "application/json",
+    size: resultSize,
+    summary: `Script result for ${jobId}/${stepId}`,
+    created_at: clock.now(),
+  });
 
   // ── 9. Emit script_completed ──────────────────────────────────────────────
 

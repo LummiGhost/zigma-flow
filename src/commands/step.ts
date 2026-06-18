@@ -161,20 +161,10 @@ export async function stepAction(opts: StepActionOpts): Promise<void> {
     jobId = readyJobs[0]!;
   }
 
-  // 6. Assert job is "ready"
+  // 6. Resolve current step (needed before the status check for multi-step jobs)
   const selectedJobState = state.jobs[jobId];
-  if (selectedJobState?.status !== "ready") {
-    throw new StateError(
-      `Job "${jobId}" is in status "${selectedJobState?.status ?? "unknown"}", not "ready". ` +
-      `Cannot execute a step for a non-ready job.`,
-      { details: { jobId, status: selectedJobState?.status } }
-    );
-  }
-
-  // 7. Assert current step is a "script" step (P6 only handles script steps)
   const jobDef = workflowDef.jobs[jobId];
-  // current_step points to the step being executed; absent means first step
-  const currentStepId = selectedJobState.current_step ?? jobDef?.steps[0]?.id;
+  const currentStepId = selectedJobState?.current_step ?? jobDef?.steps[0]?.id;
   const currentStep = jobDef?.steps.find((s) => s.id === currentStepId);
 
   if (currentStep === undefined) {
@@ -184,15 +174,27 @@ export async function stepAction(opts: StepActionOpts): Promise<void> {
     );
   }
 
-  if (currentStep.type !== "script") {
+  // 7. Assert current step is an executable type (script, check, or router)
+  if (currentStep.type !== "script" && currentStep.type !== "check" && currentStep.type !== "router") {
     throw new WorkflowError(
-      `Job "${jobId}" current step "${currentStep.id}" is a "${currentStep.type}" step, not a script step. ` +
-      `Only script steps are supported in P6.`,
+      `Job "${jobId}" current step "${currentStep.id}" is a "${currentStep.type}" step. ` +
+      `Only script, check, and router steps can be executed via the step command.`,
       { details: { jobId, stepId: currentStep.id, stepType: currentStep.type } }
     );
   }
 
-  // 8. Call executeCurrentStep (Engine owns state transitions)
+  // 8. Assert job is in a state that permits step execution:
+  //    "ready" for the first step; "running" for subsequent steps in a multi-step job.
+  const status = selectedJobState?.status;
+  if (status !== "ready" && status !== "running") {
+    throw new StateError(
+      `Job "${jobId}" is in status "${status ?? "unknown"}". ` +
+      `The step command requires "ready" or "running" (multi-step job).`,
+      { details: { jobId, status } }
+    );
+  }
+
+  // 9. Call executeCurrentStep (Engine owns state transitions)
   const runnerOpt = opts.runner !== undefined ? { runner: opts.runner } : {};
   await executeCurrentStep({
     runDir,
@@ -204,7 +206,7 @@ export async function stepAction(opts: StepActionOpts): Promise<void> {
   });
 
   // 9. Print result path
-  const attempt = selectedJobState.attempt ?? 1;
+  const attempt = selectedJobState!.attempt ?? 1;
   const resultPath = join(artifactStepDir(runDir, jobId, attempt, currentStep.id), "result.json");
   console.log(`Step completed: ${resultPath}`);
 }

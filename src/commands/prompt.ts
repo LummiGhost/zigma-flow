@@ -270,7 +270,7 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
     },
   });
 
-  // 9. Transition job status from "ready" to "running" and advance last_event_id
+  // 9. Transition job status from "ready" to "running", set current_step, advance last_event_id
   const updatedState = {
     ...state,
     last_event_id: newEventId,
@@ -279,6 +279,7 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
       [jobId]: {
         ...state.jobs[jobId],
         status: "running" as const,
+        current_step: bundle.stepId,
         attempt,
       },
     },

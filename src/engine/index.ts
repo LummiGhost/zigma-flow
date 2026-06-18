@@ -344,7 +344,7 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
   // ── 6. Empty steps array — defensive completion (FP-MULTISTEP-EMPTY-STEPS) ─
 
   if (steps.length === 0) {
-    return await appendJobCompleted({ state, stateStore, eventWriter, runDir, runId, jobId, clock });
+    return await appendJobCompleted({ state, stateStore, eventWriter, runDir, runId, jobId, clock, wf });
   }
 
   // ── 7. Resolve current step index ────────────────────────────────────────
@@ -390,7 +390,7 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
 
   // ── 8b. Terminal: no next step — append job_completed, complete job ───────
   // FP-MULTISTEP-JOB-COMPLETED, FP-MULTISTEP-FINAL-SEQUENCE
-  return await appendJobCompleted({ state, stateStore, eventWriter, runDir, runId, jobId, clock });
+  return await appendJobCompleted({ state, stateStore, eventWriter, runDir, runId, jobId, clock, wf });
 }
 
 // ---------------------------------------------------------------------------
@@ -405,18 +405,19 @@ interface AppendJobCompletedOpts {
   runId: string;
   jobId: string;
   clock: Clock;
+  wf: import("../workflow/index.js").WorkflowDefinition;
 }
 
 async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> {
-  const { state, stateStore, eventWriter, runDir, runId, jobId, clock } = opts;
+  const { state, stateStore, eventWriter, runDir, runId, jobId, clock, wf } = opts;
 
   const jobState = state.jobs[jobId]!;
   const attempt = jobState.attempt ?? 1;
 
   // Read the current tail event id to derive the next sequential counter
   const lastId = await eventWriter.readLastEventId(runDir);
-  const counter = lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
-  const jobCompletedId = formatEventId(counter + 1);
+  let counter = lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
+  const jobCompletedId = formatEventId(++counter);
 
   // Append job_completed event BEFORE writing snapshot (FP-MULTISTEP-FINAL-SEQUENCE)
   await eventWriter.appendEvent(runDir, {
@@ -437,7 +438,7 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
   delete completedJobState.current_step;
   completedJobState.status = "completed";
 
-  const completedState: RunState = {
+  let finalState: RunState = {
     ...state,
     last_event_id: jobCompletedId,
     jobs: {
@@ -445,7 +446,49 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
       [jobId]: completedJobState,
     },
   };
-  await stateStore.writeSnapshot(runDir, completedState);
+
+  // Propagate readiness: find dependent jobs whose needs are now all satisfied
+  // and transition them from "waiting" → "ready", emitting job_ready events.
+  const completedJobIds = new Set<string>(
+    Object.entries(finalState.jobs)
+      .filter(([, js]) => js.status === "completed")
+      .map(([id]) => id)
+  );
+  const activeJobIds = new Set<string>(
+    Object.keys(finalState.jobs).filter(
+      (id) => !completedJobIds.has(id) && finalState.jobs[id]!.status !== "waiting"
+    )
+  );
+  const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds);
+
+  for (const readyId of nowReadyIds) {
+    const waitingJobState = finalState.jobs[readyId];
+    if (waitingJobState?.status !== "waiting") continue;
+
+    const jobReadyId = formatEventId(++counter);
+    await eventWriter.appendEvent(runDir, {
+      id: jobReadyId,
+      run_id: runId,
+      type: "job_ready",
+      timestamp: clock.now(),
+      producer: "engine",
+      job: null,
+      step: null,
+      attempt: null,
+      payload: { job_id: readyId },
+    });
+
+    finalState = {
+      ...finalState,
+      last_event_id: jobReadyId,
+      jobs: {
+        ...finalState.jobs,
+        [readyId]: { ...waitingJobState, status: "ready" as const },
+      },
+    };
+  }
+
+  await stateStore.writeSnapshot(runDir, finalState);
 
   return false;
 }

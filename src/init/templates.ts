@@ -95,6 +95,9 @@ jobs:
         prompt: intake
         with:
           task: "\${{ inputs.task }}"
+        outputs:
+          task_summary: {}
+          scope: {}
         expose:
           skills:
             - code
@@ -110,6 +113,9 @@ jobs:
         prompt: code-map
         with:
           task: "\${{ inputs.task }}"
+        outputs:
+          files: {}
+          modules: {}
         expose:
           skills:
             - code
@@ -138,6 +144,9 @@ jobs:
         prompt: plan
         with:
           task: "\${{ inputs.task }}"
+        outputs:
+          plan_summary: {}
+          steps: {}
         expose:
           skills:
             - code
@@ -173,6 +182,9 @@ jobs:
         prompt: implement
         with:
           task: "\${{ inputs.task }}"
+        outputs:
+          summary: {}
+          files_changed: {}
         expose:
           skills:
             - code
@@ -215,6 +227,9 @@ jobs:
         prompt: review
         with:
           task: "\${{ inputs.task }}"
+        outputs:
+          verdict: {}
+          issues: {}
         expose:
           skills:
             - code
@@ -230,6 +245,9 @@ jobs:
         prompt: summarize
         with:
           task: "\${{ inputs.task }}"
+        outputs:
+          final_summary: {}
+          remaining_risks: {}
         expose:
           skills:
             - code

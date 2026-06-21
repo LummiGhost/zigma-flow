@@ -24,11 +24,12 @@
  */
 
 import { join, relative } from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 
 import { parse as parseYaml } from "yaml";
 
 import { artifactStepDir } from "../artifact/artifactPaths.js";
+import { appendArtifactIndex, artifactId, artifactFileRelativePath } from "../artifact/index.js";
 import { nextEventId as formatEventId } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
@@ -338,6 +339,23 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
       step_id: stepId,
       report_artifact: reportArtifact,
     },
+  });
+
+  // ── 8b. Register report.json in artifact index ────────────────────────────
+
+  const reportSize = await stat(reportPath).then(s => s.size).catch(() => 0);
+  const reportArtifactId = artifactId(runId, jobId, attempt, stepId, "report.json");
+  const reportRelPath = artifactFileRelativePath(jobId, attempt, stepId, "report.json");
+  await appendArtifactIndex(runDir, {
+    id: reportArtifactId,
+    run_id: runId,
+    producer: { job: jobId, step: stepId, attempt },
+    kind: "agent_report",
+    path: reportRelPath,
+    content_type: "application/json",
+    size: reportSize,
+    summary: `Agent report for ${jobId}/${stepId}`,
+    created_at: clock.now(),
   });
 
   // ── 9. Write intermediate snapshot (outputs + last_event_id) ──────────────

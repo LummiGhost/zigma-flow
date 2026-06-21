@@ -19,7 +19,7 @@
  *   - docs/architecture.md §7.1, §7.2, §7.3, §9.4, §12.3
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readFile } from "node:fs/promises";
@@ -31,7 +31,7 @@ import type { CheckRunner } from "./index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { RouterAction } from "../workflow/index.js";
 import { WorkflowError, StateError } from "../utils/index.js";
-import { artifactStepDir } from "../artifact/index.js";
+import { artifactStepDir, appendArtifactIndex, artifactId, artifactFileRelativePath } from "../artifact/index.js";
 import { applyRoutingAction } from "../engine/routing.js";
 
 // ---------------------------------------------------------------------------
@@ -211,6 +211,21 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     JSON.stringify(checkResult, null, 2),
     "utf-8"
   );
+
+  // ── 7b. Register check-result.json in artifact index ─────────────────────
+
+  const checkResultSize = await stat(join(stepArtifactDir, "check-result.json")).then(s => s.size).catch(() => 0);
+  await appendArtifactIndex(runDir, {
+    id: artifactId(runId, jobId, attempt, stepId, "check-result.json"),
+    run_id: runId,
+    producer: { job: jobId, step: stepId, attempt },
+    kind: "check_result",
+    path: artifactFileRelativePath(jobId, attempt, stepId, "check-result.json"),
+    content_type: "application/json",
+    size: checkResultSize,
+    summary: `Check result for ${jobId}/${stepId}`,
+    created_at: clock.now(),
+  });
 
   // ── 8. Emit check_completed ───────────────────────────────────────────────
   // Per FP-CHECK-EVENT-CHECK-COMPLETED: failures is included only when non-empty.

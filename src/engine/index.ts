@@ -488,6 +488,34 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
     };
   }
 
+  // Check if run is now complete: all non-inactive jobs completed
+  const allNonInactiveCompleted = Object.values(finalState.jobs).every(
+    js => js.status === "completed" || js.status === "inactive"
+  );
+  const hasCompletedJob = Object.values(finalState.jobs).some(
+    js => js.status === "completed"
+  );
+
+  if (allNonInactiveCompleted && hasCompletedJob) {
+    const runCompletedId = formatEventId(++counter);
+    await eventWriter.appendEvent(runDir, {
+      id: runCompletedId,
+      run_id: runId,
+      type: "run_completed",
+      timestamp: clock.now(),
+      producer: "engine",
+      job: null,
+      step: null,
+      attempt: null,
+      payload: {},
+    });
+    finalState = {
+      ...finalState,
+      last_event_id: runCompletedId,
+      status: "completed",
+    };
+  }
+
   await stateStore.writeSnapshot(runDir, finalState);
 
   return false;

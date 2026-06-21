@@ -384,15 +384,15 @@ describe("advanceJob — single-step terminal (T-MULTISTEP-1)", () => {
       expect(returned).toBe(false);
 
       const events = await readEvents(runDir);
-      const tail = events[events.length - 1];
-      expect(tail).toBeDefined();
-      expect(tail!.type).toBe("job_completed");
-      expect(tail!.payload).toMatchObject({ job_id: "build" });
+      // run_completed is now appended after job_completed when all jobs finish.
+      const jobCompletedEvent = events.find((e) => e.type === "job_completed");
+      expect(jobCompletedEvent).toBeDefined();
+      expect(jobCompletedEvent!.payload).toMatchObject({ job_id: "build" });
 
       const snap = await readStateSnapshot(runDir);
       expect(snap.jobs["build"]!.status).toBe("completed");
       expect(snap.jobs["build"]!.current_step).toBeUndefined();
-      expect(snap.last_event_id).toBe(tail!.id);
+      expect(snap.last_event_id).toBe(events[events.length - 1]!.id);
     }
   );
 });
@@ -499,13 +499,13 @@ describe("advanceJob — three-step sequential walkthrough (T-MULTISTEP-3)", () 
       const events = await readEvents(runDir);
       const completedEvents = events.filter((e) => e.type === "job_completed");
       expect(completedEvents.length).toBe(1);
-      const tail = events[events.length - 1];
-      expect(tail!.type).toBe("job_completed");
+      // run_completed is now appended after job_completed when all jobs finish.
+      expect(events.some((e) => e.type === "job_completed")).toBe(true);
 
       const snap = await readStateSnapshot(runDir);
       expect(snap.jobs["build"]!.status).toBe("completed");
       expect(snap.jobs["build"]!.current_step).toBeUndefined();
-      expect(snap.last_event_id).toBe(tail!.id);
+      expect(snap.last_event_id).toBe(events[events.length - 1]!.id);
     }
   );
 });
@@ -823,10 +823,10 @@ describe("advanceJob — empty steps array defensive completion (T-MULTISTEP-10)
       expect(returned).toBe(false);
 
       const events = await readEvents(runDir);
-      const tail = events[events.length - 1];
-      expect(tail).toBeDefined();
-      expect(tail!.type).toBe("job_completed");
-      expect(tail!.payload).toMatchObject({ job_id: "build" });
+      // run_completed is now appended after job_completed when all jobs finish.
+      const jobCompletedEvent = events.find((e) => e.type === "job_completed");
+      expect(jobCompletedEvent).toBeDefined();
+      expect(jobCompletedEvent!.payload).toMatchObject({ job_id: "build" });
 
       const snap = await readStateSnapshot(runDir);
       expect(snap.jobs["build"]!.status).toBe("completed");

@@ -1135,6 +1135,177 @@ describe("buildContext permission merging", () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildContext — upstream outputs evidence bundle (FP-CTX-UPSTREAM)
+// ---------------------------------------------------------------------------
+
+describe("buildContext upstream outputs", () => {
+  let sb: Sandbox;
+
+  beforeEach(async () => {
+    sb = await makeSandbox();
+    await seedSkillLock(sb.zigmaflowDir, { "zigma.code-change": CANONICAL_LOCK_ENTRY });
+    await seedSkillPack(sb.zigmaflowDir, "code-change", CANONICAL_SKILL_YML, CANONICAL_SKILL_FILES);
+  });
+
+  afterEach(async () => {
+    await rm(sb.zigmaflowDir, { recursive: true, force: true });
+  });
+
+  it("populates upstreamOutputs from completed jobs with outputs (T-CTX-UPSTREAM-1)", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        intake: {
+          steps: [{ id: "intake", type: "agent", uses: "zigma/intake" }],
+        },
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              expose: { skills: ["code"] },
+              with: { goal: "${{ inputs.task }}" },
+            },
+          ],
+        },
+      },
+    });
+
+    const state = makeRunState({
+      jobs: {
+        intake: {
+          status: "completed",
+          outputs: { summary: "intake done", risks: ["a", "b"] },
+        },
+        plan: { status: "running" },
+      },
+    });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "plan",
+    });
+
+    expect(bundle.upstreamOutputs).toBeDefined();
+    expect(bundle.upstreamOutputs!["intake"]).toEqual({ summary: "intake done", risks: ["a", "b"] });
+  });
+
+  it("excludes the current job from upstreamOutputs (T-CTX-UPSTREAM-2)", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              expose: { skills: ["code"] },
+              with: { goal: "${{ inputs.task }}" },
+            },
+          ],
+        },
+      },
+    });
+
+    const state = makeRunState({
+      jobs: {
+        plan: {
+          status: "running",
+          outputs: { previous_plan: "something" },
+        },
+      },
+    });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "plan",
+    });
+
+    // plan itself must not appear in upstreamOutputs
+    expect(bundle.upstreamOutputs?.["plan"]).toBeUndefined();
+  });
+
+  it("omits upstreamOutputs when no completed jobs have outputs (T-CTX-UPSTREAM-3)", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        intake: {
+          steps: [{ id: "intake", type: "agent", uses: "zigma/intake" }],
+        },
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              expose: { skills: ["code"] },
+              with: { goal: "${{ inputs.task }}" },
+            },
+          ],
+        },
+      },
+    });
+
+    // intake completed but has no outputs
+    const state = makeRunState({
+      jobs: {
+        intake: { status: "completed" },
+        plan: { status: "running" },
+      },
+    });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "plan",
+    });
+
+    expect(bundle.upstreamOutputs).toBeUndefined();
+  });
+
+  it("excludes non-completed jobs even when they have outputs (T-CTX-UPSTREAM-4)", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        intake: {
+          steps: [{ id: "intake", type: "agent", uses: "zigma/intake" }],
+        },
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              expose: { skills: ["code"] },
+              with: { goal: "${{ inputs.task }}" },
+            },
+          ],
+        },
+      },
+    });
+
+    const state = makeRunState({
+      jobs: {
+        intake: { status: "running", outputs: { partial: "result" } },
+        plan: { status: "running" },
+      },
+    });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "plan",
+    });
+
+    expect(bundle.upstreamOutputs).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildContext — side-effect-free contract (FP-CTX-PURE)
 // ---------------------------------------------------------------------------
 

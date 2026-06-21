@@ -1210,6 +1210,162 @@ describe("acceptAgentReport — signal path outputs persistence (T-ACCEPT-13)", 
 });
 
 // ---------------------------------------------------------------------------
+// T-ACCEPT-16: typed output normalization — array type coercion
+// ---------------------------------------------------------------------------
+//
+// When a step definition declares `outputs.<key>.type: "array"` and the
+// agent submits a JSON-array string, acceptAgentReport must coerce the
+// string to an actual array before persisting to JobState.outputs.
+//
+// Also covers the newline-split fallback when the string is not valid JSON.
+// ---------------------------------------------------------------------------
+
+/**
+ * Workflow with a step that declares one output as type: array.
+ */
+const AGENT_ARRAY_OUTPUT_YAML = `\
+name: accept-array-output
+version: "0.1.0"
+jobs:
+  intake:
+    steps:
+      - id: intake
+        type: agent
+        uses: zigma/intake-skill
+        outputs:
+          risks:
+            type: array
+          summary:
+            type: string
+`;
+
+describe("acceptAgentReport — typed output normalization (T-ACCEPT-16)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "coerces JSON-array string output to array when step declares type: array (T-ACCEPT-16a, FP-TYPED-OUTPUT-ARRAY-JSON)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_ARRAY_OUTPUT_YAML,
+        "accept-array-output"
+      );
+
+      await setJobState(runDir, "intake", {
+        status: "running",
+        current_step: "intake",
+        attempt: 1,
+      });
+
+      await writeReport(runDir, "intake", 1, "intake", {
+        outputs: { risks: '["dep-a","dep-b"]', summary: "all done" },
+        artifacts: [],
+        signals: [],
+        summary: "intake done",
+      });
+
+      await callAcceptAgentReport({
+        runDir,
+        runId,
+        jobId: "intake",
+        clock: new FakeClock(),
+      });
+
+      const snap = await readStateSnapshot(runDir);
+      const outputs = readOutputs(snap, "intake");
+      expect(outputs).toBeDefined();
+      // risks should be coerced to an array, not kept as string
+      expect(Array.isArray(outputs!["risks"])).toBe(true);
+      expect(outputs!["risks"]).toEqual(["dep-a", "dep-b"]);
+      // summary is type: string — no coercion
+      expect(outputs!["summary"]).toBe("all done");
+    }
+  );
+
+  it(
+    "splits newline-delimited string when JSON parse fails for type: array output (T-ACCEPT-16b, FP-TYPED-OUTPUT-ARRAY-NEWLINE)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_ARRAY_OUTPUT_YAML,
+        "accept-array-output"
+      );
+
+      await setJobState(runDir, "intake", {
+        status: "running",
+        current_step: "intake",
+        attempt: 1,
+      });
+
+      await writeReport(runDir, "intake", 1, "intake", {
+        outputs: { risks: "dep-a\ndep-b\ndep-c", summary: "done" },
+        artifacts: [],
+        signals: [],
+        summary: "intake done",
+      });
+
+      await callAcceptAgentReport({
+        runDir,
+        runId,
+        jobId: "intake",
+        clock: new FakeClock(),
+      });
+
+      const snap = await readStateSnapshot(runDir);
+      const outputs = readOutputs(snap, "intake");
+      expect(outputs).toBeDefined();
+      expect(Array.isArray(outputs!["risks"])).toBe(true);
+      expect(outputs!["risks"]).toEqual(["dep-a", "dep-b", "dep-c"]);
+    }
+  );
+
+  it(
+    "does not coerce outputs when no type declaration is present (T-ACCEPT-16c, FP-TYPED-OUTPUT-NO-DECL)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_NO_SIGNAL_YAML,
+        "accept-no-signal"
+      );
+
+      await setJobState(runDir, "intake", {
+        status: "running",
+        current_step: "intake",
+        attempt: 1,
+      });
+
+      await writeReport(runDir, "intake", 1, "intake", {
+        outputs: { summary: '["a","b"]' },
+        artifacts: [],
+        signals: [],
+        summary: "intake done",
+      });
+
+      await callAcceptAgentReport({
+        runDir,
+        runId,
+        jobId: "intake",
+        clock: new FakeClock(),
+      });
+
+      const snap = await readStateSnapshot(runDir);
+      const outputs = readOutputs(snap, "intake");
+      expect(outputs).toBeDefined();
+      // No type declaration — string should remain a string
+      expect(outputs!["summary"]).toBe('["a","b"]');
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
 // T-ACCEPT-14: signal path retry_job — source job advances to completed
 // ---------------------------------------------------------------------------
 //

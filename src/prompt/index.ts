@@ -558,6 +558,31 @@ function buildContextBlocks(bundle: ContextBundle): ContextBlock[] {
     blocks.push(block);
   }
 
+  // Upstream output blocks (from completed upstream jobs)
+  for (const [upstreamJobId, outputs] of Object.entries(bundle.upstreamOutputs ?? {})) {
+    const outputEntries = Object.entries(outputs);
+    if (outputEntries.length === 0) continue;
+
+    // Format outputs as a compact summary
+    const parts = outputEntries.map(([k, v]) => {
+      if (Array.isArray(v)) {
+        return `${k}: [${(v as unknown[]).join(", ")}]`;
+      }
+      const str = typeof v === "string" ? v : JSON.stringify(v);
+      const truncated = str.length > 120 ? str.slice(0, 117) + "..." : str;
+      return `${k}: ${truncated}`;
+    });
+
+    blocks.push({
+      id: `upstream-output-${upstreamJobId}`,
+      type: "upstream-output",
+      source: `job.${upstreamJobId}.outputs`,
+      priority: 72,
+      freshness: "prior",
+      summary: `Outputs from ${upstreamJobId}: ${parts.join(" | ")}`,
+    });
+  }
+
   for (const knowledge of bundle.capabilities.knowledge as ExposedKnowledge[]) {
     const policy = knowledge.readPolicy ?? "optional";
     const usage = knowledge.usage ?? knowledge.description ?? "reference material for this step";

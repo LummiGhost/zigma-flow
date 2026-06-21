@@ -117,6 +117,7 @@ export interface ContextBundle {
   inputs: Record<string, string>;
   stepOutputs?: Record<string, unknown>;
   artifacts: ArtifactSummary[];
+  upstreamOutputs?: Record<string, Record<string, unknown>>;  // completed job id → outputs
   signals: SignalSpec[];
   permissions: PermissionSet;
   repositoryWorkspace?: RepositoryWorkspacePermissions;
@@ -548,6 +549,18 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
   const artifacts = await readArtifactSummaries(runDir);
 
   // -----------------------------------------------------------------------
+  // 4b. Collect upstream job outputs (for evidence bundle)
+  // -----------------------------------------------------------------------
+
+  const upstreamOutputs: Record<string, Record<string, unknown>> = {};
+  for (const [jid, jstate] of Object.entries(state.jobs)) {
+    if (jid === jobId) continue;
+    if (jstate.status !== "completed") continue;
+    if (jstate.outputs === undefined || Object.keys(jstate.outputs).length === 0) continue;
+    upstreamOutputs[jid] = jstate.outputs;
+  }
+
+  // -----------------------------------------------------------------------
   // 5. Signal filtering
   // -----------------------------------------------------------------------
 
@@ -624,6 +637,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     inputs: resolvedInputs,
     ...(step.outputs !== undefined ? { stepOutputs: step.outputs } : {}),
     artifacts,
+    ...(Object.keys(upstreamOutputs).length > 0 ? { upstreamOutputs } : {}),
     signals,
     permissions,
     repositoryWorkspace,

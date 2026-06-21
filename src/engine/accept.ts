@@ -219,6 +219,37 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
   const workflowPath = await readWorkflowPathFromRunYml(runDir);
   const wf = await loadWorkflowFile(workflowPath);
 
+  // ── 4b. Normalize array-typed outputs ────────────────────────────────────
+  // If the step definition declares an output with type: "array" and the
+  // agent submitted a string value, coerce it: try JSON.parse first, then
+  // fall back to newline-split.
+
+  const stepDef = wf.jobs[jobId]?.steps.find((s) => s.id === stepId);
+
+  const normalizedOutputs: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(report.outputs)) {
+    const outputDef = stepDef?.outputs?.[key];
+    const declaredType =
+      outputDef !== null && typeof outputDef === "object"
+        ? (outputDef as Record<string, unknown>)["type"]
+        : undefined;
+
+    if (declaredType === "array" && typeof value === "string") {
+      // Try JSON parse first
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (Array.isArray(parsed)) {
+          normalizedOutputs[key] = parsed;
+          continue;
+        }
+      } catch { /* fall through */ }
+      // Fall back: split by newline, filter empty
+      normalizedOutputs[key] = value.split("\n").map((s) => s.trim()).filter(Boolean);
+    } else {
+      normalizedOutputs[key] = value;
+    }
+  }
+
   const signalsArray = report.signals;
 
   if (signalsArray.length > 0) {
@@ -271,7 +302,7 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
         ...state.jobs,
         [jobId]: {
           ...jobState,
-          outputs: report.outputs,
+          outputs: normalizedOutputs,
         },
       },
     };
@@ -362,7 +393,7 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
 
   const updatedJobState = {
     ...jobState,
-    outputs: report.outputs,
+    outputs: normalizedOutputs,
   };
 
   const intermediateState: RunState = {

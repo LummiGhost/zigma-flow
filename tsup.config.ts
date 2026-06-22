@@ -18,7 +18,7 @@ export default defineConfig({
   onSuccess: async () => {
     await cp(
       join("src", "prompt", "templates"),
-      join("dist", "prompt", "templates"),
+      join("dist", "templates"),
       { recursive: true },
     );
   },

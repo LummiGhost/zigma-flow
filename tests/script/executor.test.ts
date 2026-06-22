@@ -771,3 +771,87 @@ describe("executeScriptStep — explicit on_failure: { status: failed } (T-SCRIP
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// T-SCRIPT-PROPAGATE: Completing a script job promotes downstream waiting jobs
+// ---------------------------------------------------------------------------
+
+const SCRIPT_WORKFLOW_WITH_DOWNSTREAM_YAML = `\
+name: code-change
+version: "0.1.0"
+jobs:
+  build:
+    steps:
+      - id: compile
+        type: script
+        run: "echo hello"
+  test:
+    needs:
+      - build
+    steps:
+      - id: run-tests
+        type: script
+        run: "echo tests"
+`;
+
+describe("executeScriptStep — downstream dependency propagation (T-SCRIPT-PROPAGATE)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "transitions downstream waiting job to ready and emits job_ready after script job completes (T-SCRIPT-PROPAGATE, issue #57)",
+    async () => {
+      const { runId, runDir } = await bootstrapScriptRun(
+        sandbox,
+        SCRIPT_WORKFLOW_WITH_DOWNSTREAM_YAML
+      );
+
+      const runner = new FakeRunner({
+        exitCode: 0,
+        timedOut: false,
+        stdout: "hello\n",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({
+          runDir,
+          zigmaflowDir: sandbox.zigmaflowDir,
+          runId,
+          jobId: "build",
+          runner,
+        })
+      );
+
+      // Downstream job "test" must be promoted from waiting → ready.
+      const snapshot = await readStateSnapshot(runDir);
+      expect(snapshot.jobs["build"]?.status).toBe("completed");
+      expect(snapshot.jobs["test"]?.status).toBe("ready");
+
+      // A job_ready event for "test" must appear after job_completed for "build".
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+      expect(types).toContain("job_ready");
+
+      const jobCompletedIdx = events.findIndex((e) => e.type === "job_completed");
+      const testReadyIdx = events.findIndex(
+        (e) => e.type === "job_ready" && e.payload["job_id"] === "test"
+      );
+      expect(testReadyIdx).toBeGreaterThan(-1);
+      expect(testReadyIdx).toBeGreaterThan(jobCompletedIdx);
+
+      // state.last_event_id must equal the tail event id.
+      const tailId = events[events.length - 1]?.id;
+      expect(snapshot.last_event_id).toBe(tailId);
+    }
+  );
+});

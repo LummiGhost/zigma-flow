@@ -60,3 +60,9 @@ jobs:
 
       - name: Build
         run: pnpm run build
+
+      - name: Smoke check dist
+        run: |
+          node dist/cli.js --help
+          test -f dist/templates/step-prompt.md
+          test -f dist/templates/system-prompt.md

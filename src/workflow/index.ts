@@ -86,6 +86,8 @@ const StepBaseSchema = z.object({
   // Check step fields (D2 — WF-P7-CHECK)
   on_pass: RouterActionSchema.optional(),
   on_fail: RouterActionSchema.optional(),
+  // Artifact policy
+  required_artifacts: z.array(z.string()).optional(),
 });
 
 export interface StepDefinition {
@@ -108,6 +110,8 @@ export interface StepDefinition {
   // Check step fields (D2 — WF-P7-CHECK)
   on_pass?: RouterAction;
   on_fail?: RouterAction;
+  // Artifact policy (D2 — WF-P12-QUALITY)
+  required_artifacts?: string[];
   [key: string]: unknown;
 }
 

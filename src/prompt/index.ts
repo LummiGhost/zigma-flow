@@ -195,7 +195,44 @@ const PROMPT_PACKET_BLOCK_ORDER: readonly PromptBlockType[] = [
 // Template rendering
 // ---------------------------------------------------------------------------
 
-function renderTemplate(template: string, vars: Record<string, string>): string {
+const TEMPLATE_PLACEHOLDERS: Record<TemplateName, readonly string[]> = {
+  "system-prompt": ["identity", "invariantsLines", "boundariesLines"],
+  "task-prompt": ["task"],
+  "step-prompt": ["jobId", "stepId", "attempt", "promptSource", "promptId", "promptPath", "promptContent"],
+  "step-prompt-fallback": ["jobId", "stepId", "attempt"],
+  "output-contract": ["reportPath", "requiredOutputs", "requiredArtifacts", "allowedSignals", "stopRequirement"],
+  "output-contract-lines": ["reportPath", "requiredOutputsLines", "requiredArtifactsLines", "allowedSignalsLines", "artifactRulesLines", "stopRequirement"],
+  "context-block": ["id", "type", "source", "priority", "freshness", "extraLines", "summary"],
+  "permission-boundary": ["modePermissionLine", "contentReadLine", "commandsLine"],
+};
+
+export function renderTemplate(template: string, vars: Record<string, string>, templateName: string): string {
+  const allowedList = TEMPLATE_PLACEHOLDERS[templateName as TemplateName];
+  if (!allowedList) {
+    throw new Error(`Unknown template: ${templateName}`);
+  }
+  const allowed = new Set(allowedList);
+
+  // Check for unknown placeholders in the template
+  const placeholdersInTemplate = [...template.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1]!);
+  const unknownPlaceholders = placeholdersInTemplate.filter(p => !allowed.has(p));
+  if (unknownPlaceholders.length > 0) {
+    throw new Error(
+      `Template "${templateName}" contains unknown placeholder(s): ${unknownPlaceholders.join(", ")}. ` +
+      `Allowed: ${[...allowed].join(", ")}`
+    );
+  }
+
+  // Check for missing required variables
+  for (const p of placeholdersInTemplate) {
+    if (!(p in vars)) {
+      throw new Error(
+        `Template "${templateName}" requires variable "${p}" but it was not provided. ` +
+        `Provided: ${Object.keys(vars).join(", ")}`
+      );
+    }
+  }
+
   return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
     const value = vars[key];
     return value !== undefined ? value : `{{${key}}}`;
@@ -221,7 +258,20 @@ type TemplateName = (typeof TEMPLATE_NAMES)[number];
 function loadTemplates(): Record<TemplateName, string> {
   const templates = {} as Record<TemplateName, string>;
   for (const name of TEMPLATE_NAMES) {
-    templates[name] = readFileSync(join(TEMPLATES_DIR, `${name}.md`), "utf-8");
+    const filePath = join(TEMPLATES_DIR, `${name}.md`);
+    try {
+      templates[name] = readFileSync(filePath, "utf-8");
+    } catch (err: unknown) {
+      if (typeof err === "object" && err !== null && "code" in err && (err as Record<string, unknown>)["code"] === "ENOENT") {
+        throw new Error(
+          `Prompt template file is missing: ${name}.md\n` +
+          `  Resolved path: ${filePath}\n` +
+          `  Likely remediation: run "pnpm build" to rebuild dist/, or reinstall the package.\n` +
+          `  Verify that src/prompt/templates/ contains all required template files.`
+        );
+      }
+      throw err;
+    }
   }
   return templates;
 }
@@ -461,7 +511,7 @@ function buildAgentSystemPrompt(bundle: ContextBundle): AgentSystemPrompt {
     identity,
     invariantsLines,
     boundariesLines,
-  });
+  }, "system-prompt");
 
   return {
     block: {
@@ -488,7 +538,7 @@ function buildRunTaskPrompt(bundle: ContextBundle): RunTaskPrompt {
     : fromTaskInput !== undefined || fromGoalInput !== undefined
       ? "step.input"
       : "generated";
-  const content = renderTemplate(TEMPLATES["task-prompt"], { task });
+  const content = renderTemplate(TEMPLATES["task-prompt"], { task }, "task-prompt");
 
   return {
     block: {
@@ -514,7 +564,7 @@ function buildWorkflowStepPrompt(bundle: ContextBundle): WorkflowStepPrompt {
       promptId: bundle.primaryPrompt.id,
       promptPath: bundle.primaryPrompt.path,
       promptContent: bundle.primaryPrompt.content.trimEnd(),
-    });
+    }, "step-prompt");
 
     return {
       block: {
@@ -537,7 +587,7 @@ function buildWorkflowStepPrompt(bundle: ContextBundle): WorkflowStepPrompt {
     jobId: bundle.jobId,
     stepId: bundle.stepId,
     attempt: String(bundle.attempt),
-  });
+  }, "step-prompt-fallback");
 
   return {
     block: {
@@ -626,7 +676,7 @@ function buildContextBlocks(bundle: ContextBundle): ContextBlock[] {
       source: `${knowledge.skill}.${knowledge.id}`,
       priority: policy === "required" ? 70 : 50,
       freshness: "static",
-      summary: `${policy}: ${usage}`,
+      summary: `${policy} (path-only — content is not included in this prompt): ${usage}`,
     };
     if (knowledge.path !== undefined) {
       block.path = knowledge.path;
@@ -701,7 +751,7 @@ function buildOutputContract(bundle: ContextBundle, reportPath: string): OutputC
     requiredArtifacts: requiredArtifacts !== undefined ? requiredArtifacts.join(", ") : "(none declared)",
     allowedSignals: allowedSignals.length > 0 ? allowedSignals.join(", ") : "(none)",
     stopRequirement,
-  });
+  }, "output-contract");
 
   return {
     block: {
@@ -790,7 +840,7 @@ function renderContextBlockLines(context: ContextBlock[]): string[] {
       freshness: block.freshness,
       extraLines,
       summary: block.summary,
-    });
+    }, "context-block");
     lines.push(...rendered.split("\n"));
   }
 
@@ -818,7 +868,7 @@ function renderOutputContractLines(output: OutputContract): string[] {
     allowedSignalsLines,
     artifactRulesLines,
     stopRequirement: output.stopRequirement,
-  });
+  }, "output-contract-lines");
   return [...rendered.split("\n"), ""];
 }
 
@@ -954,7 +1004,7 @@ function renderPermissionBoundaryLines(bundle: ContextBundle): string[] {
     modePermissionLine,
     contentReadLine,
     commandsLine,
-  });
+  }, "permission-boundary");
   return rendered.replace(/\r\n/g, "\n").split("\n").filter((line) => line.length > 0);
 }
 

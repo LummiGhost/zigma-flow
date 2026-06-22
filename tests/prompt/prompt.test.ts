@@ -32,6 +32,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -49,6 +50,7 @@ import {
   buildAgentPrompt,
   buildPromptPacket,
   renderPromptPacket,
+  renderTemplate,
   validatePromptPacket,
   validatePromptHandoff,
   writePromptArtifact,
@@ -581,8 +583,8 @@ describe("buildAgentPrompt — section rendering", () => {
     expect(out).toContain("rules");
     expect(out).toContain("layout");
     expect(out).toContain("path: `knowledge/rules.md`");
-    expect(out).toContain("required: read before starting this step");
-    expect(out).toContain("optional: consult for repository structure");
+    expect(out).toContain("required (path-only — content is not included in this prompt): read before starting this step");
+    expect(out).toContain("optional (path-only — content is not included in this prompt): consult for repository structure");
     expect(out).toContain("implement-by-plan");
     expect(out).toContain("Primary step prompt rendered");
     expect(out).not.toContain("Reference prompt only");
@@ -1554,6 +1556,43 @@ describe("Template loading and rendering", () => {
     expect(readOnly).not.toContain("{{modePermissionLine}}");
     expect(readOnly).not.toContain("{{contentReadLine}}");
     expect(readOnly).not.toContain("{{commandsLine}}");
+  });
+
+  it("throws on unknown placeholder in template (Issue #70)", () => {
+    expect(() =>
+      renderTemplate("Hello {{name}}", { name: "world" }, "system-prompt"),
+    ).toThrow("contains unknown placeholder");
+  });
+
+  it("does not throw when user task text contains {{placeholder}} syntax (Issue #79)", () => {
+    // User-provided content (like task text) may legitimately contain {{...}}
+    // even when the placeholder name matches a known template variable.
+    expect(() =>
+      renderTemplate("Hello {{task}}", { task: "about {{runId}} and {{foo}}" }, "task-prompt"),
+    ).not.toThrow();
+    // Value contains the same placeholder name as the template — must not fail.
+    expect(() =>
+      renderTemplate("Hello {{task}}", { task: "please document {{task}}" }, "task-prompt"),
+    ).not.toThrow();
+    // promptContent may contain known step-template placeholders.
+    const stepTemplate = 'Current workflow scope: job "{{jobId}}", step "{{stepId}}", attempt {{attempt}}.\n' +
+      "Primary prompt source: {{promptSource}} -> {{promptId}}.\n" +
+      "Primary prompt path: {{promptPath}}.\n\n{{promptContent}}";
+    expect(() =>
+      renderTemplate(stepTemplate, {
+        jobId: "plan", stepId: "plan", attempt: "1",
+        promptSource: "job.id", promptId: "plan", promptPath: "prompts/plan.md",
+        promptContent: "See {{jobId}}/{{stepId}} for the upstream step.",
+      }, "step-prompt"),
+    ).not.toThrow();
+  });
+
+  it("reports friendly error when template file is missing (Issue #71)", () => {
+    for (const name of ["system-prompt", "task-prompt", "step-prompt", "step-prompt-fallback",
+                         "output-contract", "output-contract-lines", "context-block", "permission-boundary"]) {
+      const filePath = join(__dirname, "../../src/prompt/templates", `${name}.md`);
+      expect(existsSync(filePath), `Missing template: ${name}.md`).toBe(true);
+    }
   });
 });
 

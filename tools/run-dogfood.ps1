@@ -34,8 +34,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 if (-not $ProjectDir) {
-    # Script lives in tools/ — repo root is two levels up
-    $ProjectDir = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    # Script lives in tools/ — repo root is one level up
+    $ProjectDir = Split-Path $PSScriptRoot -Parent
 }
 if (-not $TempStepsDir) {
     $runDate = $RunId -replace '-.*$', ''

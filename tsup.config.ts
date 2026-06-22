@@ -1,3 +1,5 @@
+import { cp } from "node:fs/promises";
+import { join } from "node:path";
 import { defineConfig } from "tsup";
 
 export default defineConfig({
@@ -12,5 +14,12 @@ export default defineConfig({
   outDir: "dist",
   banner: {
     js: "#!/usr/bin/env node"
-  }
+  },
+  onSuccess: async () => {
+    await cp(
+      join("src", "prompt", "templates"),
+      join("dist", "prompt", "templates"),
+      { recursive: true },
+    );
+  },
 });

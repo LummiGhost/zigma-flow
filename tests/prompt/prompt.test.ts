@@ -1429,3 +1429,76 @@ describe("writePromptArtifact side-effects", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Template loading and rendering — FP-PROMPT-TEMPLATES
+// ---------------------------------------------------------------------------
+
+describe("Template loading and rendering", () => {
+  it("renders system prompt with the identity and invariants from the template (T-TEMPLATE-1)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+
+    // Template markers are NOT present in the rendered output.
+    expect(out).not.toContain("{{identity}}");
+    expect(out).not.toContain("{{invariantsLines}}");
+    expect(out).not.toContain("{{boundariesLines}}");
+
+    // Template content IS present.
+    expect(out).toContain("You are a Zigma Flow Agent Step executor.");
+    expect(out).toContain("Global invariants:");
+    expect(out).toContain("Capability and permission boundaries:");
+  });
+
+  it("renders reproducible output with bundled template (T-TEMPLATE-2)", () => {
+    const bundle = makeContextBundle({ runTask: "deterministic template test" });
+    const out1 = buildAgentPrompt(bundle);
+    const out2 = buildAgentPrompt(bundle);
+
+    expect(out2).toBe(out1);
+    expect(out1).toContain("deterministic template test");
+  });
+
+  it("task prompt template uses placeholder interpolation (T-TEMPLATE-3)", () => {
+    const out = buildAgentPrompt(makeContextBundle({ runTask: "custom run task" }));
+
+    expect(out).toContain("Overall run task:");
+    expect(out).toContain("custom run task");
+    expect(out).toContain("This task prompt is stable for the run.");
+  });
+
+  it("step prompt template with primary prompt renders markdown content (T-TEMPLATE-4)", () => {
+    const out = buildAgentPrompt(
+      makeContextBundle({ jobId: "implement", stepId: "implement" }),
+    );
+
+    expect(out).toContain('job "implement"');
+    expect(out).toContain('step "implement"');
+    expect(out).toContain("### Primary Plan Prompt");
+    expect(out).not.toContain("{{promptContent}}");
+  });
+
+  it("output contract templates render report schema with quoted JSON keys (T-TEMPLATE-5)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+
+    expect(out).toContain("### Report Schema");
+    expect(out).toContain('"outputs"');
+    expect(out).toContain('"artifacts"');
+    expect(out).toContain('"signals"');
+    expect(out).toContain('"summary"');
+    expect(out).toContain("Complete the current step, write report.json, then stop. 完成当前 step 后停止.");
+    expect(out).not.toContain("{{stopRequirement}}");
+  });
+
+  it("permission boundary template renders conditional lines correctly (T-TEMPLATE-6)", () => {
+    const readOnly = buildAgentPrompt(
+      makeContextBundle({
+        permissions: { contents: "read", edits: "none", workflow_state: "none", commands: "none" },
+        repositoryWorkspace: { mode: "read-only" },
+      }),
+    );
+    expect(readOnly).toContain("This job operates in read-only mode.");
+    expect(readOnly).not.toContain("{{modePermissionLine}}");
+    expect(readOnly).not.toContain("{{contentReadLine}}");
+    expect(readOnly).not.toContain("{{commandsLine}}");
+  });
+});
+

@@ -6,9 +6,11 @@
  * WF-P5-PROMPT Step 2.
  */
 
+import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { posix, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type {
   ArtifactSummary,
@@ -187,6 +189,43 @@ const PROMPT_PACKET_BLOCK_ORDER: readonly PromptBlockType[] = [
   "context",
   "output",
 ];
+
+// ---------------------------------------------------------------------------
+// Template rendering
+// ---------------------------------------------------------------------------
+
+function renderTemplate(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
+    const value = vars[key];
+    return value !== undefined ? value : `{{${key}}}`;
+  });
+}
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const TEMPLATES_DIR = join(__dirname, "templates");
+
+const TEMPLATE_NAMES = [
+  "system-prompt",
+  "task-prompt",
+  "step-prompt",
+  "step-prompt-fallback",
+  "output-contract",
+  "output-contract-lines",
+  "context-block",
+  "permission-boundary",
+] as const;
+
+type TemplateName = (typeof TEMPLATE_NAMES)[number];
+
+function loadTemplates(): Record<TemplateName, string> {
+  const templates = {} as Record<TemplateName, string>;
+  for (const name of TEMPLATE_NAMES) {
+    templates[name] = readFileSync(join(TEMPLATES_DIR, `${name}.md`), "utf-8");
+  }
+  return templates;
+}
+
+const TEMPLATES: Record<TemplateName, string> = loadTemplates();
 
 // ---------------------------------------------------------------------------
 // Packet construction and rendering
@@ -415,15 +454,13 @@ function buildAgentSystemPrompt(bundle: ContextBundle): AgentSystemPrompt {
     "Large logs, diffs, and generated files should be referenced as artifacts instead of pasted into report.json.",
     ...renderPermissionBoundaryLines(bundle),
   ];
-  const content = [
+  const invariantsLines = invariants.map((line) => `- ${line}`).join("\n");
+  const boundariesLines = boundaries.map((line) => `- ${line}`).join("\n");
+  const content = renderTemplate(TEMPLATES["system-prompt"], {
     identity,
-    "",
-    "Global invariants:",
-    ...invariants.map((line) => `- ${line}`),
-    "",
-    "Capability and permission boundaries:",
-    ...boundaries.map((line) => `- ${line}`),
-  ].join("\n");
+    invariantsLines,
+    boundariesLines,
+  });
 
   return {
     block: {
@@ -450,13 +487,7 @@ function buildRunTaskPrompt(bundle: ContextBundle): RunTaskPrompt {
     : fromTaskInput !== undefined || fromGoalInput !== undefined
       ? "step.input"
       : "generated";
-  const content = [
-    "Overall run task:",
-    "",
-    task,
-    "",
-    "This task prompt is stable for the run. Do not let the step prompt replace or dilute the overall task.",
-  ].join("\n");
+  const content = renderTemplate(TEMPLATES["task-prompt"], { task });
 
   return {
     block: {
@@ -474,13 +505,15 @@ function buildRunTaskPrompt(bundle: ContextBundle): RunTaskPrompt {
 
 function buildWorkflowStepPrompt(bundle: ContextBundle): WorkflowStepPrompt {
   if (bundle.primaryPrompt !== undefined) {
-    const content = [
-      `Current workflow scope: job "${bundle.jobId}", step "${bundle.stepId}", attempt ${bundle.attempt}.`,
-      `Primary prompt source: ${bundle.primaryPrompt.source} -> ${bundle.primaryPrompt.id}.`,
-      `Primary prompt path: ${bundle.primaryPrompt.path}.`,
-      "",
-      bundle.primaryPrompt.content.trimEnd(),
-    ].join("\n");
+    const content = renderTemplate(TEMPLATES["step-prompt"], {
+      jobId: bundle.jobId,
+      stepId: bundle.stepId,
+      attempt: String(bundle.attempt),
+      promptSource: bundle.primaryPrompt.source,
+      promptId: bundle.primaryPrompt.id,
+      promptPath: bundle.primaryPrompt.path,
+      promptContent: bundle.primaryPrompt.content.trimEnd(),
+    });
 
     return {
       block: {
@@ -499,11 +532,11 @@ function buildWorkflowStepPrompt(bundle: ContextBundle): WorkflowStepPrompt {
     };
   }
 
-  const content = [
-    `Current workflow scope: job "${bundle.jobId}", step "${bundle.stepId}", attempt ${bundle.attempt}.`,
-    "",
-    "No primary Skill Pack prompt was resolved for this step. Use the task prompt, context blocks, and output contract to complete only the current step.",
-  ].join("\n");
+  const content = renderTemplate(TEMPLATES["step-prompt-fallback"], {
+    jobId: bundle.jobId,
+    stepId: bundle.stepId,
+    attempt: String(bundle.attempt),
+  });
 
   return {
     block: {
@@ -660,12 +693,12 @@ function buildOutputContract(bundle: ContextBundle, reportPath: string): OutputC
     "Do not place full large artifact contents in the prompt or report JSON.",
   ];
   const stopRequirement = "Complete the current step, write report.json, then stop. 完成当前 step 后停止.";
-  const content = [
-    `Canonical report path: ${reportPath}`,
-    `Required output keys: ${requiredOutputs.length > 0 ? requiredOutputs.join(", ") : "(none declared)"}`,
-    `Allowed signals: ${allowedSignals.length > 0 ? allowedSignals.join(", ") : "(none)"}`,
+  const content = renderTemplate(TEMPLATES["output-contract"], {
+    reportPath,
+    requiredOutputs: requiredOutputs.length > 0 ? requiredOutputs.join(", ") : "(none declared)",
+    allowedSignals: allowedSignals.length > 0 ? allowedSignals.join(", ") : "(none)",
     stopRequirement,
-  ].join("\n");
+  });
 
   return {
     block: {
@@ -732,93 +765,52 @@ function renderPromptPacketBlockContent(packet: PromptPacket, type: PromptBlockT
 }
 
 function renderContextBlockLines(context: ContextBlock[]): string[] {
-  const lines: string[] = [];
   if (context.length === 0) {
-    lines.push("(none)");
-    lines.push("");
-    return lines;
+    return ["(none)", ""];
   }
 
+  const lines: string[] = [];
   for (const block of context) {
-    lines.push(`### ${block.id}`);
-    lines.push("");
-    lines.push(`- type: ${block.type}`);
-    lines.push(`- source: ${block.source}`);
-    lines.push(`- priority: ${block.priority}`);
-    lines.push(`- freshness: ${block.freshness}`);
+    let extraLines = "";
     if (block.artifactRef !== undefined) {
-      lines.push(`- artifact ref: ${block.artifactRef}`);
+      extraLines += `- artifact ref: ${block.artifactRef}\n`;
     }
     if (block.path !== undefined) {
-      lines.push(`- path: \`${block.path}\``);
+      extraLines += `- path: \`${block.path}\`\n`;
     }
-    lines.push(`- summary: ${block.summary}`);
-    lines.push("");
+    const rendered = renderTemplate(TEMPLATES["context-block"], {
+      id: block.id,
+      type: block.type,
+      source: block.source,
+      priority: String(block.priority),
+      freshness: block.freshness,
+      extraLines,
+      summary: block.summary,
+    });
+    lines.push(...rendered.split("\n"));
   }
 
   return lines;
 }
 
 function renderOutputContractLines(output: OutputContract): string[] {
-  const lines: string[] = [];
-  lines.push("Write your report to:");
-  lines.push("");
-  lines.push(`  \`${output.reportPath}\``);
-  lines.push("");
-  lines.push("This is the canonical step artifact path. Writing to any other location will cause the Engine to reject the report.");
-  lines.push("This is a runtime artifact file. Writing it does not modify workflow state or repository code; the Engine reads it and owns all state transitions.");
-  lines.push("");
-
-  lines.push("### Required Outputs");
-  lines.push("");
-  if (output.requiredOutputs.length === 0) {
-    lines.push("(none declared)");
-  } else {
-    for (const key of output.requiredOutputs) {
-      lines.push(`- \`${key}\``);
-    }
-  }
-  lines.push("");
-
-  lines.push("### Allowed Signals");
-  lines.push("");
-  if (output.allowedSignals.length === 0) {
-    lines.push("(none)");
-  } else {
-    for (const signal of output.allowedSignals) {
-      lines.push(`- \`${signal}\``);
-    }
-  }
-  lines.push("");
-
-  lines.push("### Artifact Rules");
-  lines.push("");
-  for (const rule of output.artifactRules) {
-    lines.push(`- ${rule}`);
-  }
-  lines.push("");
-
-  lines.push("### Report Schema");
-  lines.push("");
-  lines.push("The file must be valid JSON with exactly these required top-level fields:");
-  lines.push("");
-  lines.push("```json");
-  lines.push("{");
-  lines.push(`  "outputs": {},`);
-  lines.push(`  "artifacts": [],`);
-  lines.push(`  "signals": [],`);
-  lines.push(`  "summary": ""`);
-  lines.push("}");
-  lines.push("```");
-  lines.push("");
-  lines.push("- `\"outputs\"`: current step output values.");
-  lines.push("- `\"artifacts\"`: artifact references for large outputs.");
-  lines.push("- `\"signals\"`: structured workflow-change requests from the allowed list above.");
-  lines.push("- `\"summary\"`: short execution summary.");
-  lines.push("");
-  lines.push(output.stopRequirement);
-  lines.push("");
-  return lines;
+  const requiredOutputsLines =
+    output.requiredOutputs.length === 0
+      ? "(none declared)"
+      : output.requiredOutputs.map((key) => `- \`${key}\``).join("\n");
+  const allowedSignalsLines =
+    output.allowedSignals.length === 0
+      ? "(none)"
+      : output.allowedSignals.map((signal) => `- \`${signal}\``).join("\n");
+  const artifactRulesLines = output.artifactRules.map((rule) => `- ${rule}`).join("\n");
+  const rendered = renderTemplate(TEMPLATES["output-contract-lines"], {
+    reportPath: output.reportPath,
+    requiredOutputsLines,
+    allowedSignalsLines,
+    artifactRulesLines,
+    stopRequirement: output.stopRequirement,
+  });
+  return [...rendered.split("\n"), ""];
 }
 
 function normalizeEmbeddedMarkdownHeadings(markdown: string): string {
@@ -928,27 +920,33 @@ function canModifyRepositoryFiles(
 }
 
 function renderPermissionBoundaryLines(bundle: ContextBundle): string[] {
-  const lines: string[] = [];
   const workspaceMode = getWorkspaceMode(bundle);
   const permissions = bundle.permissions as PermissionSet;
 
+  let modePermissionLine: string;
   if (workspaceMode === "read-only") {
-    lines.push("This job operates in read-only mode. You must not modify files in the repository.");
+    modePermissionLine = "This job operates in read-only mode. You must not modify files in the repository.";
   } else if (canModifyRepositoryFiles(permissions, workspaceMode)) {
-    lines.push("This job may modify repository files according to the task.");
+    modePermissionLine = "This job may modify repository files according to the task.";
   } else {
-    lines.push("This job does not grant repository file modifications unless the workflow explicitly allows them.");
+    modePermissionLine = "This job does not grant repository file modifications unless the workflow explicitly allows them.";
   }
 
-  if (permissions["contents"] === "read") {
-    lines.push("Repository contents may be read for this step.");
-  }
-  if (permissions["commands"] === "none") {
-    lines.push("Commands are not granted for this step.");
-  }
+  const contentReadLine =
+    permissions["contents"] === "read"
+      ? "Repository contents may be read for this step."
+      : "";
+  const commandsLine =
+    permissions["commands"] === "none"
+      ? "Commands are not granted for this step."
+      : "";
 
-  lines.push("Writing report.json to the canonical runtime artifact path is allowed and required.");
-  return lines;
+  const rendered = renderTemplate(TEMPLATES["permission-boundary"], {
+    modePermissionLine,
+    contentReadLine,
+    commandsLine,
+  });
+  return rendered.split("\n").filter((line) => line.length > 0);
 }
 
 function workspaceModeSummary(bundle: ContextBundle): string {

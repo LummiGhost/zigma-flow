@@ -200,8 +200,8 @@ const TEMPLATE_PLACEHOLDERS: Record<TemplateName, readonly string[]> = {
   "task-prompt": ["task"],
   "step-prompt": ["jobId", "stepId", "attempt", "promptSource", "promptId", "promptPath", "promptContent"],
   "step-prompt-fallback": ["jobId", "stepId", "attempt"],
-  "output-contract": ["reportPath", "requiredOutputs", "allowedSignals", "stopRequirement"],
-  "output-contract-lines": ["reportPath", "requiredOutputsLines", "allowedSignalsLines", "artifactRulesLines", "stopRequirement"],
+  "output-contract": ["reportPath", "requiredOutputs", "requiredArtifacts", "allowedSignals", "stopRequirement"],
+  "output-contract-lines": ["reportPath", "requiredOutputsLines", "requiredArtifactsLines", "allowedSignalsLines", "artifactRulesLines", "stopRequirement"],
   "context-block": ["id", "type", "source", "priority", "freshness", "extraLines", "summary"],
   "permission-boundary": ["modePermissionLine", "contentReadLine", "commandsLine"],
 };

@@ -115,8 +115,12 @@ jobs:
         with:
           task: "\${{ inputs.task }}"
         outputs:
-          files: {}
+          existing_files: {}
+          new_files: {}
+          test_files: {}
           modules: {}
+          risk_areas: {}
+          rationale: {}
         expose:
           skills:
             - code
@@ -157,6 +161,10 @@ jobs:
         outputs:
           plan_summary: {}
           steps: {}
+          risks: {}
+          validation_commands: {}
+          contracts_to_preserve: {}
+          out_of_scope: {}
         expose:
           skills:
             - code
@@ -239,7 +247,12 @@ jobs:
           task: "\${{ inputs.task }}"
         outputs:
           verdict: {}
-          issues: {}
+          checked_files: {}
+          checked_artifacts: {}
+          validation_evidence: {}
+          findings: {}
+          accepted_risks: {}
+          non_blocking_improvements: {}
         expose:
           skills:
             - code
@@ -258,6 +271,7 @@ jobs:
         outputs:
           final_summary: {}
           remaining_risks: {}
+          summary_artifact: {}
         expose:
           skills:
             - code
@@ -362,6 +376,10 @@ jobs:
         prompt: summarize
         with:
           task: "\${{ inputs.task }}"
+        outputs:
+          final_summary: {}
+          remaining_risks: {}
+          summary_artifact: {}
         expose:
           skills:
             - code
@@ -694,7 +712,7 @@ result scoped to files or modules the implement step is likely to need.
 - \`risk_areas\`: files or modules that carry higher change risk.
 - \`rationale\`: why these areas are relevant.
 
-Code-map should identify the current code surface only. Do not propose specific new files unless they are clearly implied by the task (and even then, mark them under proposed_files not existing_files).
+Code-map should identify the current code surface only. Do not propose specific new files unless they are clearly implied by the task (and even then, mark them under new_files not existing_files).
 `;
 }
 

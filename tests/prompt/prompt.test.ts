@@ -32,6 +32,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -49,6 +50,7 @@ import {
   buildAgentPrompt,
   buildPromptPacket,
   renderPromptPacket,
+  renderTemplate,
   validatePromptPacket,
   validatePromptHandoff,
   writePromptArtifact,
@@ -581,8 +583,8 @@ describe("buildAgentPrompt — section rendering", () => {
     expect(out).toContain("rules");
     expect(out).toContain("layout");
     expect(out).toContain("path: `knowledge/rules.md`");
-    expect(out).toContain("required: read before starting this step");
-    expect(out).toContain("optional: consult for repository structure");
+    expect(out).toContain("required (path-only — content is not included in this prompt): read before starting this step");
+    expect(out).toContain("optional (path-only — content is not included in this prompt): consult for repository structure");
     expect(out).toContain("implement-by-plan");
     expect(out).toContain("Primary step prompt rendered");
     expect(out).not.toContain("Reference prompt only");
@@ -1554,6 +1556,28 @@ describe("Template loading and rendering", () => {
     expect(readOnly).not.toContain("{{modePermissionLine}}");
     expect(readOnly).not.toContain("{{contentReadLine}}");
     expect(readOnly).not.toContain("{{commandsLine}}");
+  });
+
+  it("throws on unknown placeholder in template (Issue #70)", () => {
+    expect(() =>
+      renderTemplate("Hello {{name}}", { name: "world" }, "system-prompt"),
+    ).toThrow("contains unknown placeholder");
+  });
+
+  it("throws on unresolved placeholder after rendering (Issue #70)", () => {
+    // When a variable value contains {{...}} that wasn't in the original template,
+    // it gets flagged as unresolved after rendering.
+    expect(() =>
+      renderTemplate("Hello {{task}}", { task: "still {{unresolved}}" }, "task-prompt"),
+    ).toThrow("has unresolved placeholder");
+  });
+
+  it("reports friendly error when template file is missing (Issue #71)", () => {
+    for (const name of ["system-prompt", "task-prompt", "step-prompt", "step-prompt-fallback",
+                         "output-contract", "output-contract-lines", "context-block", "permission-boundary"]) {
+      const filePath = join(__dirname, "../../src/prompt/templates", `${name}.md`);
+      expect(existsSync(filePath), `Missing template: ${name}.md`).toBe(true);
+    }
   });
 });
 

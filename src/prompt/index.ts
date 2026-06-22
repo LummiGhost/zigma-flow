@@ -238,8 +238,8 @@ export function renderTemplate(template: string, vars: Record<string, string>, t
     return value !== undefined ? value : `{{${key}}}`;
   });
 
-  // Check for unresolved placeholders
-  const unresolved = [...result.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1]!);
+  // Check for unresolved placeholders (only known template placeholders, not arbitrary {{...}} from user content)
+  const unresolved = placeholdersInTemplate.filter(p => result.includes(`{{${p}}}`));
   if (unresolved.length > 0) {
     throw new Error(
       `Template "${templateName}" has unresolved placeholder(s) after rendering: ${unresolved.join(", ")}. ` +

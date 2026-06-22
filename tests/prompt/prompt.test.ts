@@ -1564,11 +1564,18 @@ describe("Template loading and rendering", () => {
     ).toThrow("contains unknown placeholder");
   });
 
-  it("throws on unresolved placeholder after rendering (Issue #70)", () => {
-    // When a variable value contains {{...}} that wasn't in the original template,
-    // it gets flagged as unresolved after rendering.
+  it("does not throw when user task text contains {{placeholder}} syntax (Issue #79)", () => {
+    // User-provided content (like task text) may legitimately contain {{...}}
     expect(() =>
-      renderTemplate("Hello {{task}}", { task: "still {{unresolved}}" }, "task-prompt"),
+      renderTemplate("Hello {{task}}", { task: "about {{runId}} and {{foo}}" }, "task-prompt"),
+    ).not.toThrow();
+  });
+
+  it("throws when a known template placeholder remains unresolved after rendering", () => {
+    // When a variable key exists but its value is undefined, the placeholder
+    // stays in the output and the post-render check must catch it.
+    expect(() =>
+      renderTemplate("Hello {{identity}}", { identity: undefined as unknown as string }, "system-prompt"),
     ).toThrow("has unresolved placeholder");
   });
 

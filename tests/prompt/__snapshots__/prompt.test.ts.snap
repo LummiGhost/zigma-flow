@@ -155,7 +155,7 @@ Create an implementation plan from the task description and upstream context.
 - priority: 70
 - freshness: static
 - path: \`knowledge/coding-guidelines.md\`
-- summary: required: read before starting this step
+- summary: required (path-only — content is not included in this prompt): read before starting this step
 
 
 ### knowledge-code-workflow-guide
@@ -165,7 +165,7 @@ Create an implementation plan from the task description and upstream context.
 - priority: 70
 - freshness: static
 - path: \`knowledge/workflow-guide.md\`
-- summary: required: report schema and workflow DAG reference
+- summary: required (path-only — content is not included in this prompt): report schema and workflow DAG reference
 
 
 ### prompt-code-plan
@@ -347,7 +347,7 @@ Review the implementation for correctness and quality.
 - priority: 70
 - freshness: static
 - path: \`knowledge/coding-guidelines.md\`
-- summary: required: read before starting this step
+- summary: required (path-only — content is not included in this prompt): read before starting this step
 
 
 ### prompt-code-review

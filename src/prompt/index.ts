@@ -207,13 +207,14 @@ const TEMPLATE_PLACEHOLDERS: Record<TemplateName, readonly string[]> = {
 };
 
 export function renderTemplate(template: string, vars: Record<string, string>, templateName: string): string {
-  const allowed = new Set(TEMPLATE_PLACEHOLDERS[templateName as TemplateName]);
-  if (!allowed) {
+  const allowedList = TEMPLATE_PLACEHOLDERS[templateName as TemplateName];
+  if (!allowedList) {
     throw new Error(`Unknown template: ${templateName}`);
   }
+  const allowed = new Set(allowedList);
 
   // Check for unknown placeholders in the template
-  const placeholdersInTemplate = [...template.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1]);
+  const placeholdersInTemplate = [...template.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1]!);
   const unknownPlaceholders = placeholdersInTemplate.filter(p => !allowed.has(p));
   if (unknownPlaceholders.length > 0) {
     throw new Error(
@@ -238,7 +239,7 @@ export function renderTemplate(template: string, vars: Record<string, string>, t
   });
 
   // Check for unresolved placeholders
-  const unresolved = [...result.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1]);
+  const unresolved = [...result.matchAll(/\{\{(\w+)\}\}/g)].map(m => m[1]!);
   if (unresolved.length > 0) {
     throw new Error(
       `Template "${templateName}" has unresolved placeholder(s) after rendering: ${unresolved.join(", ")}. ` +

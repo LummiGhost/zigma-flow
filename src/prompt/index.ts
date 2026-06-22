@@ -577,7 +577,7 @@ function buildContextBlocks(bundle: ContextBundle): ContextBlock[] {
   });
 
   for (const artifact of bundle.artifacts as ArtifactSummary[]) {
-    if (artifact.kind.startsWith("prompt_packet_")) continue;
+    if (artifact.kind === "prompt" || artifact.kind.startsWith("prompt_packet_")) continue;
     const block: ContextBlock = {
       id: `artifact-${stableIdFragment(artifact.id)}`,
       type: "artifact-summary",

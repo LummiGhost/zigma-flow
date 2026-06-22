@@ -60,6 +60,10 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 
 (none declared)
 
+### Required Artifacts
+
+(none declared)
+
 ### Allowed Signals
 
 (none)
@@ -184,6 +188,10 @@ This is the canonical step artifact path. Writing to any other location will cau
 This is a runtime artifact file. Writing it does not modify workflow state or repository code; the Engine reads it and owns all state transitions.
 
 ### Required Outputs
+
+(none declared)
+
+### Required Artifacts
 
 (none declared)
 
@@ -365,6 +373,10 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 
 (none declared)
 
+### Required Artifacts
+
+(none declared)
+
 ### Allowed Signals
 
 - \`review_rejected\`
@@ -500,6 +512,10 @@ This is the canonical step artifact path. Writing to any other location will cau
 This is a runtime artifact file. Writing it does not modify workflow state or repository code; the Engine reads it and owns all state transitions.
 
 ### Required Outputs
+
+(none declared)
+
+### Required Artifacts
 
 (none declared)
 

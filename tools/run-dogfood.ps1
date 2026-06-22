@@ -11,14 +11,36 @@
 # All artifacts copied to <TempStepsDir>/<label>/ for review
 
 param(
+    [ValidatePattern('^\d{8}-\d{4}$')]
     [string]$RunId = "20260622-0002",
+
+    [string]$ProjectDir = $null,
+
+    [string]$TempStepsDir = $null,
+
+    # Default points to the original author's DeepSeek configuration.
+    # Change this to your own module path or leave empty to use the default
+    # Claude configuration without a custom backend module.
+    [string]$BackendModulePath = "C:\Users\eadder\.claude\deepseek_api.psm1",
+
+    # When set, skips all Claude Code invocations (agent steps only do prompt
+    # generation and artifact copying).  Useful for reviewers who want to
+    # inspect prompts and run CLI steps without the DeepSeek/Claude backend.
+    [switch]$SkipAgent,
+
     [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
 
-$ProjectDir = "D:\zigma\zigma-flow"
-$TempStepsDir = "$ProjectDir\docs\temp\dogfood-20260622-prompt-opt\steps"
+if (-not $ProjectDir) {
+    # Script lives in tools/ — repo root is two levels up
+    $ProjectDir = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+}
+if (-not $TempStepsDir) {
+    $runDate = $RunId -replace '-.*$', ''
+    $TempStepsDir = Join-Path $ProjectDir "docs\temp\dogfood-${runDate}-prompt-opt\steps"
+}
 $RunDir = "$ProjectDir\.zigma-flow\runs\$RunId"
 
 function Write-Phase { param([string]$Msg) Write-Host "`n===[ $Msg ]===" -ForegroundColor Cyan }
@@ -154,9 +176,18 @@ function Invoke-AgentStep {
     # 2. Copy artifacts to temp dir (before claude runs)
     Copy-StepArtifacts -JobId $JobId -Label $Label -Attempt $Attempt
 
-    # 3. Switch to DeepSeek model
-    Import-Module -Name C:\Users\eadder\.claude\deepseek_api.psm1 -Force
-    Write-Host "  Model: $env:ANTHROPIC_MODEL  URL: $env:ANTHROPIC_BASE_URL" -ForegroundColor DarkGray
+    if ($SkipAgent) {
+        Write-Warn "[SkipAgent] Skipping Claude Code invocation for $Label"
+        return
+    }
+
+    # 3. Load the backend module (if configured)
+    if ($BackendModulePath -and (Test-Path $BackendModulePath)) {
+        Import-Module -Name $BackendModulePath -Force
+        Write-Host "  Model: $env:ANTHROPIC_MODEL  URL: $env:ANTHROPIC_BASE_URL" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  Using default Claude configuration (no custom backend module)" -ForegroundColor DarkGray
+    }
 
     # 4. Call Claude Code with the generated prompt
     $promptFile = "$RunDir\current-step.md"

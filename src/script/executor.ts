@@ -31,6 +31,7 @@ import type { RouterAction } from "../workflow/index.js";
 import { WorkflowError, StateError, SkillPackError } from "../utils/index.js";
 import { artifactStepDir, artifactId, appendArtifactIndex, artifactFileRelativePath } from "../artifact/index.js";
 import { applyRoutingAction } from "../engine/routing.js";
+import { computeReadyJobs } from "../dag/index.js";
 
 // ---------------------------------------------------------------------------
 // ExecuteScriptStepOpts
@@ -420,8 +421,8 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       payload: { job_id: jobId, attempt },
     });
 
-    // Write final state snapshot: job running → completed
-    const completedState: RunState = {
+    // Write final state snapshot: job running → completed, then propagate readiness
+    let finalState: RunState = {
       ...runningState,
       last_event_id: jobCompletedId,
       jobs: {
@@ -432,7 +433,75 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         },
       },
     };
-    await stateStore.writeSnapshot(runDir, completedState);
+
+    // Propagate readiness to downstream jobs whose needs are now all satisfied
+    const completedJobIds = new Set<string>(
+      Object.entries(finalState.jobs)
+        .filter(([, js]) => js.status === "completed")
+        .map(([id]) => id)
+    );
+    const activeJobIds = new Set<string>(
+      Object.keys(finalState.jobs).filter(
+        (id) => !completedJobIds.has(id) && finalState.jobs[id]!.status !== "waiting"
+      )
+    );
+    const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds);
+
+    for (const readyId of nowReadyIds) {
+      const waitingJobState = finalState.jobs[readyId];
+      if (waitingJobState?.status !== "waiting") continue;
+
+      const jobReadyId = getNextEventId();
+      await eventWriter.appendEvent(runDir, {
+        id: jobReadyId,
+        run_id: runId,
+        type: "job_ready",
+        timestamp: clock.now(),
+        producer: "engine",
+        job: null,
+        step: null,
+        attempt: null,
+        payload: { job_id: readyId },
+      });
+
+      finalState = {
+        ...finalState,
+        last_event_id: jobReadyId,
+        jobs: {
+          ...finalState.jobs,
+          [readyId]: { ...waitingJobState, status: "ready" as const },
+        },
+      };
+    }
+
+    // Emit run_completed if all non-inactive jobs are done
+    const allNonInactiveCompleted = Object.values(finalState.jobs).every(
+      (js) => js.status === "completed" || js.status === "inactive"
+    );
+    const hasCompletedJob = Object.values(finalState.jobs).some(
+      (js) => js.status === "completed"
+    );
+    if (allNonInactiveCompleted && hasCompletedJob) {
+      const runCompletedId = getNextEventId();
+      await eventWriter.appendEvent(runDir, {
+        id: runCompletedId,
+        run_id: runId,
+        type: "run_completed",
+        timestamp: clock.now(),
+        producer: "engine",
+        job: null,
+        step: null,
+        attempt: null,
+        payload: {},
+      });
+      finalState = {
+        ...finalState,
+        last_event_id: runCompletedId,
+        status: "completed",
+      };
+    }
+
+    await stateStore.writeSnapshot(runDir, finalState);
   } else {
     // ── 10b. Failure path ──────────────────────────────────────────────────
 

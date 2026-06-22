@@ -199,13 +199,14 @@ async function writeAgentReport(
   jobId: string,
   attempt: number,
   stepId: string,
-  signals: Array<{ type: string; reason?: string }> = []
+  signals: Array<{ type: string; reason?: string }> = [],
+  extraArtifacts: string[] = [],
 ): Promise<void> {
   const dir = artifactStepDir(runDir, jobId, attempt, stepId);
   await mkdir(dir, { recursive: true });
   const report = {
     outputs: { summary: `${jobId} completed` },
-    artifacts: [],
+    artifacts: extraArtifacts,
     signals,
     summary: `${jobId} step done`,
   };
@@ -226,7 +227,8 @@ async function runAgentJob(
   stepId: string,
   wfJobs: Record<string, WfJobDesc>,
   clock: Clock,
-  signals: Array<{ type: string; reason?: string }> = []
+  signals: Array<{ type: string; reason?: string }> = [],
+  extraArtifacts: string[] = [],
 ): Promise<void> {
   await promoteReadyJobs(runDir, wfJobs);
 
@@ -237,7 +239,7 @@ async function runAgentJob(
     attempt,
   });
 
-  await writeAgentReport(runDir, jobId, attempt, stepId, signals);
+  await writeAgentReport(runDir, jobId, attempt, stepId, signals, extraArtifacts);
 
   await acceptAgentReport({ runDir, runId, jobId, clock });
 }
@@ -479,7 +481,7 @@ describe("TC-DOGFOOD-3: full happy-path run", () => {
       expect((await readStateSnapshot(runDir)).jobs["review"]!.status).toBe("completed");
 
       // 10. summarize (needs: review) — agent step id: "summarize"
-      await runAgentJob(runDir, runId, "summarize", "summarize", wfJobs, clock);
+      await runAgentJob(runDir, runId, "summarize", "summarize", wfJobs, clock, [], ["summary.md"]);
       expect((await readStateSnapshot(runDir)).jobs["summarize"]!.status).toBe("completed");
 
       // Final assertions: all jobs except architecture-design are "completed"
@@ -643,7 +645,7 @@ describe("TC-DOGFOOD-5: needs_architecture_design signal activates architecture-
       expect((await readStateSnapshot(runDir)).jobs["review"]!.status).toBe("completed");
 
       // 10. summarize — agent step "summarize"
-      await runAgentJob(runDir, runId, "summarize", "summarize", wfJobs, clock);
+      await runAgentJob(runDir, runId, "summarize", "summarize", wfJobs, clock, [], ["summary.md"]);
       expect((await readStateSnapshot(runDir)).jobs["summarize"]!.status).toBe("completed");
 
       // Final assertions: ALL 10 jobs completed (including architecture-design this time)

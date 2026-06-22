@@ -272,6 +272,8 @@ jobs:
           final_summary: {}
           remaining_risks: {}
           summary_artifact: {}
+        required_artifacts:
+          - summary.md
         expose:
           skills:
             - code

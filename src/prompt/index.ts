@@ -105,6 +105,7 @@ export interface OutputContract {
     requiredTopLevelFields: ["outputs", "artifacts", "signals", "summary"];
   };
   requiredOutputs: string[];
+  requiredArtifacts?: string[];
   allowedSignals: string[];
   artifactRules: string[];
   stopRequirement: string;
@@ -686,6 +687,7 @@ function buildContextBlocks(bundle: ContextBundle): ContextBlock[] {
 
 function buildOutputContract(bundle: ContextBundle, reportPath: string): OutputContract {
   const requiredOutputs = requiredOutputKeys(bundle);
+  const requiredArtifacts = bundle.required_artifacts;
   const allowedSignals = bundle.signals.map((signal) => signal.id);
   const artifactRules = [
     "Write the Agent report to the canonical report path only.",
@@ -696,6 +698,7 @@ function buildOutputContract(bundle: ContextBundle, reportPath: string): OutputC
   const content = renderTemplate(TEMPLATES["output-contract"], {
     reportPath,
     requiredOutputs: requiredOutputs.length > 0 ? requiredOutputs.join(", ") : "(none declared)",
+    requiredArtifacts: requiredArtifacts !== undefined ? requiredArtifacts.join(", ") : "(none declared)",
     allowedSignals: allowedSignals.length > 0 ? allowedSignals.join(", ") : "(none)",
     stopRequirement,
   });
@@ -714,6 +717,7 @@ function buildOutputContract(bundle: ContextBundle, reportPath: string): OutputC
       requiredTopLevelFields: ["outputs", "artifacts", "signals", "summary"],
     },
     requiredOutputs,
+    ...(requiredArtifacts !== undefined ? { requiredArtifacts } : {}),
     allowedSignals,
     artifactRules,
     stopRequirement,
@@ -798,6 +802,10 @@ function renderOutputContractLines(output: OutputContract): string[] {
     output.requiredOutputs.length === 0
       ? "(none declared)"
       : output.requiredOutputs.map((key) => `- \`${key}\``).join("\n");
+  const requiredArtifactsLines =
+    output.requiredArtifacts !== undefined && output.requiredArtifacts.length > 0
+      ? output.requiredArtifacts.map((ref) => `- \`${ref}\``).join("\n")
+      : "(none declared)";
   const allowedSignalsLines =
     output.allowedSignals.length === 0
       ? "(none)"
@@ -806,6 +814,7 @@ function renderOutputContractLines(output: OutputContract): string[] {
   const rendered = renderTemplate(TEMPLATES["output-contract-lines"], {
     reportPath: output.reportPath,
     requiredOutputsLines,
+    requiredArtifactsLines,
     allowedSignalsLines,
     artifactRulesLines,
     stopRequirement: output.stopRequirement,

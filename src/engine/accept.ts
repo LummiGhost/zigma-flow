@@ -226,6 +226,32 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
 
   const stepDef = wf.jobs[jobId]?.steps.find((s) => s.id === stepId);
 
+  // ── 3b. Validate required artifacts against step definition ────────────────
+  // If the step declares required_artifacts, each must be present in the
+  // report's artifacts array (matched as a path segment or full path, so
+  // "summary.md" does not false-match "not-summary.md" or "old/summary.md.bak").
+
+  if (stepDef?.required_artifacts && stepDef.required_artifacts.length > 0) {
+    const reportArtifactRefs = report.artifacts
+      .filter((a): a is string => typeof a === "string")
+      .map((a) => a);
+
+    for (const required of stepDef.required_artifacts) {
+      const found = reportArtifactRefs.some((a) => {
+        // Match as a path segment: "summary.md" matches ".../summary.md" or "summary.md"
+        // but NOT "not-summary.md" (substring match is rejected).
+        return a === required || a.endsWith("/" + required);
+      });
+      if (!found) {
+        throw new ValidationError(
+          `Required artifact "${required}" not found in report artifacts. ` +
+          `The step requires this artifact to be produced.`,
+          { details: { required, actual: reportArtifactRefs } }
+        );
+      }
+    }
+  }
+
   const normalizedOutputs: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(report.outputs)) {
     const outputDef = stepDef?.outputs?.[key];

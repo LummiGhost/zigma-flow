@@ -1558,6 +1558,56 @@ describe("Template loading and rendering", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Required artifacts — output contract rendering
+// ---------------------------------------------------------------------------
+
+describe("Output contract — required artifacts rendering", () => {
+  it("renders Required Artifacts section with list when bundle declares required_artifacts", () => {
+    const bundle = makeContextBundle({
+      required_artifacts: ["summary.md", "diff.patch"],
+    });
+    const out = buildAgentPrompt(bundle);
+
+    expect(out).toContain("### Required Artifacts");
+    expect(out).toContain("`summary.md`");
+    expect(out).toContain("`diff.patch`");
+    // Confirm the Required Artifacts section contains the listed artifacts
+    // (and not just "(none declared)").
+    expect(out).toContain("summary.md");
+    expect(out).toContain("diff.patch");
+  });
+
+  it("shows (none declared) when bundle has no required_artifacts", () => {
+    const bundle = makeContextBundle(); // no required_artifacts
+    const out = buildAgentPrompt(bundle);
+
+    expect(out).toContain("### Required Artifacts");
+    // The section content is "(none declared)" — verify the heading is
+    // followed by that text. Use whitespace-flexible regex to handle
+    // both \n and \r\n line endings.
+    expect(out).toMatch(/### Required Artifacts\s*\(none declared\)/);
+  });
+
+  it("renders required artifacts in the compact output-contract block content (T-TEMPLATE-7)", () => {
+    const bundle = makeContextBundle({
+      required_artifacts: ["summary.md"],
+    });
+    const packet = buildPromptPacket(bundle);
+
+    // The compact output-contract.md template renders as the block content.
+    expect(packet.output.block.content).toContain("Required artifacts: summary.md");
+    expect(packet.output.block.content).not.toContain("{{requiredArtifacts}}");
+  });
+
+  it("shows (none declared) in compact output-contract when no required artifacts (T-TEMPLATE-8)", () => {
+    const bundle = makeContextBundle(); // no required_artifacts
+    const packet = buildPromptPacket(bundle);
+
+    expect(packet.output.block.content).toContain("Required artifacts: (none declared)");
+    expect(packet.output.block.content).not.toContain("{{requiredArtifacts}}");
+  });
+});
+
 // Golden prompt snapshots — FP-PROMPT-SNAPSHOT (#72)
 // ---------------------------------------------------------------------------
 // These tests capture complete rendered prompts for representative step

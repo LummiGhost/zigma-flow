@@ -127,11 +127,20 @@ jobs:
     workspace:
       mode: read-only
     steps:
-      - id: validate
+      - id: validate-report
         type: check
         uses: zigma/file-exists
         with:
-          file: "."
+          file: "jobs/code-map/attempts/1/steps/map/report.json"
+        on_fail: fail
+      - id: validate-outputs
+        type: check
+        uses: zigma/required-fields
+        with:
+          file: "jobs/code-map/attempts/1/steps/map/report.json"
+          fields:
+            - outputs
+            - summary
         on_fail: fail
 
   plan:

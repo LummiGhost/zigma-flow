@@ -430,6 +430,61 @@ describe("PromptPacket contract", () => {
     expect(JSON.stringify(packet.context)).not.toContain("# full artifact body");
   });
 
+  it("filters prompt and prompt_packet_* artifacts from context blocks (Issue #60)", () => {
+    const packet = buildPromptPacket(
+      makeContextBundle({
+        artifacts: [
+          {
+            id: "artifact://20260608-0001/jobs/plan/attempts/1/steps/draft/current-step",
+            kind: "prompt",
+            path: "jobs/plan/attempts/1/steps/draft/current-step.md",
+            summary: "Plan step prompt",
+            size: 456,
+            content_type: "text/markdown",
+          },
+          {
+            id: "artifact://20260608-0001/jobs/plan/attempts/1/steps/draft/prompt-packet/system",
+            kind: "prompt_packet_system",
+            path: "jobs/plan/attempts/1/steps/draft/prompt-packet/system.md",
+            summary: "System prompt packet block",
+            size: 789,
+            content_type: "text/markdown",
+          },
+          {
+            id: "artifact://20260608-0001/jobs/intake/attempts/1/steps/analyze/report",
+            kind: "agent_report",
+            path: "jobs/intake/attempts/1/steps/analyze/report.json",
+            summary: "Intake summary",
+            size: 123,
+            content_type: "application/json",
+          },
+        ],
+      }),
+    );
+
+    // Prompt artifacts should not appear in context blocks
+    const promptBlocks = packet.context.filter(
+      (b) => b.type === "artifact-summary" && b.artifactRef && b.artifactRef.includes("current-step"),
+    );
+    expect(promptBlocks).toHaveLength(0);
+
+    // prompt_packet_* artifacts should not appear in context blocks
+    const packetBlocks = packet.context.filter(
+      (b) => b.type === "artifact-summary" && b.artifactRef && b.artifactRef.includes("prompt-packet"),
+    );
+    expect(packetBlocks).toHaveLength(0);
+
+    // Other artifact kinds (e.g. agent_report) should still appear
+    const reportBlocks = packet.context.filter(
+      (b) => b.type === "artifact-summary" && b.artifactRef && b.artifactRef.includes("intake"),
+    );
+    expect(reportBlocks).toHaveLength(1);
+    expect(reportBlocks[0]!.type).toBe("artifact-summary");
+    expect(reportBlocks[0]!.source).toBe(
+      "artifact://20260608-0001/jobs/intake/attempts/1/steps/analyze/report",
+    );
+  });
+
   it("renders system-capable backend payloads with system and user separated", () => {
     const packet = buildPromptPacket(makeContextBundle());
     const rendered = renderPromptPacket(packet, { supportsSystemPrompt: true });

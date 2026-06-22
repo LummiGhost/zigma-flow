@@ -946,7 +946,7 @@ function renderPermissionBoundaryLines(bundle: ContextBundle): string[] {
     contentReadLine,
     commandsLine,
   });
-  return rendered.split("\n").filter((line) => line.length > 0);
+  return rendered.replace(/\r\n/g, "\n").split("\n").filter((line) => line.length > 0);
 }
 
 function workspaceModeSummary(bundle: ContextBundle): string {

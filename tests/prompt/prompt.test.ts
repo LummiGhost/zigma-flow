@@ -1557,3 +1557,143 @@ describe("Template loading and rendering", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Golden prompt snapshots — FP-PROMPT-SNAPSHOT (#72)
+// ---------------------------------------------------------------------------
+// These tests capture complete rendered prompts for representative step
+// scenarios. Snapshot changes require intentional review — if you change
+// a template or the renderer, run with --update to regenerate.
+// Targeted unit checks for interpolation edge cases remain in the
+// sections above.
+
+describe("Golden prompt snapshots", () => {
+  it("read-only plan step with primary prompt, knowledge, and signals (T-SNAPSHOT-1)", () => {
+    const bundle = makeContextBundle({
+      runId: "20260622-0001",
+      jobId: "plan",
+      stepId: "plan",
+      attempt: 1,
+      runTask: "Add golden snapshot tests for prompt template regression detection",
+      primaryPrompt: {
+        skill: "code",
+        id: "plan",
+        path: "prompts/plan.md",
+        content: "# Plan Step\n\nCreate an implementation plan from the task description and upstream context.",
+        source: "job.id",
+      },
+      capabilities: {
+        skills: [{ alias: "code", skillId: "zigma.code-change", version: "1.0.0" }],
+        knowledge: [
+          { skill: "code", id: "coding-guidelines", path: "knowledge/coding-guidelines.md", description: "Project coding standards", readPolicy: "required", usage: "read before starting this step" },
+          { skill: "code", id: "workflow-guide", path: "knowledge/workflow-guide.md", description: "Workflow structure reference", readPolicy: "required", usage: "report schema and workflow DAG reference" },
+        ],
+        prompts: [{ skill: "code", id: "plan", path: "prompts/plan.md" }],
+        functions: [],
+        tools: [],
+      },
+      signals: [{ id: "needs_architecture_design", description: "Request architecture design", allowed_from: ["plan"] }],
+      permissions: { contents: "read", edits: "none", workflow_state: "none" },
+      repositoryWorkspace: { mode: "read-only" },
+      artifacts: [],
+      inputs: { task: "Add golden snapshot tests" },
+    });
+    const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
+    expect(prompt).toMatchSnapshot();
+  });
+
+  it("writable implement step with script artifacts (T-SNAPSHOT-2)", () => {
+    const bundle = makeContextBundle({
+      runId: "20260622-0001",
+      jobId: "implement",
+      stepId: "implement",
+      attempt: 1,
+      runTask: "Implement golden snapshot fixture tests",
+      primaryPrompt: {
+        skill: "code",
+        id: "implement",
+        path: "prompts/implement.md",
+        content: "# Implement Step\n\nImplement the change according to the plan.",
+        source: "step.id",
+      },
+      capabilities: {
+        skills: [{ alias: "code", skillId: "zigma.code-change", version: "1.0.0" }],
+        knowledge: [],
+        prompts: [{ skill: "code", id: "implement", path: "prompts/implement.md" }],
+        functions: [{ skill: "code", id: "implement-by-plan", description: "Implement code by plan", inputs: { plan: "string" }, outputs: { changed_files: "array" }, jobs: ["implement"] }],
+        tools: [],
+      },
+      signals: [],
+      permissions: { contents: "read", edits: "write", workflow_state: "none", commands: "none" },
+      artifacts: [
+        { id: "artifact://20260622-0001/jobs/implement/attempts/1/steps/collect-diff/stdout", kind: "script_stdout", path: "jobs/implement/attempts/1/steps/collect-diff/stdout.txt", summary: "git diff output", size: 2048, content_type: "text/plain" },
+      ],
+      upstreamOutputs: { plan: { plan_summary: "Add snapshot tests", steps: ["Create fixtures", "Add test cases", "Regenerate snapshots"] } },
+      inputs: { task: "Add golden snapshot tests" },
+    });
+    const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
+    expect(prompt).toMatchSnapshot();
+  });
+
+  it("review step with check and test artifacts (T-SNAPSHOT-3)", () => {
+    const bundle = makeContextBundle({
+      runId: "20260622-0001",
+      jobId: "review",
+      stepId: "review",
+      attempt: 1,
+      runTask: "Review golden snapshot implementation",
+      primaryPrompt: {
+        skill: "code",
+        id: "review",
+        path: "prompts/review.md",
+        content: "# Review Step\n\nReview the implementation for correctness and quality.",
+        source: "job.id",
+      },
+      capabilities: {
+        skills: [{ alias: "code", skillId: "zigma.code-change", version: "1.0.0" }],
+        knowledge: [{ skill: "code", id: "coding-guidelines", path: "knowledge/coding-guidelines.md", readPolicy: "required", usage: "read before starting this step" }],
+        prompts: [{ skill: "code", id: "review", path: "prompts/review.md" }],
+        functions: [],
+        tools: [],
+      },
+      signals: [
+        { id: "review_rejected", description: "Reject the changes", allowed_from: ["review"] },
+        { id: "needs_architecture_design", description: "Request architecture design", allowed_from: ["review"] },
+      ],
+      permissions: { contents: "read", edits: "none", workflow_state: "none", commands: "none" },
+      repositoryWorkspace: { mode: "read-only" },
+      artifacts: [
+        { id: "artifact://20260622-0001/jobs/static-check/attempts/1/steps/check/stdout", kind: "script_stdout", path: "jobs/static-check/attempts/1/steps/check/stdout.txt", summary: "Typecheck output", size: 512, content_type: "text/plain" },
+        { id: "artifact://20260622-0001/jobs/unit-test/attempts/1/steps/test/stdout", kind: "script_stdout", path: "jobs/unit-test/attempts/1/steps/test/stdout.txt", summary: "Test run output: 423 tests passed", size: 4096, content_type: "text/plain" },
+        { id: "artifact://20260622-0001/jobs/implement/attempts/1/steps/collect-diff/stdout", kind: "script_stdout", path: "jobs/implement/attempts/1/steps/collect-diff/stdout.txt", summary: "Git diff of changes", size: 2048, content_type: "text/plain" },
+      ],
+      upstreamOutputs: {
+        "static-check": { exit_code: 0, stdout: "No type errors found" },
+        "unit-test": { exit_code: 0, stdout: "35 files, 423 tests passed" },
+        implement: { summary: "Added golden snapshot tests", files_changed: ["tests/prompt/prompt.test.ts"] },
+      },
+      inputs: { task: "Review golden snapshot changes" },
+    });
+    const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
+    expect(prompt).toMatchSnapshot();
+  });
+
+  it("no-primary-prompt fallback step (T-SNAPSHOT-4)", () => {
+    const bundle = makeContextBundle({
+      runId: "20260622-0001",
+      jobId: "unknown",
+      stepId: "unknown",
+      attempt: 1,
+      runTask: "Generic task with no primary prompt",
+      capabilities: { skills: [], knowledge: [], prompts: [], functions: [], tools: [] },
+      signals: [],
+      permissions: { contents: "read", edits: "none", workflow_state: "none" },
+      repositoryWorkspace: { mode: "read-only" },
+      artifacts: [],
+      inputs: {},
+    });
+    delete (bundle as unknown as Record<string, unknown>)["primaryPrompt"];
+    const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
+    expect(prompt).toMatchSnapshot();
+  });
+});
+

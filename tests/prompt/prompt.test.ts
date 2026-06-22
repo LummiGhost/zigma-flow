@@ -1566,17 +1566,25 @@ describe("Template loading and rendering", () => {
 
   it("does not throw when user task text contains {{placeholder}} syntax (Issue #79)", () => {
     // User-provided content (like task text) may legitimately contain {{...}}
+    // even when the placeholder name matches a known template variable.
     expect(() =>
       renderTemplate("Hello {{task}}", { task: "about {{runId}} and {{foo}}" }, "task-prompt"),
     ).not.toThrow();
-  });
-
-  it("throws when a known template placeholder remains unresolved after rendering", () => {
-    // When a variable key exists but its value is undefined, the placeholder
-    // stays in the output and the post-render check must catch it.
+    // Value contains the same placeholder name as the template — must not fail.
     expect(() =>
-      renderTemplate("Hello {{identity}}", { identity: undefined as unknown as string }, "system-prompt"),
-    ).toThrow("has unresolved placeholder");
+      renderTemplate("Hello {{task}}", { task: "please document {{task}}" }, "task-prompt"),
+    ).not.toThrow();
+    // promptContent may contain known step-template placeholders.
+    const stepTemplate = 'Current workflow scope: job "{{jobId}}", step "{{stepId}}", attempt {{attempt}}.\n' +
+      "Primary prompt source: {{promptSource}} -> {{promptId}}.\n" +
+      "Primary prompt path: {{promptPath}}.\n\n{{promptContent}}";
+    expect(() =>
+      renderTemplate(stepTemplate, {
+        jobId: "plan", stepId: "plan", attempt: "1",
+        promptSource: "job.id", promptId: "plan", promptPath: "prompts/plan.md",
+        promptContent: "See {{jobId}}/{{stepId}} for the upstream step.",
+      }, "step-prompt"),
+    ).not.toThrow();
   });
 
   it("reports friendly error when template file is missing (Issue #71)", () => {

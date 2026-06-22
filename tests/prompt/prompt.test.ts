@@ -1636,7 +1636,7 @@ describe("Golden prompt snapshots", () => {
       artifacts: [],
       inputs: {},
     });
-    delete (bundle as Record<string, unknown>)["primaryPrompt"];
+    delete (bundle as unknown as Record<string, unknown>)["primaryPrompt"];
     const prompt = buildAgentPrompt(bundle);
     expect(prompt).toMatchSnapshot();
   });

@@ -115,8 +115,12 @@ jobs:
         with:
           task: "\${{ inputs.task }}"
         outputs:
-          files: {}
+          existing_files: {}
+          new_files: {}
+          test_files: {}
           modules: {}
+          risk_areas: {}
+          rationale: {}
         expose:
           skills:
             - code
@@ -157,6 +161,10 @@ jobs:
         outputs:
           plan_summary: {}
           steps: {}
+          risks: {}
+          validation_commands: {}
+          contracts_to_preserve: {}
+          out_of_scope: {}
         expose:
           skills:
             - code
@@ -239,7 +247,12 @@ jobs:
           task: "\${{ inputs.task }}"
         outputs:
           verdict: {}
-          issues: {}
+          checked_files: {}
+          checked_artifacts: {}
+          validation_evidence: {}
+          findings: {}
+          accepted_risks: {}
+          non_blocking_improvements: {}
         expose:
           skills:
             - code
@@ -258,6 +271,7 @@ jobs:
         outputs:
           final_summary: {}
           remaining_risks: {}
+          summary_artifact: {}
         expose:
           skills:
             - code
@@ -362,6 +376,10 @@ jobs:
         prompt: summarize
         with:
           task: "\${{ inputs.task }}"
+        outputs:
+          final_summary: {}
+          remaining_risks: {}
+          summary_artifact: {}
         expose:
           skills:
             - code
@@ -687,9 +705,14 @@ result scoped to files or modules the implement step is likely to need.
 
 ## Step-Specific Outputs
 
-- \`files\`: relevant file paths or globs.
+- \`existing_files\`: file paths or globs already present in the repository that are relevant to the task.
+- \`new_files\`: proposed new files to create (planning decides what to create; code-map only identifies current surface).
+- \`test_files\`: relevant test file paths or globs.
 - \`modules\`: relevant module names or directories.
+- \`risk_areas\`: files or modules that carry higher change risk.
 - \`rationale\`: why these areas are relevant.
+
+Code-map should identify the current code surface only. Do not propose specific new files unless they are clearly implied by the task (and even then, mark them under new_files not existing_files).
 `;
 }
 
@@ -713,7 +736,11 @@ map. Keep the plan reviewable and limited to the current MVP scope.
 
 - \`plan_summary\`: concise plan overview.
 - \`steps\`: ordered implementation steps.
-- \`validation\`: focused commands or checks the implementer should run.
+- \`risks\`: known risks for each implementation step, with severity.
+- \`validation_commands\`: concrete commands the implementer or downstream script jobs should run to verify correctness.
+- \`contracts_to_preserve\`: existing API, schema, or behavioral contracts that must not be broken.
+- \`out_of_scope\`: explicitly list what is NOT included in this plan, to prevent scope creep.
+- \`alternatives_considered\` (optional): alternative approaches and why they were rejected.
 - Signal \`needs_architecture_design\` only when the plan requires an explicit
   architecture decision before implementation.
 `;
@@ -792,12 +819,18 @@ alignment with the plan and coding guidelines.
 ## Step-Specific Outputs
 
 - \`verdict\`: one of:
-- \`approved\` — the change meets quality standards
-- \`rejected\` — the change needs rework; emit \`review_rejected\` signal
-- \`needs_architecture_design\` — architectural changes are required; emit
-  \`needs_architecture_design\` signal
-- \`issues\`: concrete findings, empty when approved.
-- \`risk_notes\`: residual risks or missing validation.
+  - \`approved\` — the change meets quality standards
+  - \`rejected\` — the change needs rework; emit \`review_rejected\` signal
+  - \`needs_architecture_design\` — architectural changes are required; emit
+    \`needs_architecture_design\` signal
+- \`checked_files\`: list of files that were reviewed.
+- \`checked_artifacts\`: upstream artifacts that were consulted (plan, diff, test results, check results).
+- \`validation_evidence\`: concrete evidence from script/check artifacts that supports the verdict.
+- \`findings\`: list of findings with severity (blocking, non_blocking, informational).
+- \`accepted_risks\`: risks that were noted but determined acceptable for this change.
+- \`non_blocking_improvements\`: suggestions for future improvement that do not block approval.
+
+An empty \`findings\` array is only acceptable when \`checked_files\`, \`checked_artifacts\`, and \`validation_evidence\` are all present and non-empty. Even an approved verdict must carry evidence of what was checked.
 `;
 }
 
@@ -819,9 +852,12 @@ implementation work in this step.
 
 ## Step-Specific Outputs
 
-- \`final_summary\`: complete narrative of what changed and why.
-- \`remaining_risks\`: outstanding risks or follow-ups, empty array if none.
-- \`validation_summary\`: validation commands and outcomes available from prior context.
+- \`final_summary\`: complete narrative of what changed and why. Derive validation claims from upstream script/check artifacts (static-check, unit-test), not from Agent inference.
+- \`remaining_risks\`: distinguish between:
+  - \`code_risks\`: risks in the implementation itself (e.g., incomplete coverage, edge cases).
+  - \`runtime_risks\`: workflow or tooling issues discovered during execution (e.g., template bundling gaps, missing dist artifacts).
+  - \`filed_follow_ups\`: GitHub issues already filed for known problems.
+- \`summary_artifact\`: path to a written summary artifact file. Required — do not leave this empty.
 `;
 }
 

@@ -1542,7 +1542,7 @@ describe("Golden prompt snapshots", () => {
       artifacts: [],
       inputs: { task: "Add golden snapshot tests" },
     });
-    const prompt = buildAgentPrompt(bundle);
+    const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
     expect(prompt).toMatchSnapshot();
   });
 
@@ -1575,7 +1575,7 @@ describe("Golden prompt snapshots", () => {
       upstreamOutputs: { plan: { plan_summary: "Add snapshot tests", steps: ["Create fixtures", "Add test cases", "Regenerate snapshots"] } },
       inputs: { task: "Add golden snapshot tests" },
     });
-    const prompt = buildAgentPrompt(bundle);
+    const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
     expect(prompt).toMatchSnapshot();
   });
 
@@ -1618,7 +1618,7 @@ describe("Golden prompt snapshots", () => {
       },
       inputs: { task: "Review golden snapshot changes" },
     });
-    const prompt = buildAgentPrompt(bundle);
+    const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
     expect(prompt).toMatchSnapshot();
   });
 
@@ -1637,7 +1637,7 @@ describe("Golden prompt snapshots", () => {
       inputs: {},
     });
     delete (bundle as unknown as Record<string, unknown>)["primaryPrompt"];
-    const prompt = buildAgentPrompt(bundle);
+    const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
     expect(prompt).toMatchSnapshot();
   });
 });

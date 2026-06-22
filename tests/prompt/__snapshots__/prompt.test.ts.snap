@@ -20,7 +20,6 @@ Capability and permission boundaries:
 - Large logs, diffs, and generated files should be referenced as artifacts instead of pasted into report.json.
 - This job operates in read-only mode. You must not modify files in the repository.
 - Repository contents may be read for this step.
-- 
 - Writing report.json to the canonical runtime artifact path is allowed and required.
 
 ## Task Prompt
@@ -45,10 +44,7 @@ No primary Skill Pack prompt was resolved for this step. Use the task prompt, co
 - source: workflow.workspace
 - priority: 80
 - freshness: current
-- summary: This job operates in read-only mode. You must not modify files in the repository.
- Repository contents may be read for this step.
- 
- Writing report.json to the canonical runtime artifact path is allowed and required.
+- summary: This job operates in read-only mode. You must not modify files in the repository. Repository contents may be read for this step. Writing report.json to the canonical runtime artifact path is allowed and required.
 
 
 ## Output Contract
@@ -117,7 +113,6 @@ Capability and permission boundaries:
 - Large logs, diffs, and generated files should be referenced as artifacts instead of pasted into report.json.
 - This job operates in read-only mode. You must not modify files in the repository.
 - Repository contents may be read for this step.
-- 
 - Writing report.json to the canonical runtime artifact path is allowed and required.
 
 ## Task Prompt
@@ -146,10 +141,7 @@ Create an implementation plan from the task description and upstream context.
 - source: workflow.workspace
 - priority: 80
 - freshness: current
-- summary: This job operates in read-only mode. You must not modify files in the repository.
- Repository contents may be read for this step.
- 
- Writing report.json to the canonical runtime artifact path is allowed and required.
+- summary: This job operates in read-only mode. You must not modify files in the repository. Repository contents may be read for this step. Writing report.json to the canonical runtime artifact path is allowed and required.
 
 
 ### knowledge-code-coding-guidelines
@@ -277,10 +269,7 @@ Review the implementation for correctness and quality.
 - source: workflow.workspace
 - priority: 80
 - freshness: current
-- summary: This job operates in read-only mode. You must not modify files in the repository.
- Repository contents may be read for this step.
- Commands are not granted for this step.
- Writing report.json to the canonical runtime artifact path is allowed and required.
+- summary: This job operates in read-only mode. You must not modify files in the repository. Repository contents may be read for this step. Commands are not granted for this step. Writing report.json to the canonical runtime artifact path is allowed and required.
 
 
 ### artifact--jobs-static-check-attempts-1-steps-check-stdout
@@ -459,10 +448,7 @@ Implement the change according to the plan.
 - source: workflow.workspace
 - priority: 80
 - freshness: current
-- summary: This job may modify repository files according to the task.
- Repository contents may be read for this step.
- Commands are not granted for this step.
- Writing report.json to the canonical runtime artifact path is allowed and required.
+- summary: This job may modify repository files according to the task. Repository contents may be read for this step. Commands are not granted for this step. Writing report.json to the canonical runtime artifact path is allowed and required.
 
 
 ### artifact-s-implement-attempts-1-steps-collect-diff-stdout

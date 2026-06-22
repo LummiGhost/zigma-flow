@@ -9,6 +9,10 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 
 {{requiredOutputsLines}}
 
+### Required Artifacts
+
+{{requiredArtifactsLines}}
+
 ### Allowed Signals
 
 {{allowedSignalsLines}}

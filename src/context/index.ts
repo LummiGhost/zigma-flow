@@ -116,6 +116,7 @@ export interface ContextBundle {
   warnings?: string[];
   inputs: Record<string, string>;
   stepOutputs?: Record<string, unknown>;
+  required_artifacts?: string[];
   artifacts: ArtifactSummary[];
   upstreamOutputs?: Record<string, Record<string, unknown>>;  // completed job id → outputs
   signals: SignalSpec[];
@@ -636,6 +637,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     ...(warnings.length > 0 ? { warnings } : {}),
     inputs: resolvedInputs,
     ...(step.outputs !== undefined ? { stepOutputs: step.outputs } : {}),
+    ...(step.required_artifacts !== undefined ? { required_artifacts: step.required_artifacts } : {}),
     artifacts,
     ...(Object.keys(upstreamOutputs).length > 0 ? { upstreamOutputs } : {}),
     signals,

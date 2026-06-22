@@ -1722,3 +1722,193 @@ describe("acceptAgentReport — signal path activate_job advances source job (T-
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// T-ACCEPT-17: required_artifacts policy — exact matching
+// ---------------------------------------------------------------------------
+
+/**
+ * Workflow with a step that declares required_artifacts: ["summary.md"].
+ */
+const AGENT_REQUIRED_ARTIFACT_YAML = `\
+name: accept-required-artifact
+version: "0.1.0"
+jobs:
+  intake:
+    steps:
+      - id: intake
+        type: agent
+        uses: zigma/intake-skill
+        required_artifacts:
+          - summary.md
+`;
+
+describe("acceptAgentReport — required_artifacts policy (T-ACCEPT-17)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "REJECTS report when required artifact is missing (FP-REQUIRED-ARTIFACT-MISSING)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_REQUIRED_ARTIFACT_YAML,
+        "accept-required-artifact"
+      );
+
+      await setJobState(runDir, "intake", {
+        status: "running",
+        current_step: "intake",
+        attempt: 1,
+      });
+
+      // Report has no artifacts at all — missing required "summary.md"
+      await writeReport(runDir, "intake", 1, "intake", {
+        outputs: { summary: "done" },
+        artifacts: [],
+        signals: [],
+        summary: "intake done",
+      });
+
+      const eventsBefore = await readEventsBytes(runDir);
+      const stateBefore = await readStateBytes(runDir);
+
+      await expect(
+        callAcceptAgentReport({
+          runDir,
+          runId,
+          jobId: "intake",
+          clock: new FakeClock(),
+        })
+      ).rejects.toMatchObject({ kind: "ValidationError" });
+
+      // No disk mutation on validation failure
+      const eventsAfter = await readEventsBytes(runDir);
+      const stateAfter = await readStateBytes(runDir);
+      expect(eventsAfter).toBe(eventsBefore);
+      expect(stateAfter).toBe(stateBefore);
+    }
+  );
+
+  it(
+    "REJECTS substring false-positive match (FP-REQUIRED-ARTIFACT-SUBSTRING)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_REQUIRED_ARTIFACT_YAML,
+        "accept-required-artifact"
+      );
+
+      await setJobState(runDir, "intake", {
+        status: "running",
+        current_step: "intake",
+        attempt: 1,
+      });
+
+      // Report has "not-summary.md" — "summary.md" is NOT a substring of
+      // "not-summary.md", but a naive includes("summary.md") would match
+      // "document-summary.md". This test confirms the match is exact
+      // (no false-positive on "document-summary.md" either).
+      await writeReport(runDir, "intake", 1, "intake", {
+        outputs: { summary: "done" },
+        artifacts: ["not-summary.md"],
+        signals: [],
+        summary: "intake done",
+      });
+
+      const eventsBefore = await readEventsBytes(runDir);
+      const stateBefore = await readStateBytes(runDir);
+
+      await expect(
+        callAcceptAgentReport({
+          runDir,
+          runId,
+          jobId: "intake",
+          clock: new FakeClock(),
+        })
+      ).rejects.toMatchObject({ kind: "ValidationError" });
+
+      // No disk mutation on validation failure
+      const eventsAfter = await readEventsBytes(runDir);
+      const stateAfter = await readStateBytes(runDir);
+      expect(eventsAfter).toBe(eventsBefore);
+      expect(stateAfter).toBe(stateBefore);
+    }
+  );
+
+  it(
+    "ACCEPTS exact artifact ref match when required artifact is present (FP-REQUIRED-ARTIFACT-EXACT)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_REQUIRED_ARTIFACT_YAML,
+        "accept-required-artifact"
+      );
+
+      await setJobState(runDir, "intake", {
+        status: "running",
+        current_step: "intake",
+        attempt: 1,
+      });
+
+      // Report has exactly "summary.md" — should pass
+      await writeReport(runDir, "intake", 1, "intake", {
+        outputs: { summary: "done" },
+        artifacts: ["summary.md"],
+        signals: [],
+        summary: "intake done",
+      });
+
+      await expect(
+        callAcceptAgentReport({
+          runDir,
+          runId,
+          jobId: "intake",
+          clock: new FakeClock(),
+        })
+      ).resolves.toBeUndefined();
+    }
+  );
+
+  it(
+    "ACCEPTS path-segment match when artifact ref ends with /required (FP-REQUIRED-ARTIFACT-PATH)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_REQUIRED_ARTIFACT_YAML,
+        "accept-required-artifact"
+      );
+
+      await setJobState(runDir, "intake", {
+        status: "running",
+        current_step: "intake",
+        attempt: 1,
+      });
+
+      // Report has "jobs/intake/attempts/1/steps/intake/summary.md" — should match
+      // via endsWith("/summary.md")
+      await writeReport(runDir, "intake", 1, "intake", {
+        outputs: { summary: "done" },
+        artifacts: ["jobs/intake/attempts/1/steps/intake/summary.md"],
+        signals: [],
+        summary: "intake done",
+      });
+
+      await expect(
+        callAcceptAgentReport({
+          runDir,
+          runId,
+          jobId: "intake",
+          clock: new FakeClock(),
+        })
+      ).resolves.toBeUndefined();
+    }
+  );
+});

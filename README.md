@@ -61,8 +61,8 @@ intake → code-map → risk-scan → plan ─┬─ [architecture-design?]
 | `plan` | Agent | Create an implementation plan; may emit `needs_architecture_design` |
 | `architecture-design` | Agent | Produce architecture artifact (optional; activated by signal) |
 | `implement` | Agent | Implement the change; up to 3 retry attempts |
-| `static-check` | Script | Run typecheck and lint (replace placeholder with your actual command) |
-| `unit-test` | Script | Run the test suite (replace placeholder with your actual command) |
+| `static-check` | Script | Run typecheck and lint (`pnpm typecheck && pnpm lint` by default) |
+| `unit-test` | Script | Run the test suite (`pnpm test:ci` by default) |
 | `review` | Agent | Review the implementation; may emit `review_rejected` |
 | `summarize` | Agent | Produce a final change summary artifact |
 
@@ -83,7 +83,7 @@ zigma-flow status
 # 3. Generate the prompt for the intake job
 zigma-flow prompt --job intake
 # Output includes the artifact path where report.json must be written,
-# e.g. .zigma-flow/runs/<run-id>/intake/analyze/report.json
+# e.g. .zigma-flow/runs/<run-id>/jobs/intake/attempts/1/steps/analyze/report.json
 
 # 4. Paste the prompt into Claude Code (or another agent).
 #    The agent reads context, does its work, and writes report.json to the shown path.
@@ -129,7 +129,7 @@ After `zigma-flow init`, edit `.zigma-flow/workflows/code-change.yml` to:
 - Add new jobs by declaring them under `jobs:` and setting `needs:` dependencies
 - Change retry limits by updating `retry.max_attempts` on a job
 - Add new signals by declaring them under `signals:` with an `action`
-- Update script steps to run your actual typecheck and test commands (the generated `static-check` and `unit-test` steps contain placeholder `echo` commands)
+- Update script steps if your project uses different validation commands; the generated defaults are `pnpm typecheck && pnpm lint` and `pnpm test:ci`
 
 Skill Pack prompts and knowledge files live in `.zigma-flow/skills/code-change/` and can be edited to match your project's conventions.
 

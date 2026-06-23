@@ -104,7 +104,8 @@ export function renderRunStatus(
   // --- Jobs table (RC-S02) ---
   lines.push("Jobs:");
   for (const [jobId, job] of Object.entries(state.jobs)) {
-    const parts: string[] = [`  ${jobId.padEnd(16)}${job.status}`];
+    const jobColumnWidth = Math.max(16, jobId.length + 2);
+    const parts: string[] = [`  ${jobId.padEnd(jobColumnWidth)}${job.status}`];
     if (job.activation !== undefined) {
       parts.push(`  [activation: ${job.activation}]`);
     }

@@ -170,6 +170,19 @@ describe("renderRunStatus", () => {
     expect(out).toContain("2");
   });
 
+  it("keeps status readable when a job id is wider than the default column", () => {
+    const state = makeState({
+      jobs: {
+        "architecture-design": makeJob("inactive", { activation: "manual" }),
+      },
+    });
+
+    const out = renderRunStatus(state, {});
+
+    expect(out).toContain("architecture-design  inactive");
+    expect(out).not.toContain("architecture-designinactive");
+  });
+
   it("lists waiting jobs with their unfulfilled needs from workflowJobs (T-REND-3, UC-RENDER-3)", () => {
     const state = makeState({
       jobs: {

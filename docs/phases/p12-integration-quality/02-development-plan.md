@@ -22,10 +22,10 @@ project-items: P12.1, P12.2, P12.3, P12.4
 
 **核心验收标准：**
 
-- TC-DOGFOOD-5: `needs_architecture_design` 信号激活 architecture-design optional job 并推进工作流（P12.1.5）。
+- TC-DOGFOOD-5: `needs_architecture_design` 信号激活 architecture-design optional job 并推进工作流（P12.1.5，已覆盖）。
 - package.json 增加 `test:unit`、`test:integration`、`test:e2e` 分类命令（P12.2.1）。
 - `pnpm build && zigma-flow --help` 可正常执行（P12.2.3）。
-- 全部现有测试（376 个）继续通过。
+- 全部现有测试继续通过。
 
 ## 2. 已完成状态分析（P12.1 覆盖度）
 
@@ -35,10 +35,10 @@ project-items: P12.1, P12.2, P12.3, P12.4
 | P12.1.2 validate -> run e2e | ✓ 已覆盖 | TC-DOGFOOD-1, TC-DOGFOOD-2 |
 | P12.1.3 prompt -> report -> next e2e | ✓ 已覆盖 | TC-DOGFOOD-3 |
 | P12.1.4 script/check e2e | ✓ 已覆盖 | TC-DOGFOOD-3 (risk-scan check + static-check/unit-test script) |
-| P12.1.5 signal optional e2e | ✗ 缺失 | **TC-DOGFOOD-5 待补充** |
+| P12.1.5 signal optional e2e | ✓ 已覆盖 | TC-DOGFOOD-5 |
 | P12.1.6 review rejected retry e2e | ✓ 已覆盖 | TC-DOGFOOD-4 |
 
-**结论：** P12.1 唯一缺口是 P12.1.5 — needs_architecture_design 信号激活 optional job 路径。
+**结论：** P12.1 自动覆盖面已包含 needs_architecture_design 信号激活 optional job 路径；P12.4 负责用 release candidate 验证记录确认这些测试仍通过。
 
 ## 3. 架构决策
 
@@ -71,8 +71,8 @@ project-items: P12.1, P12.2, P12.3, P12.4
 ### AD-P12-004: P12.4 发布候选策略
 
 **决策：**
-- P12.4.1: Bugfix 依赖 P12.3 结果，暂时不启动
-- P12.4.2-P12.4.4: 在 P12.3 完成后执行 release checklist
+- P12.4.1: 以 P12.3 dogfood 发现和发布候选 smoke 新发现为发布阻塞项，确认 source fix 和回归证据；若当前 main 已修复，则记录证据并清理 stale 文档。
+- P12.4.2-P12.4.4: 生成 release verification log、MVP release notes 和 tag 前 out-of-scope checklist。实际 tag 在 PR 合并与 CI 通过后单独执行。
 
 ## 4. 工作流
 
@@ -114,8 +114,8 @@ project-items: P12.1, P12.2, P12.3, P12.4
 
 P12.3 Dogfood 真实流程需要用户：
 1. 在一个真实小项目中安装/link zigma-flow
-2. 执行 `zigma-flow init` 和 `zigma-flow run --task "..."`
-3. 通过 `zigma-flow prompt --job <id> --step <id>` 获取提示词，用真实 Claude Code 执行 Agent 步骤
+2. 执行 `zigma-flow init` 和 `zigma-flow run code-change --task "..."`
+3. 通过 `zigma-flow prompt --job <id>` 获取提示词，用真实 Claude Code 执行 Agent 步骤
 4. 用 `zigma-flow step --job <id>` / `zigma-flow next` 推进工作流
 5. 记录遇到的问题
 

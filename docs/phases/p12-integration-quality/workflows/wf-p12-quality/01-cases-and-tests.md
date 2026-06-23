@@ -127,7 +127,7 @@ pnpm build && pnpm smoke
 passes the minimum quality gate below:
 
 - Contains the current `run_id`, `job_id`, and `step_id`.
-- Contains a non-empty `## Step Instructions` section.
+- Contains a non-empty `## Workflow Step Prompt` section.
 - Contains the canonical POSIX `report.json` path under
   `.zigma-flow/runs/<run_id>/jobs/<job_id>/attempts/<attempt>/steps/<step_id>/report.json`.
 - Warns if the original `task` input text is missing.
@@ -140,4 +140,38 @@ Regression coverage:
 - `tests/prompt/prompt.test.ts` covers the pure prompt handoff validator.
 - `tests/dogfood/prompt-handoff-quality.test.ts` captures the P12.3 failure
   shape where `current-step.md` lists prompt names but lacks
-  `## Step Instructions`.
+  `## Workflow Step Prompt`.
+
+---
+
+## P12.4 — MVP Release Candidate Evidence
+
+P12.4 is not a new runtime capability. It is the release-candidate closure pass
+for the MVP scope defined by `docs/prd.md`, `docs/architecture.md`, and
+`docs/mvp-contracts.md`.
+
+Release-candidate artifacts:
+
+- `docs/phases/p12-integration-quality/mvp-release-verification-log.md`
+  records local command evidence, CI expectations, and dogfood smoke results.
+- `docs/phases/p12-integration-quality/mvp-release-notes.md` records implemented
+  MVP capabilities, intentionally unimplemented scope, known non-blocking risks,
+  and the release decision.
+- `docs/phases/p12-integration-quality/mvp-release-checklist.md` records the
+  tag-readiness and out-of-scope audit before a `v0.1.0` tag is cut.
+
+P12.4.1 dogfood P0/P1 source-fix evidence:
+
+- `DF-P0-001` task handoff is covered by `tests/init/init.test.ts`
+  (`every agent step maps workflow task input into step inputs`) and
+  `tests/dogfood/prompt-handoff-quality.test.ts`.
+- `DF-P1-001` canonical report path is covered by `tests/prompt/prompt.test.ts`
+  and `tests/dogfood/prompt-handoff-quality.test.ts`.
+- `DF-P1-002` default script commands are covered by `tests/init/init.test.ts`
+  (`static-check and unit-test use inline script steps`).
+- `DF-P12-001` workflow-name run resolution is covered by
+  `tests/commands/run.test.ts` and the release-candidate CLI dogfood run
+  recorded in `mvp-release-verification-log.md`.
+- `DF-P12-002` long job status readability is covered by
+  `tests/commands/status.test.ts` and the release-candidate CLI status dogfood
+  recorded in `mvp-release-verification-log.md`.

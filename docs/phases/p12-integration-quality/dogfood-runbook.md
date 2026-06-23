@@ -49,7 +49,7 @@ with:
 ```
 
 **根因**：`src/init/templates.ts` 的 `codeChangeWorkflowYml()` 中缺少此 `with:` 映射。
-**待修复**：在 P12.4.1 中修复 `templates.ts` 并添加回归测试。
+**P12.4.1 状态**：source fix 已在 `src/init/templates.ts` 落地。回归证据为 `tests/init/init.test.ts` 中的 `every agent step maps workflow task input into step inputs`，以及 `tests/dogfood/prompt-handoff-quality.test.ts` 对 Task Prompt 层的检查。
 
 ### DF-P1-001：report.json 写入路径对 agent 不明确
 
@@ -63,7 +63,7 @@ agent 需要自行推断或搜索路径。
 
 **临时处理**：在本 runbook 的每个步骤中明确给出路径。
 
-**待修复**：在 P12.4.1 中修改 `src/prompt/index.ts` 的 Output 节，注入实际路径。
+**P12.4.1 状态**：source fix 已在 `src/prompt/index.ts` 和 `src/prompt/templates/output-contract-lines.md` 落地。回归证据为 `tests/prompt/prompt.test.ts` 与 `tests/dogfood/prompt-handoff-quality.test.ts`，它们断言 canonical `report.json` 路径出现在 prompt handoff 中。
 
 ### DF-P1-002：static-check / unit-test 仍为 placeholder
 
@@ -76,7 +76,25 @@ run: "pnpm typecheck && pnpm lint"   # static-check
 run: "pnpm test:ci"                  # unit-test
 ```
 
-**待修复**：在 P12.4.1 中修复 `templates.ts`。
+**P12.4.1 状态**：source fix 已在 `src/init/templates.ts` 落地。回归证据为 `tests/init/init.test.ts` 中的 `static-check and unit-test use inline script steps`，它断言默认命令为 `pnpm typecheck && pnpm lint` 和 `pnpm test:ci`，且不包含 placeholder。
+
+## P12.4 发布候选 DogFood 发现（已修复）
+
+### DF-P12-001：`run code-change` 未按初始化 workflow 名称解析
+
+**问题**：发布候选 smoke 运行 `node dist/cli.js run code-change --task "MVP release candidate smoke task"` 时，CLI 将 `code-change` 当成当前目录下的文件路径，报错无法读取 workflow。
+
+**影响**：P1 — README/PRD 承诺的初始化后最短启动路径不可用，用户必须知道 `.zigma-flow/workflows/code-change.yml` 的内部路径才能启动 run。
+
+**P12.4.1 状态**：source fix 已在 `src/commands/run.ts` 落地。回归证据为 `tests/commands/run.test.ts` 和 `mvp-release-verification-log.md` 中 run `20260623-0003` 的真实 CLI dogfood 记录。
+
+### DF-P12-002：`status` 长 job 名称与状态粘连
+
+**问题**：发布候选 status 输出中，长 job id `architecture-design` 与 `inactive` 状态粘连为 `architecture-designinactive`。
+
+**影响**：P1 — 状态表可读性下降，发布候选 CLI 输出不符合最小可用性要求。
+
+**P12.4.1 状态**：source fix 已在 `src/commands/status.ts` 落地。回归证据为 `tests/commands/status.test.ts` 和 `mvp-release-verification-log.md` 中真实 CLI status 输出记录。
 
 ---
 
@@ -464,7 +482,7 @@ DF-<P0|P1|P2|P3>-NNN: <标题>
 
 将所有发现整理后反馈，推进 P12.4：
 
-- P12.4.1 — 修复 P0/P1 issues（重点：DF-P0-001、DF-P1-001、DF-P1-002 的 source fix）
-- P12.4.2 — 全量验证 `pnpm build && pnpm typecheck && pnpm test:ci`
-- P12.4.3 — 生成 MVP release notes
-- P12.4.4 — tag v0.1.0
+- P12.4.1 — 确认 P0/P1 issues 已有 source fix 和回归证据，若发现回归则先修复。
+- P12.4.2 — 全量验证并记录 verification log。
+- P12.4.3 — 生成 MVP release notes。
+- P12.4.4 — 完成 tag 前 out-of-scope checklist；实际 tag 在 PR 合并和 main CI 通过后单独执行。

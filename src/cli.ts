@@ -24,6 +24,7 @@ import { retryAction } from "./commands/retry.js";
 import { abortAction } from "./commands/abort.js";
 import { listRunsAction } from "./commands/list-runs.js";
 import { showAction } from "./commands/show.js";
+import { runAllAction } from "./commands/run-all.js";
 import { SystemClock } from "./run/index.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -70,6 +71,19 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (workflowPath: string, options: { task: string }) => {
       await runAction(workflowPath, options);
+    });
+
+  program
+    .command("run-all <workflow>")
+    .description("Create and execute an entire workflow run automatically using an agent backend.")
+    .requiredOption("--task <task>", "Task description for this run.")
+    .option("--backend <name>", "Agent backend to use (default: from config, or claude-code).")
+    .exitOverride()
+    .action(async (workflowPath: string, options: { task: string; backend?: string }) => {
+      await runAllAction(workflowPath, {
+        task: options.task,
+        ...(options.backend !== undefined ? { backend: options.backend } : {}),
+      });
     });
 
   program

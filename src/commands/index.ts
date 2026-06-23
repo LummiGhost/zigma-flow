@@ -9,3 +9,5 @@ export { listRunsAction } from "./list-runs.js";
 export type { ListRunsActionOpts } from "./list-runs.js";
 export { showAction } from "./show.js";
 export type { ShowActionOpts } from "./show.js";
+export { runAllAction } from "./run-all.js";
+export type { RunAllOptions } from "./run-all.js";

@@ -20,7 +20,6 @@ import { buildPromptPacket, renderPromptPacket, writePromptArtifact } from "../p
 import { acceptAgentReport } from "../engine/accept.js";
 import { createRun, executeCurrentStep } from "../engine/index.js";
 import { advanceJob } from "../engine/index.js";
-import { computeReadyJobs } from "../dag/index.js";
 import {
   JsonlEventWriter,
   LocalStateStore,
@@ -208,47 +207,32 @@ export async function runAllAction(
       break;
     }
 
-    // Compute ready jobs from DAG
-    const completedJobIds = new Set(
-      Object.entries(state.jobs)
-        .filter(([, js]) => js.status === "completed")
-        .map(([id]) => id)
-    );
-    const activeJobIds = new Set(
-      Object.keys(state.jobs).filter(
-        (id) => !completedJobIds.has(id) && state.jobs[id]!.status !== "waiting"
-      )
-    );
-    const readyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds);
+    // Continue an in-flight multi-step job first; otherwise start the next ready job.
+    const runningId = Object.entries(state.jobs)
+      .find(([, js]) => js.status === "running")?.[0];
+    const readyId = runningId ?? Object.entries(state.jobs)
+      .find(([, js]) => js.status === "ready")?.[0];
 
-    if (readyIds.length === 0) {
+    if (readyId === undefined) {
       // No ready jobs — check if we're stuck
-      const hasRunning = Object.values(state.jobs).some(
-        (js) => js.status === "running"
-      );
-      if (!hasRunning) {
-        const pendingIds = Object.entries(state.jobs)
-          .filter(([, js]) => js.status === "waiting" || js.status === "inactive")
-          .map(([id]) => id);
+      const pendingIds = Object.entries(state.jobs)
+        .filter(([, js]) => js.status === "waiting" || js.status === "inactive")
+        .map(([id]) => id);
 
-        if (pendingIds.length === 0) {
-          console.log(`Run ${runId}: all jobs completed`);
-          break;
-        }
-
-        console.log(
-          `Run ${runId}: no ready jobs. Waiting jobs: ${pendingIds.join(", ")}. ` +
-          `This may indicate unsatisfied dependencies or inactive optional jobs.`
-        );
+      if (pendingIds.length === 0) {
+        console.log(`Run ${runId}: all jobs completed`);
         break;
       }
-      // Jobs are running — wait and re-check? Actually, in MVP there's no concurrency,
-      // so we shouldn't get here unless something is wrong.
+
+      console.log(
+        `Run ${runId}: no ready jobs. Waiting jobs: ${pendingIds.join(", ")}. ` +
+        `This may indicate unsatisfied dependencies or inactive optional jobs.`
+      );
       break;
     }
 
     // Process ONE ready job per iteration (MVP: no concurrent Agent execution)
-    const jobId = readyIds[0]!;
+    const jobId = readyId;
     const jobDef = wf.jobs[jobId];
     if (jobDef === undefined) continue;
 

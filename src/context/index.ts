@@ -137,6 +137,21 @@ export interface BuildContextOpts {
 // ---------------------------------------------------------------------------
 
 /**
+ * Detect whether a step.prompt value is an inline template (vs. a Skill
+ * Pack prompt reference ID).
+ *
+ * Heuristic:
+ *   - If `prompt` contains newlines -> inline template.
+ *   - If `prompt` contains `${{ }}` pattern -> inline template.
+ *   - Otherwise -> treated as Skill Pack prompt reference ID.
+ */
+export function isInlinePrompt(prompt: string | undefined): boolean {
+  if (prompt === undefined || prompt.trim().length === 0) return false;
+  if (prompt.includes("\n")) return true;
+  return /\$\{\{/.test(prompt);
+}
+
+/**
  * Extract the skill id from a workflow `skills` map value.
  * Values may be:
  *   - a bare string — the skill id itself
@@ -261,7 +276,11 @@ function primaryPromptCandidates(jobId: string, stepId: string, stepPrompt: unkn
   const candidates: PromptCandidate[] = [];
   const seen = new Set<string>();
 
-  if (typeof stepPrompt === "string" && stepPrompt.trim().length > 0) {
+  if (
+    typeof stepPrompt === "string" &&
+    stepPrompt.trim().length > 0 &&
+    !isInlinePrompt(stepPrompt)
+  ) {
     const id = stepPrompt.trim();
     candidates.push({ id, source: "step.prompt" });
     seen.add(id);
@@ -431,7 +450,8 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
         });
       }
 
-      if (primaryPrompt === undefined) {
+      // Primary prompt matching — skip for inline prompts
+      if (!isInlinePrompt(step.prompt as string | undefined) && primaryPrompt === undefined) {
         for (const candidate of primaryPromptCandidates(jobId, stepId, step.prompt)) {
           const promptExport = (pack.prompts ?? []).find((p) =>
             promptIdMatches(alias, p.id, candidate.id)
@@ -503,27 +523,80 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
       tools: exposedTools,
     };
 
-    if (primaryPrompt === undefined) {
-      const candidates = primaryPromptCandidates(jobId, stepId, step.prompt).map((c) => c.id);
-      warnings.push(
-        `No primary prompt resolved for job "${jobId}" step "${stepId}". ` +
-        `Tried prompt ids: ${candidates.join(", ")}. Falling back to generated step context.`
+    // Inline prompt resolution — after packs loaded for capabilities + conflict detection
+    if (isInlinePrompt(step.prompt as string | undefined)) {
+      // Conflict detection: check if inline text matches any Skill Pack prompt id
+      if (typeof step.prompt === "string") {
+        const trimmedPrompt = step.prompt.trim();
+        for (const ep of exposedPrompts) {
+          if (promptIdMatches(ep.skill, ep.id, trimmedPrompt)) {
+            throw new WorkflowError(
+              `Inline prompt conflicts with Skill Pack prompt "${ep.id}" in pack "${ep.skill}".`,
+              { details: { prompt: step.prompt, skill: ep.skill, promptId: ep.id } }
+            );
+          }
+        }
+      }
+
+      // Resolve expressions and construct PrimaryPrompt
+      const resolvedContent = resolveExpression(
+        step.prompt as string,
+        {
+          inputs: { task: state.task },
+          run: { id: state.run_id, workflow: state.workflow },
+        },
       );
-    } else if (
-      typeof step.prompt === "string" &&
-      step.prompt.trim().length > 0 &&
-      !promptIdMatches(primaryPrompt.skill, primaryPrompt.id, step.prompt.trim())
-    ) {
-      warnings.push(
-        `Declared primary prompt "${step.prompt.trim()}" was not found in exposed Skill Pack prompts; ` +
-        `fell back to ${primaryPrompt.source} prompt "${primaryPrompt.id}".`
-      );
+      primaryPrompt = {
+        skill: exposedSkills.length > 0 ? exposedSkills[0]!.alias : "",
+        id: "(inline)",
+        path: "(inline template)",
+        content: resolvedContent,
+        source: "step.prompt",
+      };
+    }
+
+    // Warnings — only for non-inline prompts
+    if (!isInlinePrompt(step.prompt as string | undefined)) {
+      if (primaryPrompt === undefined) {
+        const candidates = primaryPromptCandidates(jobId, stepId, step.prompt).map((c) => c.id);
+        warnings.push(
+          `No primary prompt resolved for job "${jobId}" step "${stepId}". ` +
+          `Tried prompt ids: ${candidates.join(", ")}. Falling back to generated step context.`
+        );
+      } else if (
+        typeof step.prompt === "string" &&
+        step.prompt.trim().length > 0 &&
+        !promptIdMatches(primaryPrompt.skill, primaryPrompt.id, step.prompt.trim())
+      ) {
+        warnings.push(
+          `Declared primary prompt "${step.prompt.trim()}" was not found in exposed Skill Pack prompts; ` +
+          `fell back to ${primaryPrompt.source} prompt "${primaryPrompt.id}".`
+        );
+      }
     }
   } else if (step.type === "agent") {
-    warnings.push(
-      `No primary prompt resolved for job "${jobId}" step "${stepId}" because the agent step exposes no skills. ` +
-      `Falling back to generated step context.`
-    );
+    if (isInlinePrompt(step.prompt as string | undefined)) {
+      // Inline prompt without expose.skills — no packs to load
+      const resolvedContent = resolveExpression(
+        step.prompt as string,
+        {
+          inputs: { task: state.task },
+          run: { id: state.run_id, workflow: state.workflow },
+        },
+      );
+      primaryPrompt = {
+        skill: "",
+        id: "(inline)",
+        path: "(inline template)",
+        content: resolvedContent,
+        source: "step.prompt",
+      };
+    } else {
+      warnings.push(
+        `No primary prompt resolved for job "${jobId}" step "${stepId}" because the agent step exposes no skills. ` +
+        `Falling back to generated step context.`
+      );
+    }
   }
 
   // -----------------------------------------------------------------------

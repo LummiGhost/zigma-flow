@@ -1784,5 +1784,51 @@ describe("Golden prompt snapshots", () => {
     const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
     expect(prompt).toMatchSnapshot();
   });
+
+  // P12.9 Inline prompt — FP-INLINE-RENDER
+  it("agent step with inline prompt template (T-INLINE-SNAPSHOT-1, UC-INLINE-RENDER-1)", () => {
+    const bundle = makeContextBundle({
+      runId: "20260623-0001",
+      jobId: "implement",
+      stepId: "implement",
+      attempt: 1,
+      runTask: "Implement the inline prompt feature for Agent Steps",
+      primaryPrompt: {
+        skill: "code",
+        id: "(inline)",
+        path: "(inline template)",
+        content:
+          "# Implement Inline Prompt\n\n" +
+          "You are implementing GitHub Issue #83: P12.9 Agent Step Inline Prompt Template.\n\n" +
+          "## Context\n\n" +
+          "The goal is to allow Agent Steps in workflow YAML to declare inline prompt template\n" +
+          "strings (using YAML `|` block scalars) instead of only referencing external Skill\n" +
+          "Pack prompt files.\n\n" +
+          "## Task\n\n" +
+          "1. Add `isInlinePrompt()` helper to `src/context/index.ts`.\n" +
+          "2. Modify `buildContext()` to detect and resolve inline prompts.\n" +
+          "3. Add conflict detection when inline prompt matches a Skill Pack prompt ID.\n" +
+          "4. Render resolved inline content through the existing `step-prompt.md` template.\n\n" +
+          "Run ID: ${{ run.id }}\n" +
+          "Workflow: ${{ run.workflow }}",
+        source: "step.prompt",
+      },
+      capabilities: {
+        skills: [{ alias: "code", skillId: "zigma.code-change", version: "1.0.0" }],
+        knowledge: [
+          { skill: "code", id: "coding-guidelines", path: "knowledge/coding-guidelines.md", description: "Project coding standards", readPolicy: "required", usage: "read before starting this step" },
+        ],
+        prompts: [{ skill: "code", id: "(inline)", path: "(inline template)" }],
+        functions: [],
+        tools: [],
+      },
+      signals: [],
+      permissions: { contents: "read", edits: "write", workflow_state: "none" },
+      artifacts: [],
+      inputs: { task: "Implement inline prompt feature" },
+    });
+    const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
+    expect(prompt).toMatchSnapshot();
+  });
 });
 

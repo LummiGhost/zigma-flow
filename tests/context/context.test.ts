@@ -38,6 +38,7 @@ import {
 } from "../../src/expression/index.js";
 import {
   buildContext,
+  isInlinePrompt,
   type ContextBundle,
 } from "../../src/context/index.js";
 
@@ -1352,5 +1353,369 @@ describe("buildContext is side-effect free", () => {
     expect(afterState).toEqual(beforeState);
     expect(afterEvents).toEqual(beforeEvents);
     expect(afterArtifacts).toEqual(beforeArtifacts);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isInlinePrompt — FP-INLINE-DETECT (P12.9, WF-P12-INLINE-PROMPT Step 1)
+// ---------------------------------------------------------------------------
+// Imported from src/context/index.ts (moved from local helper in Step 2).
+
+describe("isInlinePrompt", () => {
+  it("returns true for multiline prompt (T-INLINE-DETECT-1, UC-INLINE-DETECT-1)", () => {
+    expect(isInlinePrompt("line1\nline2")).toBe(true);
+  });
+
+  it("returns true for single-line prompt with ${{ }} expression (T-INLINE-DETECT-2, UC-INLINE-DETECT-2)", () => {
+    expect(isInlinePrompt("Use ${{ inputs.task }} to proceed")).toBe(true);
+  });
+
+  it("returns true for single-line prompt with ${{ run.id }} expression", () => {
+    expect(isInlinePrompt("Run: ${{ run.id }}")).toBe(true);
+  });
+
+  it("returns false for single-line reference ID (T-INLINE-DETECT-3, UC-INLINE-DETECT-3)", () => {
+    expect(isInlinePrompt("review")).toBe(false);
+  });
+
+  it("returns false for another single-line reference ID like 'implement'", () => {
+    expect(isInlinePrompt("implement")).toBe(false);
+  });
+
+  it("returns false for empty string (T-INLINE-DETECT-4, UC-INLINE-DETECT-4)", () => {
+    expect(isInlinePrompt("")).toBe(false);
+  });
+
+  it("returns false for undefined (T-INLINE-DETECT-5, UC-INLINE-DETECT-5)", () => {
+    expect(isInlinePrompt(undefined)).toBe(false);
+  });
+
+  it("returns false for whitespace-only prompt (T-INLINE-DETECT-6, UC-INLINE-DETECT-6)", () => {
+    expect(isInlinePrompt("   ")).toBe(false);
+    expect(isInlinePrompt("\t  \t")).toBe(false);
+  });
+
+  it("returns true for Windows line endings (T-INLINE-DETECT-7, UC-INLINE-DETECT-7)", () => {
+    expect(isInlinePrompt("line1\r\nline2")).toBe(true);
+  });
+
+  it("returns true for YAML block scalar style multiline prompt", () => {
+    // Simulates what a YAML | block scalar produces
+    const yamlBlockScalar = "You are implementing a feature.\n\n" +
+      "Task: ${{ inputs.task }}\n" +
+      "Run ID: ${{ run.id }}\n";
+    expect(isInlinePrompt(yamlBlockScalar)).toBe(true);
+  });
+
+  it("returns false for a single-line string that looks like a skill pack prompt ID", () => {
+    expect(isInlinePrompt("zigma.code-change.implement")).toBe(false);
+  });
+
+  it("returns true when prompt has ${{ }} but no newlines (single-line expression)", () => {
+    // Edge case: single-line template that uses expression but is not multiline
+    expect(isInlinePrompt("complete ${{ inputs.goal }} using plan")).toBe(true);
+  });
+
+  it("returns false for prompt that has double braces but not ${{ }} syntax", () => {
+    // {{ alone without $ prefix is not an expression token
+    expect(isInlinePrompt("use {{ braces }} but not expression")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildContext — inline prompt conflict detection (FP-INLINE-CONFLICT)
+// ---------------------------------------------------------------------------
+// These tests verify the detection logic used by the conflict check.
+// Step 2 will add full buildContext-level integration tests that assert
+// WorkflowError is thrown when an inline prompt matches a Skill Pack
+// prompt ID.
+
+describe("buildContext inline prompt conflict detection", () => {
+  it("isInlinePrompt detects possible conflict when inline text matches a prompt ID (T-INLINE-CONFLICT-1)", () => {
+    // If step.prompt = "review" (a single word), and that word is also
+    // a Skill Pack prompt ID, we need isInlinePrompt to tell us whether
+    // it's inline or a reference. For pure text like "review" (no newlines,
+    // no ${{ }}), isInlinePrompt returns false → no conflict possible.
+    // Conflict only arises when isInlinePrompt returns true but the raw
+    // text happens to look like a Skill Pack prompt ID.
+    //
+    // Example conflict scenario:
+    //   step.prompt = "review\n\nCheck the changes."  ← inline (multiline)
+    //   Skill Pack has prompt id: "review"            ← matching ID
+    //
+    // The inline prompt text trimmed is "review\n\nCheck the changes." which
+    // does NOT match prompt id "review" (because it has newlines and extra
+    // content). For a genuine conflict, the trimmed raw text would need to
+    // be a short single-line value like "review" that also contains newlines
+    // or ${{ }}. This is an unusual edge case but the detection is correct.
+
+    // Verify: a multiline prompt with first line "review" is inline
+    const inlineWithReview = "review\n\nCheck the implementation.";
+    expect(isInlinePrompt(inlineWithReview)).toBe(true);
+
+    // Verify: trimmed text does NOT cleanly match "review"
+    expect(inlineWithReview.trim()).not.toBe("review");
+
+    // For a true conflict, the inline text's trimmed value would need to
+    // equal a prompt ID. Example:
+    //   step.prompt = "review\n"  ← trimmed to "review", still inline (has \n)
+    //   Skill Pack prompt id: "review"
+    const inlineBareId = "review\n";
+    expect(isInlinePrompt(inlineBareId)).toBe(true);
+    expect(inlineBareId.trim()).toBe("review");
+    // This is the conflict scenario: inline detected, trimmed text matches
+    // a Skill Pack prompt ID → Step 2 should throw WorkflowError.
+  });
+
+  it("isInlinePrompt returns false for reference ID (no conflict possible) (T-INLINE-CONFLICT-2)", () => {
+    // A normal Skill Pack reference — no inline, no conflict
+    expect(isInlinePrompt("review")).toBe(false);
+    expect(isInlinePrompt("plan")).toBe(false);
+    expect(isInlinePrompt("implement")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildContext — inline prompt resolution (FP-INLINE-RESOLVE, FP-INLINE-CONFLICT)
+// ---------------------------------------------------------------------------
+
+describe("buildContext inline prompt resolution", () => {
+  let sb: Sandbox;
+
+  beforeEach(async () => {
+    sb = await makeSandbox();
+    await seedSkillLock(sb.zigmaflowDir, { "zigma.code-change": CANONICAL_LOCK_ENTRY });
+    await seedSkillPack(
+      sb.zigmaflowDir,
+      "code-change",
+      PRIMARY_PROMPT_SKILL_YML,
+      PRIMARY_PROMPT_SKILL_FILES,
+    );
+  });
+
+  afterEach(async () => {
+    await rm(sb.zigmaflowDir, { recursive: true, force: true });
+  });
+
+  it("resolves inline multiline prompt with expose.skills (T-INLINE-RESOLVE-1)", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              prompt: "Do the task\n\nTask: ${{ inputs.task }}",
+              expose: { skills: ["code"] },
+            },
+          ],
+        },
+      },
+    });
+    const state = makeRunState({ task: "fix bug" });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "plan",
+    });
+
+    expect(bundle.primaryPrompt).toMatchObject({
+      skill: "code",
+      id: "(inline)",
+      path: "(inline template)",
+      source: "step.prompt",
+    });
+    // Content contains resolved expression
+    expect(bundle.primaryPrompt?.content).toContain("Task: fix bug");
+    // No warning for inline prompt
+    expect(bundle.warnings).toBeUndefined();
+  });
+
+  it("resolves inline prompt without expose.skills (T-INLINE-RESOLVE-2)", async () => {
+    const workflowDef = makeWorkflowDef({
+      skills: {},
+      jobs: {
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              prompt: "Do ${{ inputs.task }}",
+            },
+          ],
+        },
+      },
+    });
+    const state = makeRunState({ task: "fix bug" });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "plan",
+    });
+
+    expect(bundle.primaryPrompt).toMatchObject({
+      skill: "",
+      id: "(inline)",
+      path: "(inline template)",
+      source: "step.prompt",
+    });
+    expect(bundle.primaryPrompt?.content).toBe("Do fix bug");
+    // No warning should be emitted when inline prompt resolves
+    expect(bundle.warnings).toBeUndefined();
+  });
+
+  it("resolves ${{ run.id }} and ${{ run.workflow }} in inline prompt (T-INLINE-RESOLVE-3)", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              prompt: "Run ${{ run.id }} in ${{ run.workflow }}",
+              expose: { skills: ["code"] },
+            },
+          ],
+        },
+      },
+    });
+    const state = makeRunState({ run_id: "test-001", workflow: "code-change" });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "plan",
+    });
+
+    expect(bundle.primaryPrompt?.content).toBe("Run test-001 in code-change");
+  });
+
+  it("passes unknown ${{ }} expressions through unchanged (T-INLINE-RESOLVE-4)", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              prompt: "Task: ${{ jobs.x.outputs.y }}",
+              expose: { skills: ["code"] },
+            },
+          ],
+        },
+      },
+    });
+    const state = makeRunState();
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "plan",
+    });
+
+    expect(bundle.primaryPrompt?.content).toContain("${{ jobs.x.outputs.y }}");
+  });
+
+  it("populates capabilities when inline prompt has expose.skills (T-INLINE-RESOLVE-5)", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              prompt: "Do the work\n\nInline task.",
+              expose: { skills: ["code"] },
+            },
+          ],
+        },
+      },
+    });
+    const state = makeRunState();
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "plan",
+    });
+
+    // Capabilities should still be populated from exposed skills
+    expect(bundle.capabilities.skills).toHaveLength(1);
+    expect(bundle.capabilities.skills[0]?.alias).toBe("code");
+    expect(bundle.capabilities.prompts.length).toBeGreaterThan(0);
+  });
+
+  it("throws WorkflowError when inline prompt conflicts with Skill Pack prompt id (T-INLINE-CONFLICT-1)", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              prompt: "review\n",
+              expose: { skills: ["code"] },
+            },
+          ],
+        },
+      },
+    });
+    const state = makeRunState();
+
+    await expect(
+      buildContext({
+        runDir: sb.runDir,
+        zigmaflowDir: sb.zigmaflowDir,
+        workflowDef,
+        state,
+        jobId: "plan",
+      }),
+    ).rejects.toThrow(WorkflowError);
+  });
+
+  it("does not conflict when single-line reference matches Skill Pack prompt id (normal resolution) (T-INLINE-CONFLICT-2)", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        plan: {
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              prompt: "review",
+              expose: { skills: ["code"] },
+            },
+          ],
+        },
+      },
+    });
+    const state = makeRunState();
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "plan",
+    });
+
+    // Normal Skill Pack resolution — not inline, no conflict
+    expect(bundle.primaryPrompt).toMatchObject({
+      skill: "code",
+      id: "review",
+      source: "step.prompt",
+    });
+    expect(bundle.primaryPrompt?.content).toContain("Review from explicit prompt.");
   });
 });

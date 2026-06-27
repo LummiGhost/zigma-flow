@@ -169,9 +169,9 @@ export async function recordHumanDecision(opts: RecordHumanDecisionOpts): Promis
 
 ### AD-P15-006 — Router 读取 human outputs
 
-**决策：** 不改 router 实现；human step.outputs 写完之后，下一步 router 的 `switch: "${{ steps.gate-merge.outputs.decision }}"` 自然解析。前提是表达式解析器已支持 `steps.<id>.outputs.<key>`（这是历史 TD-P9-002，未清偿）。
+**决策：** 不改 router 实现；human step.outputs 写完之后，下一步 router 的 `switch: "${{ steps.gate-merge.outputs.decision }}"` 自然解析。
 
-**配套清偿：** P15 顺手把 TD-P9-002（`steps.<id>.outputs.<key>` 表达式）补上，作为 WF-P15-EXPR 工作流，避免 router 流程不可用。
+**前置条件已在 P13 完成：** `${{ steps.<id>.outputs.<key> }}` 表达式（原 TD-P9-002）由 P13 WF-VARIABLES 中的表达式扩张一并清偿。P15 不再需要单独工作流处理表达式问题；如 P13 未按计划清偿，P15 必须先补这一项。
 
 ### AD-P15-007 — run-all 行为
 
@@ -250,17 +250,11 @@ Awaiting human input:
 - E2E：跑到 human gate，`reject --comment "..."`，router 把 comment 注入 implement retry_inputs，attempt 2 含 review_comments；
 - `zigma-flow approve` 在没有 active run / 没有 awaiting_human 时给出可执行建议（提示用户跑 status）。
 
-### WF-P15-EXPR
+### ~~WF-P15-EXPR~~（已移交 P13）
 
-**目标：** AD-P15-006 配套 — 清偿 TD-P9-002（`steps.<id>.outputs.<key>` 表达式）。
+`${{ steps.<id>.outputs.<key> }}` 表达式（TD-P9-002）在 P13 WF-VARIABLES 中一并清偿，因为 P13 的 `goto_step` 与 `step.if` 同样依赖该能力。P15 不再单独立工作流。
 
-**边界：** `src/expression/index.ts` 增 steps 命名空间解析；既有 jobs/inputs/retry/signals 不变。
-
-**验收：**
-
-- 单测：`resolveExpression("${{ steps.gate-merge.outputs.decision }}", ctx)` 正确返回；
-- 单测：未声明 outputs → ValidationError 提示明确；
-- router test：human + router approved/rejected 路径全跑通。
+如 P13 在合入时未按计划清偿，P15 必须在 WF-P15-CLI 前补这一项；否则可直接复用 P13 引入的 expression 求值。
 
 ### WF-P15-WORKFLOW-TEMPLATE
 
@@ -278,12 +272,11 @@ Awaiting human input:
 ```
 WF-P15-SCHEMA
    └─ WF-P15-ENGINE
-       ├─ WF-P15-EXPR  (并行)
        └─ WF-P15-CLI
            └─ WF-P15-WORKFLOW-TEMPLATE
 ```
 
-合入 **PR #91（feature/p15-human-gate）**。
+合入 **PR #91（feature/p15-human-gate）**。`steps.<id>.outputs.<key>` 表达式（原 WF-P15-EXPR）由 P13 完成，P15 直接依赖。
 
 ## 7. 测试规划
 
@@ -295,7 +288,6 @@ WF-P15-SCHEMA
 | `tests/commands/approve.test.ts` | 新增 | CLI approve |
 | `tests/commands/reject.test.ts` | 新增 | CLI reject |
 | `tests/commands/status.test.ts` | 扩展 | status 显示 awaiting human |
-| `tests/expression/steps-outputs.test.ts` | 新增 | TD-P9-002 清偿 |
 | `tests/init/init.test.ts` | 扩展 | 内置 gate-merge 模板 |
 | `tests/dogfood/human-gate-e2e.test.ts` | 新增 | 完整 approve/reject 流 |
 
@@ -316,7 +308,7 @@ pnpm test:ci
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 引入 step 状态破坏外部消费者 | 低 | state 只供本工具读写；schema 标 "additive"；mvp-contracts 同步说明 |
-| reject 与 router 结合复杂，回归点多 | 高 | WF-P15-EXPR + WF-P15-ENGINE 共同提供两类覆盖：纯 engine 单测 + 含 router 的 e2e |
+| reject 与 router 结合复杂，回归点多 | 高 | WF-P15-ENGINE 提供纯 engine 单测；含 router 的 e2e 依赖 P13 已落地的 `steps.<id>.outputs.<key>` 表达式 |
 | run-all 退出 0 引起 CI 误判 "通过" | 中 | 文档显式说明 awaiting_human 非终态；外部 CI 用 `status` 或 `run-completed` 事件判定 |
 | approve/reject 不校验调用者身份 | 低（MVP 设计） | 文档明确"approvers 字段当前仅提示"，未来用 git config user.email 增强 |
 | 多 awaiting_human step 并发（P14 并发 read-only 不应包含 human） | 中 | scheduler 中 human step 视同 writable（占写者锁），同时最多 1 个 awaiting_human；写入 AD-P14 修订 |
@@ -326,7 +318,7 @@ pnpm test:ci
 
 | 技术债 ID | 清偿位置 |
 |---|---|
-| TD-P9-002（steps.<id>.outputs.<key> 表达式） | WF-P15-EXPR |
+| TD-P9-002（steps.<id>.outputs.<key> 表达式） | ~~WF-P15-EXPR~~ → 已移交 P13 WF-VARIABLES |
 
 ## 11. 技术债登记（带到 v0.3）
 

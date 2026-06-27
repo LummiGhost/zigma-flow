@@ -1,8 +1,17 @@
 # Zigma Flow MVP Architecture
 
-文档版本：v0.1
+文档版本：v0.1（含 v0.2 修订增量，2026-06-27）
 日期：2026-06-06
-适用范围：Zigma Flow PRD v0.3 的 MVP 实现
+适用范围：Zigma Flow PRD v0.3 + v0.2 修订增量；v0.2 修订集中在 §5.2、§6.2、§7.1、§7.2
+
+> **v0.2 修订总览（2026-06-27）：** 为承载 P13 引入的三类 Agent 主动控制流能力（结构化返回状态、workflow 变量与上下文块、条件/跳转/有界循环），架构在以下位置扩展：
+>
+> - §5.2 模块边界：补充 `engine` 中的三个新入口（applyContextPatch、applyStatusReturn、evaluateStepCondition），并扩展 `context` 与 `expression` 的责任面。
+> - §6.2 聚合与不变量：增加 Variables 与 ContextBlock 聚合的不变量；明确状态机字段与数据层命名空间的隔离边界。
+> - §7.1 Engine 入口清单：追加新入口。
+> - §7.2 状态转换规则：补充 Step `pending → skipped`（via `if`）与 `running → blocked`（via `max_visits`）转换；补充 `awaiting_human` 状态（由 P15 引入，前置预告）。
+>
+> 设计目的与权衡详见 `docs/phases/p13-agent-adapter-hardening/02-development-plan.md §1 §3 §4`。
 
 ## 1. 设计结论
 
@@ -141,18 +150,19 @@ Runtime Core must not import CLI, commander, chalk, execa, simple-git, or concre
 | `workflow` | 加载和校验 workflow YAML，输出 WorkflowDefinition | 不读取 run state，不执行 step |
 | `skill-pack` | 加载 skill.yml，解析 skill-lock，校验 export path 和 hash | 不改变 workflow 状态 |
 | `dag` | 校验 needs、optional_needs、循环依赖，计算 ready jobs | 不访问文件系统 |
-| `engine` | 解释状态机，推进 step/job/run，处理 signal、router、retry、activation | 不直接调用 execa、simple-git 或 terminal 输出 |
-| `context` | 根据当前 Agent Step、inputs、artifacts、expose 和 permissions 组装上下文 | 不决定状态转移 |
+| `engine` | 解释状态机，推进 step/job/run，处理 signal、router、retry、activation；**v0.2**：处理 status return（applyStatusReturn）、context patch（applyContextPatch）、step `if` 求值（evaluateStepCondition）、goto_step 跳转、max_visits 守门 | 不直接调用 execa、simple-git 或 terminal 输出；**v0.2**：不允许 patch 触及状态机字段（jobs/signals/attempts/last_event_id 等），保留字段在 engine 代码中硬编码 |
+| `context` | 根据当前 Agent Step、inputs、artifacts、expose 和 permissions 组装上下文；**v0.2**：根据 step 权限按白名单注入 variables 与 context_blocks（read），并标注可写性（write） | 不决定状态转移；**v0.2**：不绕过 step.permissions.variables / context_blocks 白名单 |
 | `prompt` | 将 context 渲染为 Markdown prompt | 不读取未授权资源 |
 | `script` | 执行 inline command 或 Skill Pack script，生成 ScriptResult | 不解释业务状态，只返回结果 |
 | `check` | 执行确定性检查，生成 CheckResult | 不调用 LLM Judge 作为基础 gate |
-| `artifact` | 分配 artifact 路径，写入 metadata，生成摘要 | 不删除历史 artifact |
-| `run` | 创建 run 目录，读写 state snapshot，管理 active run | 不绕过 engine 写状态 |
-| `events` | 追加 events.jsonl，定义事件 schema | 不把事件当终端展示格式 |
+| `artifact` | 分配 artifact 路径，写入 metadata，生成摘要；**v0.2**：管理 `context_block` artifact 的版本化目录（v1/v2/...） | 不删除历史 artifact |
+| `run` | 创建 run 目录，读写 state snapshot，管理 active run；**v0.2**：state.json 增 variables / context_blocks 段、JobState 增 step_visits | 不绕过 engine 写状态 |
+| `events` | 追加 events.jsonl，定义事件 schema；**v0.2**：暴露 `nextSequentialEventId(runDir)` 端口，统一事件号分配 | 不把事件当终端展示格式 |
 | `workspace` | 检查 read-only/writable 规则、路径安全和工作区修改 | 不修复或回滚用户代码 |
 | `git` | 读取 diff、changed files、repo status | 不直接决定 check pass/fail |
-| `expression` | 解析受限 `${{ ... }}` 插值 | 不支持任意脚本执行 |
+| `expression` | 解析受限 `${{ ... }}` 插值；**v0.2**：扩展支持 `variables.<name>`、`jobs.<id>.outputs.<key>`、`steps.<id>.outputs.<key>` 命名空间；支持等值/逻辑组合（`==` / `!=` / `&&` / `||` / `!`）用于 `if:` 与 router switch | 不支持任意脚本执行；**v0.2**：仍禁止函数调用、算术、字符串拼接、JS 求值 |
 | `utils` | 稳定错误类型、路径安全、轻量通用工具 | 不放业务规则 |
+| `agent` | **v0.2 已存在**：定义 AgentBackend 接口，注册 backend factory，加载 backend 配置；调用子进程 | 不解释业务状态；不直接改 state（失败/超时/取消通过 engine 入口 recordAgentFailure 落盘） |
 
 ### 5.3 源码布局建议
 
@@ -206,10 +216,15 @@ WorkflowDefinition:
 - job id 在 workflow 内唯一。
 - step id 在同一 job 内唯一。
 - `needs`、`optional_needs` 必须引用存在 job。
-- DAG 不允许循环。
+- DAG（job 层）不允许循环。
 - optional job 必须声明 `activation: optional`。
 - step type 只能是 MVP 允许集合。
 - Agent Step 的 `expose` 只能引用 workflow 顶层声明的 skills。
+- **v0.2**：`step.if` 表达式只能使用受限语法（等值/逻辑组合 + `${{ ... }}` 插值）。
+- **v0.2**：`router.goto_step` 目标必须存在于同 job；step 层允许形成环（由 `max_visits` 兜底）。
+- **v0.2**：`step.returns.status.values` 必须非空数组；`step.on_return` 的 key 必须是 `returns.status.values` 的子集。
+- **v0.2**：workflow 顶层 `variables.<name>.allowed_writers` 与 `context_blocks.<id>.allowed_writers` 必须引用存在 step（`<job>.<step>` 或 `<job>.*` 通配）。
+- **v0.2**：step `permissions.variables.write` 与 `permissions.context_blocks.write` 必须是 workflow 顶层对应 `allowed_writers` 的子集（双重校验）。
 
 SkillPack:
 
@@ -225,6 +240,8 @@ Run:
 - required job 根据 DAG 初始化为 waiting 或 ready。
 - `state.json` 只能由 Engine 写入。
 - 每个状态变化都必须对应 event。
+- **v0.2**：state.json 的状态机字段（`run_id`、`workflow`、`status`、`last_event_id`、`signals` 注册表、`jobs[*]` 的所有字段）只能由 Engine 内部入口写入；patch 类操作（applyContextPatch）一律拒绝触及。
+- **v0.2**：state.json 的数据层段（`variables`、`context_blocks`）可由 Engine applyContextPatch 入口写入；与状态机字段隔离。
 
 JobRun:
 
@@ -232,6 +249,8 @@ JobRun:
 - retry 必须增加 attempt，并保留历史 attempt artifacts。
 - retry 超过 `max_attempts` 后进入 blocked 或 failed，按 workflow 声明执行。
 - writable job 同时 running 数量最多为 1。
+- **v0.2**：`step_visits` 计数随 step 进入递增；超过 `max_visits` → step 与 job 进入 blocked。
+- **v0.2**：retry（attempt + 1）必须清零 `step_visits`；不允许通过 patch 或外部输入重置。
 
 StepRun:
 
@@ -239,6 +258,9 @@ StepRun:
 - Script Step 必须记录 stdout、stderr、exit_code 和 timeout 结果。
 - Check Step 必须产出 check-result artifact。
 - Router Step 不调用 Agent，不执行任意脚本。
+- **v0.2**：Agent Step 接收的 report 按固定流水线处理（context_patches → status → signals → advance），任一阶段失败整批回滚。
+- **v0.2**：`if:` 求值 false → step 状态 `skipped`；不消耗 visit 计数。
+- **v0.2**：`router.goto_step` 触发后，目标 step 状态重置为 `pending`，visit 计数 +1；本身不增 attempt。
 
 Signal:
 
@@ -246,6 +268,23 @@ Signal:
 - signal 必须来自 allowed step/job。
 - Agent 只能请求流程变化，不能指定最终状态写入。
 - Engine 按 priority 和 gate rule 裁决 action。
+- **v0.2**：status 触发的 action 优先于 signals action；signals 仍记录 `signal_received` 事件以备审计。
+
+Variables（v0.2 新增聚合）：
+
+- 变量声明在 workflow 顶层，初始值在 createRun 时写入 state.variables。
+- 写入只能通过 applyContextPatch；批次原子。
+- `variables.<name>.type` 与 `enum`（若声明）在每次 patch 时严格校验。
+- `allowed_writers` 与 step.permissions.variables.write 双重校验，任意一处不通过即拒绝。
+- 读取通过 Context Builder 注入 prompt，受 step.permissions.variables.read 白名单约束。
+
+ContextBlock（v0.2 新增聚合）：
+
+- 上下文块声明在 workflow 顶层，初始 artifact（如有）在 createRun 时引用。
+- 每次写入产生新版本 artifact（kind=`context_block`，path=`context-blocks/<id>/v<N>.<ext>`）。
+- state.context_blocks.<id>.current_version 单调递增，旧版本 artifact 永不被覆盖或删除。
+- `allowed_writers` 与 step.permissions.context_blocks.write 双重校验。
+- 读取通过 Context Builder 注入 prompt 正文，受 step.permissions.context_blocks.read 白名单约束。
 
 Artifact:
 
@@ -271,6 +310,26 @@ abortRun(runId)
 ```
 
 CLI 命令只调用这些入口，不直接改 run state。
+
+【v0.2 修订】新增入口（P13）：
+
+```text
+runAll(opts)                              # P13 把 commands/run-all 主循环搬进 engine
+recordAgentFailure(runId, jobId, ...)     # P13 backend 失败 → retry 路径
+cancelRun(runId, reason)                  # P13 SIGINT / AbortSignal 取消
+applyContextPatch(runId, jobId, patches)  # P13 写入 variables / context_blocks，批次原子
+applyStatusReturn(runId, jobId, status)   # P13 status → on_return action 翻译
+evaluateStepCondition(expr, runState)     # P13 step.if 表达式求值（纯函数，可单测）
+```
+
+P15 进一步追加：
+
+```text
+enterHumanGate(runId, jobId, stepId)
+recordHumanDecision(runId, jobId, stepId, decision, ...)
+```
+
+所有新入口仍遵守 §7.1 既有约束：CLI 不直接改 state，所有写入走 StateStore + EventWriter；patch 类入口拒绝触及保留字段。
 
 ### 7.2 状态转换规则
 
@@ -304,7 +363,27 @@ pending -> skipped
 completed -> retrying -> pending
 ```
 
+【v0.2 修订】Step status 新增/扩展转换：
+
+```text
+pending -> skipped                  # 增强：via step.if 求值 false（写 step_skipped 事件）
+running -> blocked                  # 新增：via step_visits 超过 max_visits（写 step_visit_exceeded）
+completed -> pending                # 新增：via router goto_step（写 step_revisited，visit 计数 +1）
+running -> awaiting_human           # 新增（P15 预告）：进入 human step 时
+awaiting_human -> completed         # 新增（P15）：approve
+awaiting_human -> failed            # 新增（P15）：reject 且无后续 router
+awaiting_human -> cancelled         # 新增（P15）：Ctrl-C / abort
+```
+
 非法转换必须返回明确错误，并且不得写入 snapshot。
+
+【v0.2 修订】Run status 新增：
+
+```text
+running -> cancelled                # 增强：经 cancelRun 触发，写 run_cancelled 事件
+```
+
+`cancelled` 是终态，与 `completed` / `failed` / `blocked` 同级；恢复需 `--resume` 启动新主循环。
 
 ### 7.3 Event and snapshot persistence
 

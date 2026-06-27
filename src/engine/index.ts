@@ -31,7 +31,7 @@ import {
   writeActiveRun,
   writeRunYaml,
 } from "../run/index.js";
-import { nextEventId as formatEventId } from "../events/index.js";
+import { nextEventId as formatEventId, nextSequentialEventId } from "../events/index.js";
 
 export { applyRoutingAction } from "./routing.js";
 export type { ApplyRoutingActionOpts } from "./routing.js";
@@ -39,6 +39,10 @@ export { retryJob } from "./retryJob.js";
 export type { RetryJobOpts } from "./retryJob.js";
 export { abortRun } from "./abort.js";
 export type { AbortRunOpts } from "./abort.js";
+export { runAll } from "./runAll.js";
+export type { RunAllOpts, RunAllSummary } from "./runAll.js";
+export { recordAgentFailure } from "./recordAgentFailure.js";
+export type { RecordAgentFailureOpts, RecordAgentFailureResult } from "./recordAgentFailure.js";
 
 export interface CreateRunInputs {
   workflowPath: string;
@@ -414,10 +418,8 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
   const jobState = state.jobs[jobId]!;
   const attempt = jobState.attempt ?? 1;
 
-  // Read the current tail event id to derive the next sequential counter
-  const lastId = await eventWriter.readLastEventId(runDir);
-  let counter = lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
-  const jobCompletedId = formatEventId(++counter);
+  // Use nextSequentialEventId to derive the next sequential event id
+  const jobCompletedId = await nextSequentialEventId(runDir, eventWriter);
 
   // Append job_completed event BEFORE writing snapshot (FP-MULTISTEP-FINAL-SEQUENCE)
   await eventWriter.appendEvent(runDir, {
@@ -465,7 +467,7 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
     const waitingJobState = finalState.jobs[readyId];
     if (waitingJobState?.status !== "waiting") continue;
 
-    const jobReadyId = formatEventId(++counter);
+    const jobReadyId = await nextSequentialEventId(runDir, eventWriter);
     await eventWriter.appendEvent(runDir, {
       id: jobReadyId,
       run_id: runId,
@@ -497,7 +499,7 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
   );
 
   if (allNonInactiveCompleted && hasCompletedJob) {
-    const runCompletedId = formatEventId(++counter);
+    const runCompletedId = await nextSequentialEventId(runDir, eventWriter);
     await eventWriter.appendEvent(runDir, {
       id: runCompletedId,
       run_id: runId,

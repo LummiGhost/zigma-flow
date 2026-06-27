@@ -581,6 +581,35 @@ permissions:
 - 默认不允许删除项目文件。
 - `abort` 只改变 run 状态，不删除运行记录。
 
+### 11.1 Agent Backend Lifecycle (v0.2)
+
+Agent backend 执行遵循固定生命周期，每个调用产生一个事件对：
+
+```
+agent_invoked  (backend.execute 之前)
+  └─ agent_completed | agent_timed_out | agent_failed | agent_cancelled
+```
+
+**调用前：** Engine 记录 `agent_invoked` 事件，payload 含 `backend_name`、`command`、`args_hash`（SHA-256，不含 prompt token）、`timeout_ms`、`step_artifact_dir`。
+
+**调用后：** 根据 backend 返回结果写入对应的终端事件：
+
+| 结果 | 事件 | 关键 payload |
+|---|---|---|
+| 成功 | `agent_completed` | `duration_ms`, `stdout_artifact`, `stderr_artifact`, `invocation_artifact` |
+| 超时 | `agent_timed_out` | `duration_ms`, `timeout_ms`, `stdout_artifact`, `stderr_artifact` |
+| 失败 | `agent_failed` | `duration_ms`, `exit_code`, `reason`, `stdout_artifact`, `stderr_artifact` |
+| 取消 | `agent_cancelled` | `duration_ms`, `reason` |
+
+**产物落地：** Backend 将 stdout/stderr 写入 `${stepDir}/agent.stdout.log` 和 `${stepDir}/agent.stderr.log`，调用元数据写入 `${stepDir}/agent.invocation.json`。Engine 将这些文件作为 artifact 登记到 `artifacts.jsonl`（kind=`agent_stdout`/`agent_stderr`/`agent_invocation`），不在 error message 中嵌入截尾字符串。
+
+**子进程安全边界：**
+- Backend 子进程以 project root 为 cwd，timeout 由 `AgentBackendConfig.timeout` 控制（默认 600s）。
+- SIGINT/Ctrl-C 通过 AbortSignal → execa `cancelSignal` → 等待 5s 后强杀。
+- 配置类错误（command not found → ConfigError、未登录 → PermissionError）绕过 retry 直接 `run.failed` exit code 4，不重复拉起子进程。
+
+**retry 语义：** agent_failed / agent_timed_out 不直接置 run.failed；Engine 调用 `recordAgentFailure` 按 `JobDefinition.retry` 推进 attempt，达 `max_attempts` 后按 `on_exceeded` 处置。
+
 ## 12. MVP Execution Flows
 
 ### 12.1 `zigma-flow run`

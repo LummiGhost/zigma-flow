@@ -25,7 +25,12 @@ import {
   nextEventId,
 } from "../../src/events/index.js";
 import type {
+  AgentCancelledPayload,
+  AgentCompletedPayload,
+  AgentFailedPayload,
+  AgentInvokedPayload,
   AgentReportAcceptedPayload,
+  AgentTimedOutPayload,
   CheckCompletedPayload,
   EventEnvelope,
   JobActivatedPayload,
@@ -98,7 +103,7 @@ function runEnvelope(id: string, type: ZigmaFlowEventType): EventEnvelope {
 // ---------------------------------------------------------------------------
 
 describe("ZigmaFlowEventType", () => {
-  it("enumerates all 21 MVP event types from mvp-contracts.md §2.4 (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
+  it("enumerates all 26 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
     const expected: ZigmaFlowEventType[] = [
       "run_created",
       "job_ready",
@@ -107,6 +112,11 @@ describe("ZigmaFlowEventType", () => {
       "step_failed",
       "prompt_generated",
       "agent_report_accepted",
+      "agent_invoked",
+      "agent_completed",
+      "agent_timed_out",
+      "agent_failed",
+      "agent_cancelled",
       "script_completed",
       "check_completed",
       "signal_received",
@@ -125,8 +135,8 @@ describe("ZigmaFlowEventType", () => {
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(21);
-    expect(expected.length).toBe(21);
+    expect(EVENT_TYPES.length).toBe(26);
+    expect(expected.length).toBe(26);
   });
 });
 
@@ -227,6 +237,16 @@ describe("ZigmaFlowEvent", () => {
           return "prompt_generated";
         case "agent_report_accepted":
           return "agent_report_accepted";
+        case "agent_invoked":
+          return "agent_invoked";
+        case "agent_completed":
+          return "agent_completed";
+        case "agent_timed_out":
+          return "agent_timed_out";
+        case "agent_failed":
+          return "agent_failed";
+        case "agent_cancelled":
+          return "agent_cancelled";
         case "script_completed":
           return "script_completed";
         case "check_completed":
@@ -382,6 +402,89 @@ describe("ZigmaFlowEvent JSON round-trip", () => {
     const back = roundTrip(ev);
     expect(back).toEqual(ev);
     expect(back.type).toBe("agent_report_accepted");
+  });
+
+  it("round-trips agent_invoked (T-EVT-RT-22, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {
+    const payload: AgentInvokedPayload = {
+      backend_name: "claude-code",
+      command: "claude",
+      args_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+      timeout_ms: 600_000,
+      step_artifact_dir: "jobs/intake/attempts/1/steps/analyze",
+    };
+    const ev: ZigmaFlowEvent = {
+      ...stepEnvelope("evt-022", "agent_invoked", "engine", "intake", "analyze", 1),
+      type: "agent_invoked",
+      payload,
+    };
+    const back = roundTrip(ev);
+    expect(back).toEqual(ev);
+    expect(back.type).toBe("agent_invoked");
+  });
+
+  it("round-trips agent_completed (T-EVT-RT-23, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {
+    const payload: AgentCompletedPayload = {
+      duration_ms: 1234,
+      stdout_artifact: "jobs/intake/attempts/1/steps/analyze/agent.stdout.log",
+      stderr_artifact: "jobs/intake/attempts/1/steps/analyze/agent.stderr.log",
+      invocation_artifact: "jobs/intake/attempts/1/steps/analyze/agent.invocation.json",
+    };
+    const ev: ZigmaFlowEvent = {
+      ...stepEnvelope("evt-023", "agent_completed", "engine", "intake", "analyze", 1),
+      type: "agent_completed",
+      payload,
+    };
+    const back = roundTrip(ev);
+    expect(back).toEqual(ev);
+    expect(back.type).toBe("agent_completed");
+  });
+
+  it("round-trips agent_timed_out (T-EVT-RT-24, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {
+    const payload: AgentTimedOutPayload = {
+      duration_ms: 600_000,
+      timeout_ms: 600_000,
+      stdout_artifact: "jobs/intake/attempts/1/steps/analyze/agent.stdout.log",
+    };
+    const ev: ZigmaFlowEvent = {
+      ...stepEnvelope("evt-024", "agent_timed_out", "engine", "intake", "analyze", 1),
+      type: "agent_timed_out",
+      payload,
+    };
+    const back = roundTrip(ev);
+    expect(back).toEqual(ev);
+    expect(back.type).toBe("agent_timed_out");
+  });
+
+  it("round-trips agent_failed (T-EVT-RT-25, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {
+    const payload: AgentFailedPayload = {
+      duration_ms: 567,
+      exit_code: 1,
+      reason: "Agent exited with code 1",
+      stdout_artifact: "jobs/intake/attempts/1/steps/analyze/agent.stdout.log",
+    };
+    const ev: ZigmaFlowEvent = {
+      ...stepEnvelope("evt-025", "agent_failed", "engine", "intake", "analyze", 1),
+      type: "agent_failed",
+      payload,
+    };
+    const back = roundTrip(ev);
+    expect(back).toEqual(ev);
+    expect(back.type).toBe("agent_failed");
+  });
+
+  it("round-trips agent_cancelled (T-EVT-RT-26, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {
+    const payload: AgentCancelledPayload = {
+      duration_ms: 89,
+      reason: "User aborted the run",
+    };
+    const ev: ZigmaFlowEvent = {
+      ...stepEnvelope("evt-026", "agent_cancelled", "engine", "intake", "analyze", 1),
+      type: "agent_cancelled",
+      payload,
+    };
+    const back = roundTrip(ev);
+    expect(back).toEqual(ev);
+    expect(back.type).toBe("agent_cancelled");
   });
 
   it("round-trips script_completed (T-EVT-RT-8, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {

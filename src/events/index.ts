@@ -5,10 +5,17 @@
  * WF-P4-EVENT Step 2.
  */
 
+export { nextSequentialEventId } from "./sequence.js";
+
 export {
   EVENT_TYPES,
   nextEventId,
+  type AgentCancelledPayload,
+  type AgentCompletedPayload,
+  type AgentFailedPayload,
+  type AgentInvokedPayload,
   type AgentReportAcceptedPayload,
+  type AgentTimedOutPayload,
   type CheckCompletedPayload,
   type EventEnvelope,
   type JobActivatedPayload,

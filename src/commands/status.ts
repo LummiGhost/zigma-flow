@@ -90,7 +90,7 @@ export async function findRun(runsDir: string, runId?: string): Promise<string> 
  */
 export function renderRunStatus(
   state: RunState,
-  workflowJobs: Record<string, { needs?: string[] }>,
+  workflowJobs: Record<string, { needs?: string[]; steps?: Array<{ id: string; prompt?: string; approvers?: string[]; instructions?: string }> }>,
 ): string {
   const lines: string[] = [];
 
@@ -177,7 +177,33 @@ export function renderRunStatus(
     lines.push(`Failed:   ${failedJobs.join(", ")}`);
   }
 
-  lines.push("");
+  // --- Awaiting human input (WF-P15-CLI, AD-P15-008) ---
+
+  const awaitingHumanEntries = Object.entries(state.jobs)
+    .filter(([, js]) => js.step_status === "awaiting_human");
+
+  if (awaitingHumanEntries.length > 0) {
+    lines.push("");
+    lines.push("Awaiting human input:");
+    for (const [jobId, job] of awaitingHumanEntries) {
+      const stepId = job.current_step ?? "?";
+      lines.push(`  ${jobId} / ${stepId}`);
+
+      // Try to get prompt from workflow definition
+      const jobDef = workflowJobs[jobId];
+      const stepDef = jobDef?.steps?.find((s) => s.id === stepId);
+      if (stepDef?.prompt !== undefined) {
+        lines.push(`    Prompt: ${stepDef.prompt}`);
+      }
+      if (stepDef?.approvers !== undefined && stepDef.approvers.length > 0) {
+        lines.push(`    Approvers: ${stepDef.approvers.join(", ")}`);
+      } else {
+        lines.push("    Approvers: (anyone with project access)");
+      }
+      lines.push(`    Decide with: zigma-flow approve --job ${jobId} | reject --job ${jobId} --comment "..."`);
+    }
+    lines.push("");
+  }
 
   // --- Next section (RC-S05) ---
   if (failedJobs.length > 0) {
@@ -228,14 +254,28 @@ export async function statusAction(options: StatusOptions, runsDir?: string): Pr
   }
 
   // Try to load workflow for dependency info; silently fall back to {} on failure.
-  let workflowJobs: Record<string, { needs?: string[] }> = {};
+  let workflowJobs: Record<string, { needs?: string[]; steps?: Array<{ id: string; prompt?: string; approvers?: string[]; instructions?: string }> }> = {};
   try {
     const runYmlText = await readFile(join(runDir, "run.yml"), "utf-8");
     const runMeta = parseYaml(runYmlText) as { workflow?: { path?: string } };
     const workflowPath = runMeta?.workflow?.path;
     if (typeof workflowPath === "string") {
       const wf = await loadWorkflowFile(workflowPath);
-      workflowJobs = wf.jobs;
+      // Map JobDefinition to include step info for human gate display (WF-P15)
+      workflowJobs = Object.fromEntries(
+        Object.entries(wf.jobs).map(([id, job]) => [
+          id,
+          {
+            ...(job.needs !== undefined ? { needs: job.needs } : {}),
+            steps: job.steps.map((s) => ({
+              id: s.id,
+              ...(s.prompt !== undefined ? { prompt: s.prompt } : {}),
+              ...(s.approvers !== undefined ? { approvers: s.approvers } : {}),
+              ...(s.instructions !== undefined ? { instructions: s.instructions } : {}),
+            })),
+          },
+        ])
+      );
     }
   } catch {
     // Silently fall back — tests don't provide a real workflow YAML.

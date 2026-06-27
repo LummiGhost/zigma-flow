@@ -78,6 +78,7 @@ export interface JobState {
   retry_inputs?: Record<string, string>; // retry_with payload from the router action that triggered this retry
   outputs?: Record<string, unknown>; // persisted from report.json.outputs by acceptAgentReport (WF-P9-ACCEPT)
   step_visits?: Record<string, number>; // visit count per step id (WF-P13-VARIABLES)
+  step_status?: "awaiting_human"; // per-step status for human gate (WF-P15-ENGINE, AD-P15-001)
 }
 
 export interface RunState {

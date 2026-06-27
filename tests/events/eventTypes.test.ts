@@ -139,12 +139,14 @@ describe("ZigmaFlowEventType", () => {
       "step_skipped",
       "step_revisited",
       "step_visit_exceeded",
+      "human_gate_waiting",
+      "human_decision",
     ];
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(34);
-    expect(expected.length).toBe(34);
+    expect(EVENT_TYPES.length).toBe(36);
+    expect(expected.length).toBe(36);
   });
 });
 
@@ -299,6 +301,10 @@ describe("ZigmaFlowEvent", () => {
           return "step_revisited";
         case "step_visit_exceeded":
           return "step_visit_exceeded";
+        case "human_gate_waiting":
+          return "human_gate_waiting";
+        case "human_decision":
+          return "human_decision";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;

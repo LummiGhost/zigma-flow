@@ -6,7 +6,7 @@
  */
 
 // ---------------------------------------------------------------------------
-// ZigmaFlowEventType — the 26 event type tags (closed string union)
+// ZigmaFlowEventType — the 36 event type tags (closed string union)
 // ---------------------------------------------------------------------------
 
 export type ZigmaFlowEventType =
@@ -43,10 +43,12 @@ export type ZigmaFlowEventType =
   | "context_block_deleted"
   | "step_skipped"
   | "step_revisited"
-  | "step_visit_exceeded";
+  | "step_visit_exceeded"
+  | "human_gate_waiting"
+  | "human_decision";
 
 /**
- * Runtime tuple of all 26 event type tags.
+ * Runtime tuple of all 36 event type tags.
  * Length is statically checked by the test suite.
  */
 export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
@@ -84,6 +86,8 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "step_skipped",
   "step_revisited",
   "step_visit_exceeded",
+  "human_gate_waiting",
+  "human_decision",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -310,6 +314,28 @@ export interface StepVisitExceededPayload {
 }
 
 // ---------------------------------------------------------------------------
+// WF-P15-HUMAN-GATE payload interfaces
+// ---------------------------------------------------------------------------
+
+export interface HumanGateWaitingPayload {
+  job_id: string;
+  step_id: string;
+  prompt: string;
+  approvers?: string[];
+  instructions?: string;
+  step_artifact_dir: string;
+}
+
+export interface HumanDecisionPayload {
+  job_id: string;
+  step_id: string;
+  decision: "approved" | "rejected";
+  comment?: string;
+  decided_by?: string;
+  outputs?: Record<string, string>;
+}
+
+// ---------------------------------------------------------------------------
 // EventEnvelope — the common envelope wrapping every event
 // ---------------------------------------------------------------------------
 
@@ -327,7 +353,7 @@ export interface EventEnvelope {
 }
 
 // ---------------------------------------------------------------------------
-// ZigmaFlowEvent — discriminated union of all 19 concrete event types
+// ZigmaFlowEvent — discriminated union of all 36 concrete event types
 // ---------------------------------------------------------------------------
 
 export type ZigmaFlowEvent =
@@ -364,7 +390,9 @@ export type ZigmaFlowEvent =
   | (EventEnvelope & { type: "context_block_deleted"; payload: ContextBlockDeletedPayload })
   | (EventEnvelope & { type: "step_skipped"; payload: StepSkippedPayload })
   | (EventEnvelope & { type: "step_revisited"; payload: StepRevisitedPayload })
-  | (EventEnvelope & { type: "step_visit_exceeded"; payload: StepVisitExceededPayload });
+  | (EventEnvelope & { type: "step_visit_exceeded"; payload: StepVisitExceededPayload })
+  | (EventEnvelope & { type: "human_gate_waiting"; payload: HumanGateWaitingPayload })
+  | (EventEnvelope & { type: "human_decision"; payload: HumanDecisionPayload });
 
 // ---------------------------------------------------------------------------
 // nextEventId — sequential event id formatter

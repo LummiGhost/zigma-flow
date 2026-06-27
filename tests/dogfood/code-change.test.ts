@@ -357,12 +357,13 @@ describe("TC-DOGFOOD-2: workflow YAML validity", () => {
 
     expect(wf.name).toBe("code-change");
 
-    // All 10 jobs present
+    // All 11 jobs present (10 active + architecture-design manual + gate-merge manual)
     const jobIds = Object.keys(wf.jobs).sort();
     expect(jobIds).toEqual(
       [
         "architecture-design",
         "code-map",
+        "gate-merge",
         "implement",
         "intake",
         "plan",

@@ -621,10 +621,8 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
   const jobState = state.jobs[jobId]!;
   const attempt = jobState.attempt ?? 1;
 
-  // Use nextSequentialEventId to derive the next sequential event id
+  // Emit job_completed event BEFORE updateState (maintains events-before-state invariant)
   const jobCompletedId = await nextSequentialEventId(runDir, eventWriter);
-
-  // Append job_completed event BEFORE writing snapshot (FP-MULTISTEP-FINAL-SEQUENCE)
   await eventWriter.appendEvent(runDir, {
     id: jobCompletedId,
     run_id: runId,
@@ -637,37 +635,26 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
     payload: { job_id: jobId, attempt },
   });
 
-  // Build terminal snapshot: remove current_step, set status = "completed",
-  // update last_event_id to the appended event id.
-  const completedJobState = { ...jobState };
-  delete completedJobState.current_step;
-  completedJobState.status = "completed";
+  let lastEventId = jobCompletedId;
 
-  let finalState: RunState = {
-    ...state,
-    last_event_id: jobCompletedId,
-    jobs: {
-      ...state.jobs,
-      [jobId]: completedJobState,
-    },
-  };
-
-  // Propagate readiness: find dependent jobs whose needs are now all satisfied
-  // and transition them from "waiting" → "ready", emitting job_ready events.
+  // Pre-compute readiness and emit events from the initially-read state.
+  // The updater below will re-derive from the latest state to ensure
+  // consistency with concurrent peer completions.
   const completedJobIds = new Set<string>(
-    Object.entries(finalState.jobs)
+    Object.entries(state.jobs)
       .filter(([, js]) => js.status === "completed")
       .map(([id]) => id)
   );
+  completedJobIds.add(jobId);
   const activeJobIds = new Set<string>(
-    Object.keys(finalState.jobs).filter(
-      (id) => !completedJobIds.has(id) && finalState.jobs[id]!.status !== "waiting"
+    Object.keys(state.jobs).filter(
+      (id) => !completedJobIds.has(id) && state.jobs[id]!.status !== "waiting"
     )
   );
   const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds);
 
   for (const readyId of nowReadyIds) {
-    const waitingJobState = finalState.jobs[readyId];
+    const waitingJobState = state.jobs[readyId];
     if (waitingJobState?.status !== "waiting") continue;
 
     const jobReadyId = await nextSequentialEventId(runDir, eventWriter);
@@ -682,26 +669,74 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
       attempt: null,
       payload: { job_id: readyId },
     });
-
-    finalState = {
-      ...finalState,
-      last_event_id: jobReadyId,
-      jobs: {
-        ...finalState.jobs,
-        [readyId]: { ...waitingJobState, status: "ready" as const },
-      },
-    };
+    lastEventId = jobReadyId;
   }
 
-  // Check if run is now complete: all non-inactive jobs completed
-  const allNonInactiveCompleted = Object.values(finalState.jobs).every(
-    js => js.status === "completed" || js.status === "inactive"
-  );
-  const hasCompletedJob = Object.values(finalState.jobs).some(
-    js => js.status === "completed"
-  );
+  // Step 1: Atomically set job to "completed" and propagate readiness.
+  // The updater uses latest state so concurrent peer completions are not lost.
+  await stateStore.updateState(runDir, (current) => {
+    const completedJobState = { ...current.jobs[jobId]! };
+    delete completedJobState.current_step;
+    completedJobState.status = "completed";
 
-  if (allNonInactiveCompleted && hasCompletedJob) {
+    let newState: RunState = {
+      ...current,
+      last_event_id: lastEventId,
+      jobs: {
+        ...current.jobs,
+        [jobId]: completedJobState,
+      },
+    };
+
+    // Re-derive readiness from latest state (handles concurrent peer completions)
+    const curCompletedIds = new Set<string>(
+      Object.entries(newState.jobs)
+        .filter(([, js]) => js.status === "completed")
+        .map(([id]) => id)
+    );
+    const curActiveIds = new Set<string>(
+      Object.keys(newState.jobs).filter(
+        (id) => !curCompletedIds.has(id) && newState.jobs[id]!.status !== "waiting"
+      )
+    );
+    const curReadyIds = computeReadyJobs(wf.jobs, curCompletedIds, curActiveIds);
+
+    for (const readyId of curReadyIds) {
+      const waitingJobState = newState.jobs[readyId];
+      if (waitingJobState?.status === "waiting") {
+        newState = {
+          ...newState,
+          jobs: {
+            ...newState.jobs,
+            [readyId]: { ...waitingJobState, status: "ready" as const },
+          },
+        };
+      }
+    }
+
+    // Re-check run completeness from latest state
+    const allNonInactiveCompleted = Object.values(newState.jobs).every(
+      js => js.status === "completed" || js.status === "inactive"
+    );
+    const hasCompletedJob = Object.values(newState.jobs).some(
+      js => js.status === "completed"
+    );
+
+    if (allNonInactiveCompleted && hasCompletedJob) {
+      newState = {
+        ...newState,
+        status: "completed" as const,
+      };
+    }
+
+    return newState;
+  });
+
+  // Step 2: If run is now completed, emit run_completed event and update last_event_id.
+  // This two-step approach keeps events before state while allowing the updater
+  // to use the latest concurrent state view.
+  const postState = await stateStore.readSnapshot(runDir);
+  if (postState?.status === "completed") {
     const runCompletedId = await nextSequentialEventId(runDir, eventWriter);
     await eventWriter.appendEvent(runDir, {
       id: runCompletedId,
@@ -714,14 +749,13 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
       attempt: null,
       payload: {},
     });
-    finalState = {
-      ...finalState,
-      last_event_id: runCompletedId,
-      status: "completed",
-    };
-  }
 
-  await stateStore.writeSnapshot(runDir, finalState);
+    // Update last_event_id to include the run_completed event
+    await stateStore.updateState(runDir, (current) => ({
+      ...current,
+      last_event_id: runCompletedId,
+    }));
+  }
 
   return false;
 }

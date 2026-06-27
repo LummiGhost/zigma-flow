@@ -79,8 +79,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--task <task>", "Task description for a new run (mutually exclusive with --resume).")
     .option("--resume <run-id>", "Resume an existing run from where it left off (mutually exclusive with --task).")
     .option("--backend <name>", "Agent backend to use (default: from config, or claude-code).")
+    .option("--parallelism <N>", "Maximum concurrent job count (default 4).", parseInt)
+    .option("--fail-fast", "Enable fail-fast abort propagation on job failure.")
     .exitOverride()
-    .action(async (workflowPath: string, options: { task?: string; resume?: string; backend?: string }) => {
+    .action(async (workflowPath: string, options: { task?: string; resume?: string; backend?: string; parallelism?: number; failFast?: boolean }) => {
       if (options.task === undefined && options.resume === undefined) {
         console.error("Error: Either --task <description> or --resume <run-id> is required.");
         process.exit(2);
@@ -93,6 +95,8 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         ...(options.task !== undefined ? { task: options.task } : {}),
         ...(options.resume !== undefined ? { resume: options.resume } : {}),
         ...(options.backend !== undefined ? { backend: options.backend } : {}),
+        ...(options.parallelism !== undefined ? { parallelism: options.parallelism } : {}),
+        ...(options.failFast !== undefined ? { failFast: options.failFast } : {}),
       });
     });
 

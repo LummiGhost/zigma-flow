@@ -12,5 +12,19 @@ export type {
   AgentExecuteResult,
 } from "./types.js";
 
+export type {
+  AgentConfig,
+  AgentBackendConfigEntry,
+  ResolvedBackend,
+} from "./config.js";
+
+export {
+  loadAgentConfig,
+  resolveBackendForStep,
+  createBackend,
+  DEFAULT_PARALLELISM,
+  getParallelism,
+} from "./config.js";
+
 export { AgentBackendFactory, agentFactory } from "./factory.js";
 export { ClaudeCodeBackend } from "./backends/claude-code.js";

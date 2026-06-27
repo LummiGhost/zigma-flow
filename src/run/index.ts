@@ -13,9 +13,14 @@ import { stringify } from "yaml";
 
 import { ConfigError, FilesystemError, StateError, WorkflowError } from "../utils/index.js";
 
+import { AsyncQueue } from "./asyncQueue.js";
+
 // Re-export event types from events/ for backward compatibility.
 export type { EventWriter, WorkflowEvent } from "../events/index.js";
 export { JsonlEventWriter } from "../events/index.js";
+
+// Re-export AsyncQueue for convenience.
+export { AsyncQueue } from "./asyncQueue.js";
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -32,6 +37,19 @@ export interface IdGenerator {
 export interface StateStore {
   readSnapshot(runDir: string): Promise<RunState | null>;
   writeSnapshot(runDir: string, state: RunState): Promise<void>;
+  /**
+   * Atomically read-modify-write run state within the per-runDir write queue.
+   * The `updater` receives the current RunState (guaranteed non-null; throws
+   * StateError if state.json is missing) and returns the new state to persist.
+   *
+   * This is the safe method for concurrent writers (AD-P14-003): the read and
+   * write happen inside a single AsyncQueue entry so no peer write can
+   * interleave and overwrite partial updates.
+   */
+  updateState(
+    runDir: string,
+    updater: (current: RunState) => RunState,
+  ): Promise<void>;
   /**
    * Validate last event id consistency.
    *
@@ -142,6 +160,21 @@ function isValidRunState(value: unknown): value is RunState {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Per-runDir write serialization queues (AD-P14-003)
+// ---------------------------------------------------------------------------
+
+const writeQueues = new Map<string, AsyncQueue>();
+
+function getWriteQueue(runDir: string): AsyncQueue {
+  let queue = writeQueues.get(runDir);
+  if (!queue) {
+    queue = new AsyncQueue();
+    writeQueues.set(runDir, queue);
+  }
+  return queue;
+}
+
 export class LocalStateStore implements StateStore {
   async readSnapshot(runDir: string): Promise<RunState | null> {
     const statePath = join(runDir, "state.json");
@@ -172,11 +205,31 @@ export class LocalStateStore implements StateStore {
   }
 
   async writeSnapshot(runDir: string, state: RunState): Promise<void> {
-    const statePath = join(runDir, "state.json");
-    const tmpPath = join(runDir, `state.json.tmp-${randomUUID()}`);
-    const text = JSON.stringify(state, null, 2);
-    await writeFile(tmpPath, text, "utf-8");
-    await rename(tmpPath, statePath);
+    return getWriteQueue(runDir).run(async () => {
+      const statePath = join(runDir, "state.json");
+      const tmpPath = join(runDir, `state.json.tmp-${randomUUID()}`);
+      const text = JSON.stringify(state, null, 2);
+      await writeFile(tmpPath, text, "utf-8");
+      await rename(tmpPath, statePath);
+    });
+  }
+
+  async updateState(
+    runDir: string,
+    updater: (current: RunState) => RunState,
+  ): Promise<void> {
+    return getWriteQueue(runDir).run(async () => {
+      const current = await this.readSnapshot(runDir);
+      if (current === null) {
+        throw new StateError(`Cannot update state: state.json missing in ${runDir}`);
+      }
+      const newState = updater(current);
+      const statePath = join(runDir, "state.json");
+      const tmpPath = join(runDir, `state.json.tmp-${randomUUID()}`);
+      const text = JSON.stringify(newState, null, 2);
+      await writeFile(tmpPath, text, "utf-8");
+      await rename(tmpPath, statePath);
+    });
   }
 
   /**

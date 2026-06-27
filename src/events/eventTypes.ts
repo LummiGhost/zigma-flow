@@ -322,6 +322,8 @@ export interface EventEnvelope {
   job: string | null;
   step: string | null;
   attempt: number | null;
+  /** UUID v4 identifying the concurrent batch that emitted this event (AD-P14-006). */
+  batch_id?: string;
 }
 
 // ---------------------------------------------------------------------------

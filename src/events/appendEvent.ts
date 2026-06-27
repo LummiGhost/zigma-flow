@@ -10,6 +10,7 @@
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { AsyncQueue } from "../run/asyncQueue.js";
 import { FilesystemError } from "../utils/index.js";
 import type { ZigmaFlowEvent } from "./eventTypes.js";
 
@@ -39,13 +40,27 @@ export interface EventWriter {
 }
 
 // ---------------------------------------------------------------------------
-// JsonlEventWriter — append-only JSONL implementation
+// Per-runDir append serialization queues (AD-P14-003)
 // ---------------------------------------------------------------------------
 
+const appendQueues = new Map<string, AsyncQueue>();
+
+function getAppendQueue(runDir: string): AsyncQueue {
+  let queue = appendQueues.get(runDir);
+  if (!queue) {
+    queue = new AsyncQueue();
+    appendQueues.set(runDir, queue);
+  }
+  return queue;
+}
+
+// JsonlEventWriter — append-only JSONL implementation
 export class JsonlEventWriter implements EventWriter {
   async appendEvent(runDir: string, event: ZigmaFlowEvent): Promise<void> {
-    const eventsPath = join(runDir, "events.jsonl");
-    await appendFile(eventsPath, JSON.stringify(event) + "\n", "utf-8");
+    return getAppendQueue(runDir).run(async () => {
+      const eventsPath = join(runDir, "events.jsonl");
+      await appendFile(eventsPath, JSON.stringify(event) + "\n", "utf-8");
+    });
   }
 
   async readLastEventId(runDir: string): Promise<string | null> {

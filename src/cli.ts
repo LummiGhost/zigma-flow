@@ -76,12 +76,22 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   program
     .command("run-all <workflow>")
     .description("Create and execute an entire workflow run automatically using an agent backend.")
-    .requiredOption("--task <task>", "Task description for this run.")
+    .option("--task <task>", "Task description for a new run (mutually exclusive with --resume).")
+    .option("--resume <run-id>", "Resume an existing run from where it left off (mutually exclusive with --task).")
     .option("--backend <name>", "Agent backend to use (default: from config, or claude-code).")
     .exitOverride()
-    .action(async (workflowPath: string, options: { task: string; backend?: string }) => {
+    .action(async (workflowPath: string, options: { task?: string; resume?: string; backend?: string }) => {
+      if (options.task === undefined && options.resume === undefined) {
+        console.error("Error: Either --task <description> or --resume <run-id> is required.");
+        process.exit(2);
+      }
+      if (options.task !== undefined && options.resume !== undefined) {
+        console.error("Error: --task and --resume are mutually exclusive.");
+        process.exit(2);
+      }
       await runAllAction(workflowPath, {
-        task: options.task,
+        ...(options.task !== undefined ? { task: options.task } : {}),
+        ...(options.resume !== undefined ? { resume: options.resume } : {}),
         ...(options.backend !== undefined ? { backend: options.backend } : {}),
       });
     });

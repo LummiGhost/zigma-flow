@@ -21,7 +21,7 @@ import { runAll, type RunAllOpts, type RunAllSummary } from "../engine/runAll.js
 
 export interface RunAllOptions {
   /** Task description for new runs (mutually exclusive with resume). */
-  task: string;
+  task?: string;
   /** Run ID to resume (mutually exclusive with task). */
   resume?: string;
   /** CLI override for the agent backend name. */
@@ -64,9 +64,8 @@ export async function runAllAction(
   // ── 3. Delegate to the Engine's runAll ──────────────────────────────────
 
   const runAllOpts: RunAllOpts = {
-    ...(options.resume !== undefined
-      ? { runId: options.resume }
-      : { task: options.task }),
+    ...(options.resume !== undefined ? { runId: options.resume } : {}),
+    ...(options.task !== undefined ? { task: options.task } : {}),
     workflowPath: absWorkflowPath,
     runsDir,
     zigmaflowDir,

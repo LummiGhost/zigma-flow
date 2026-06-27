@@ -496,13 +496,110 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     await stateStore.writeSnapshot(runDir, updatedState);
     return;
   }
+
+  // ── goto_step branch (WF-P13-FLOW) ──────────────────────────────────────
+
+  if (typeof action === "object" && action !== null && "goto_step" in action) {
+    const targetStepId = action.goto_step;
+
+    // Validate target exists in same job in the workflow definition
+    const jobDef = wf.jobs[sourceJobId];
+    const targetStepDef = jobDef?.steps.find((s) => s.id === targetStepId);
+    if (!targetStepDef) {
+      throw new WorkflowError(
+        `goto_step target "${targetStepId}" not found in job "${sourceJobId}"`,
+        { details: { sourceJobId, targetStepId } }
+      );
+    }
+
+    // Get current visit count for target step, increment
+    const stepVisits = { ...(sourceJobState.step_visits ?? {}) };
+    const currentVisits = stepVisits[targetStepId] ?? 0;
+    const newVisitCount = currentVisits + 1;
+
+    // Check max_visits on the target step
+    const maxVisits = typeof targetStepDef.max_visits === "number" ? targetStepDef.max_visits : 3;
+
+    if (newVisitCount > maxVisits) {
+      // Exceeded — block step and job
+      const exceededEventId = getNextEventId();
+      await eventWriter.appendEvent(runDir, {
+        id: exceededEventId,
+        run_id: runId,
+        type: "step_visit_exceeded",
+        timestamp: clock.now(),
+        producer: "engine",
+        job: sourceJobId,
+        step: sourceStepId,
+        attempt,
+        payload: { job_id: sourceJobId, step_id: targetStepId, max_visits: maxVisits, visit_count: newVisitCount },
+      });
+
+      stepVisits[targetStepId] = newVisitCount;
+      const blockedState: RunState = {
+        ...state,
+        last_event_id: exceededEventId,
+        jobs: {
+          ...state.jobs,
+          [sourceJobId]: {
+            ...sourceJobState,
+            status: "blocked",
+            current_step: targetStepId,
+            step_visits: stepVisits,
+          },
+        },
+      };
+      await stateStore.writeSnapshot(runDir, blockedState);
+      return;
+    }
+
+    // Within limits — append step_revisited event
+    const revisitedEventId = getNextEventId();
+    await eventWriter.appendEvent(runDir, {
+      id: revisitedEventId,
+      run_id: runId,
+      type: "step_revisited",
+      timestamp: clock.now(),
+      producer: "engine",
+      job: sourceJobId,
+      step: sourceStepId,
+      attempt,
+      payload: { job_id: sourceJobId, step_id: sourceStepId, target_step: targetStepId, visit_count: newVisitCount },
+    });
+
+    // Build updated job state: redirect to target step, increment visit count
+    stepVisits[targetStepId] = newVisitCount;
+    const updatedJobState = {
+      ...sourceJobState,
+      current_step: targetStepId,
+      step_visits: stepVisits,
+    };
+
+    // Handle goto_with → retry_inputs (preserves attempt number)
+    if ("goto_with" in action && action.goto_with !== undefined) {
+      updatedJobState.retry_inputs = { ...action.goto_with };
+    } else {
+      delete updatedJobState.retry_inputs;
+    }
+
+    const updatedState: RunState = {
+      ...state,
+      last_event_id: revisitedEventId,
+      jobs: {
+        ...state.jobs,
+        [sourceJobId]: updatedJobState,
+      },
+    };
+    await stateStore.writeSnapshot(runDir, updatedState);
+    return;
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Helper: get the string discriminator of a RouterAction
 // ---------------------------------------------------------------------------
 
-function actionDiscriminator(action: RouterAction): string {
+export function actionDiscriminator(action: RouterAction): string {
   if (action === "continue") return "continue";
   if (action === "fail") return "fail";
   if (action === "block") return "block";
@@ -510,6 +607,7 @@ function actionDiscriminator(action: RouterAction): string {
     if ("retry_job" in action) return "retry_job";
     if ("activate_job" in action) return "activate_job";
     if ("goto_job" in action) return "goto_job";
+    if ("goto_step" in action) return "goto_step";
     if ("status" in action) return action.status;
   }
   return String(action);

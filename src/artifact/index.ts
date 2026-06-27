@@ -28,3 +28,6 @@ export {
   type Clock,
   type WriteArtifactOpts,
 } from "./writeArtifact.js";
+
+export { writeContextBlockArtifact } from "./writeContextBlockArtifact.js";
+export type { WriteContextBlockArtifactOpts } from "./writeContextBlockArtifact.js";

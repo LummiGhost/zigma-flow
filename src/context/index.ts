@@ -122,6 +122,9 @@ export interface ContextBundle {
   signals: SignalSpec[];
   permissions: PermissionSet;
   repositoryWorkspace?: RepositoryWorkspacePermissions;
+  // WF-P13-VARIABLES
+  variables?: Record<string, unknown>;
+  contextBlocks?: Array<{ id: string; version: number; content: string; writable: boolean }>;
 }
 
 export interface BuildContextOpts {
@@ -695,6 +698,76 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
   }
 
   // -----------------------------------------------------------------------
+  // 7. Variables injection (WF-P13-VARIABLES)
+  // -----------------------------------------------------------------------
+
+  let bundleVariables: Record<string, unknown> | undefined;
+  if (
+    workflowDef.variables !== undefined &&
+    step.permissions?.variables?.read !== undefined &&
+    step.permissions.variables.read.length > 0
+  ) {
+    const stateVars = state.variables ?? {};
+    bundleVariables = {};
+    for (const varName of step.permissions.variables.read) {
+      if (Object.prototype.hasOwnProperty.call(stateVars, varName)) {
+        bundleVariables[varName] = stateVars[varName];
+      }
+    }
+    // Only include if we have matching variables
+    if (Object.keys(bundleVariables).length === 0) {
+      bundleVariables = undefined;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // 8. Context blocks injection (WF-P13-VARIABLES)
+  // -----------------------------------------------------------------------
+
+  let bundleContextBlocks:
+    | Array<{ id: string; version: number; content: string; writable: boolean }>
+    | undefined;
+
+  if (
+    workflowDef.context_blocks !== undefined &&
+    step.permissions?.context_blocks?.read !== undefined &&
+    step.permissions.context_blocks.read.length > 0
+  ) {
+    const stateBlocks = state.context_blocks ?? {};
+    const writeSet = new Set(step.permissions.context_blocks.write ?? []);
+    bundleContextBlocks = [];
+
+    for (const blockId of step.permissions.context_blocks.read) {
+      const blockState = stateBlocks[blockId];
+      if (blockState === undefined) continue;
+
+      // Read the current version artifact content from disk
+      let content = "";
+      if (blockState.current_artifact) {
+        const artifactPath = join(runDir, blockState.current_artifact);
+        try {
+          content = await readFile(artifactPath, "utf-8");
+        } catch {
+          // If artifact file doesn't exist, use empty content
+          content = "";
+        }
+      }
+
+      const writable = writeSet.has(blockId);
+      bundleContextBlocks.push({
+        id: blockId,
+        version: blockState.current_version,
+        content,
+        writable,
+      });
+    }
+
+    if (bundleContextBlocks.length === 0) {
+      bundleContextBlocks = undefined;
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // Assemble and return bundle
   // -----------------------------------------------------------------------
 
@@ -716,5 +789,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     signals,
     permissions,
     repositoryWorkspace,
+    ...(bundleVariables !== undefined ? { variables: bundleVariables } : {}),
+    ...(bundleContextBlocks !== undefined ? { contextBlocks: bundleContextBlocks } : {}),
   };
 }

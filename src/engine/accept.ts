@@ -32,10 +32,11 @@ import { artifactStepDir } from "../artifact/artifactPaths.js";
 import { appendArtifactIndex, artifactId, artifactFileRelativePath } from "../artifact/index.js";
 import { nextEventId as formatEventId } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
-import type { Clock, RunState } from "../run/index.js";
+import type { Clock, JobState, RunState } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import { FilesystemError, StateError, ValidationError, WorkflowError } from "../utils/index.js";
 import { applyRoutingAction } from "./routing.js";
+import type { ContextPatch } from "./applyContextPatch.js";
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -93,6 +94,8 @@ interface AgentReport {
   artifacts: unknown[];
   signals: Array<{ type: string; reason?: string }>;
   summary: string;
+  status?: string | undefined;
+  context_patches?: unknown[];
 }
 
 function validateReportShape(parsed: unknown): AgentReport {
@@ -149,6 +152,8 @@ function validateReportShape(parsed: unknown): AgentReport {
     artifacts: obj["artifacts"] as unknown[],
     signals,
     summary: obj["summary"],
+    status: obj["status"] !== undefined ? String(obj["status"]) : undefined,
+    ...(obj["context_patches"] !== undefined ? { context_patches: obj["context_patches"] as unknown[] } : {}),
   };
 }
 
@@ -278,6 +283,53 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
 
   const signalsArray = report.signals;
 
+  // ── Status handling (AD-P13-013) — before signals ─────────────────────
+  // If the step declares returns.status and the report includes a status
+  // field, dispatch via applyStatusReturn (which emits step_returned and
+  // calls applyRoutingAction). Status action takes priority over signals.
+
+  if (report.status !== undefined && stepDef?.returns?.status) {
+    // Write outputs to state first (pipeline step 2)
+    const stateWithOutputs: RunState = {
+      ...state,
+      jobs: {
+        ...state.jobs,
+        [jobId]: {
+          ...jobState,
+          outputs: normalizedOutputs,
+        },
+      },
+    };
+    await stateStore.writeSnapshot(runDir, stateWithOutputs);
+
+    // ── 3b. Apply context patches (AD-P13-013 pipeline step 3) ────────────
+    if (report.context_patches && report.context_patches.length > 0) {
+      const { applyContextPatch: acp } = await import("./applyContextPatch.js");
+      await acp({
+        runDir,
+        runId,
+        jobId,
+        stepId,
+        attempt,
+        patches: report.context_patches as ContextPatch[],
+        clock,
+      });
+    }
+
+    const { applyStatusReturn: applySR } = await import("./applyStatusReturn.js");
+    await applySR({
+      runDir,
+      runId,
+      sourceJobId: jobId,
+      sourceStepId: stepId,
+      attempt,
+      status: report.status,
+      clock,
+    });
+
+    return;
+  }
+
   if (signalsArray.length > 0) {
     // Validate each signal before any disk mutation
     for (const sig of signalsArray) {
@@ -334,6 +386,20 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
     };
     await stateStore.writeSnapshot(runDir, stateWithOutputs);
 
+    // ── 3b. Apply context patches (AD-P13-013 pipeline step 3) ────────────
+    if (report.context_patches && report.context_patches.length > 0) {
+      const { applyContextPatch: acp } = await import("./applyContextPatch.js");
+      await acp({
+        runDir,
+        runId,
+        jobId,
+        stepId,
+        attempt,
+        patches: report.context_patches as ContextPatch[],
+        clock,
+      });
+    }
+
     // ── 7. Dispatch selected signal via applyRoutingAction ────────────────────
     // (NO agent_report_accepted on the signal path)
 
@@ -371,9 +437,36 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
 
   // ── No-signal path ─────────────────────────────────────────────────────────
 
-  // ── 7. Persist outputs to job state ───────────────────────────────────────
+  // ── 7. Persist outputs to job state (before context patches) ──────────────
 
-  // ── 8. Emit agent_report_accepted event ───────────────────────────────────
+  const outputsState: RunState = {
+    ...state,
+    jobs: {
+      ...state.jobs,
+      [jobId]: {
+        ...jobState,
+        outputs: normalizedOutputs,
+      },
+    },
+  };
+  await stateStore.writeSnapshot(runDir, outputsState);
+
+  // ── 8. Apply context patches (AD-P13-013 pipeline step 3) ────────────────
+
+  if (report.context_patches && report.context_patches.length > 0) {
+    const { applyContextPatch: acp } = await import("./applyContextPatch.js");
+    await acp({
+      runDir,
+      runId,
+      jobId,
+      stepId,
+      attempt,
+      patches: report.context_patches as ContextPatch[],
+      clock,
+    });
+  }
+
+  // ── 9. Emit agent_report_accepted event ───────────────────────────────────
 
   const lastId = await eventWriter.readLastEventId(runDir);
   const counter = lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
@@ -398,7 +491,7 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
     },
   });
 
-  // ── 8b. Register report.json in artifact index ────────────────────────────
+  // ── 9b. Register report.json in artifact index ────────────────────────────
 
   const reportSize = await stat(reportPath).then(s => s.size).catch(() => 0);
   const reportArtifactId = artifactId(runId, jobId, attempt, stepId, "report.json");
@@ -415,18 +508,24 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
     created_at: clock.now(),
   });
 
-  // ── 9. Write intermediate snapshot (outputs + last_event_id) ──────────────
+  // ── 10. Read latest state (includes patch results) and write snapshot ────
 
-  const updatedJobState = {
-    ...jobState,
+  const latestState = await stateStore.readSnapshot(runDir);
+  if (latestState === null) {
+    throw new StateError(`state.json missing for run ${runId}`);
+  }
+
+  const latestJobState = latestState.jobs[jobId]!;
+  const updatedJobState: JobState = {
+    ...latestJobState,
     outputs: normalizedOutputs,
   };
 
   const intermediateState: RunState = {
-    ...state,
+    ...latestState,
     last_event_id: acceptedEventId,
     jobs: {
-      ...state.jobs,
+      ...latestState.jobs,
       [jobId]: updatedJobState,
     },
   };

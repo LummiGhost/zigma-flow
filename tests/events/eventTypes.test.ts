@@ -103,7 +103,7 @@ function runEnvelope(id: string, type: ZigmaFlowEventType): EventEnvelope {
 // ---------------------------------------------------------------------------
 
 describe("ZigmaFlowEventType", () => {
-  it("enumerates all 26 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
+  it("enumerates all 34 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
     const expected: ZigmaFlowEventType[] = [
       "run_created",
       "job_ready",
@@ -131,12 +131,20 @@ describe("ZigmaFlowEventType", () => {
       "job_skipped",
       "job_blocked",
       "job_failed",
+      "step_returned",
+      "variable_set",
+      "variable_deleted",
+      "context_block_updated",
+      "context_block_deleted",
+      "step_skipped",
+      "step_revisited",
+      "step_visit_exceeded",
     ];
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(26);
-    expect(expected.length).toBe(26);
+    expect(EVENT_TYPES.length).toBe(34);
+    expect(expected.length).toBe(34);
   });
 });
 
@@ -275,6 +283,22 @@ describe("ZigmaFlowEvent", () => {
           return "job_blocked";
         case "job_failed":
           return "job_failed";
+        case "step_returned":
+          return "step_returned";
+        case "variable_set":
+          return "variable_set";
+        case "variable_deleted":
+          return "variable_deleted";
+        case "context_block_updated":
+          return "context_block_updated";
+        case "context_block_deleted":
+          return "context_block_deleted";
+        case "step_skipped":
+          return "step_skipped";
+        case "step_revisited":
+          return "step_revisited";
+        case "step_visit_exceeded":
+          return "step_visit_exceeded";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;

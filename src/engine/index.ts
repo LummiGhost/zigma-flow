@@ -32,6 +32,8 @@ import {
   writeRunYaml,
 } from "../run/index.js";
 import { nextEventId as formatEventId, nextSequentialEventId } from "../events/index.js";
+import { evaluateCondition } from "../expression/index.js";
+import type { ExpressionContext } from "../expression/index.js";
 
 export { applyRoutingAction } from "./routing.js";
 export type { ApplyRoutingActionOpts } from "./routing.js";
@@ -43,6 +45,10 @@ export { runAll } from "./runAll.js";
 export type { RunAllOpts, RunAllSummary } from "./runAll.js";
 export { recordAgentFailure } from "./recordAgentFailure.js";
 export type { RecordAgentFailureOpts, RecordAgentFailureResult } from "./recordAgentFailure.js";
+export { applyStatusReturn } from "./applyStatusReturn.js";
+export type { ApplyStatusReturnOpts } from "./applyStatusReturn.js";
+export { applyContextPatch } from "./applyContextPatch.js";
+export type { ApplyContextPatchOpts, ContextPatch, ContextPatchKind } from "./applyContextPatch.js";
 
 export interface CreateRunInputs {
   workflowPath: string;
@@ -103,6 +109,36 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     }
   }
 
+  // ── RC-R06b: Initialize variables from workflow definition ─────────────────
+  // Collect all variables that have an `initial` value declared in the workflow.
+  let initialVariables: Record<string, unknown> | undefined;
+  if (wf.variables) {
+    for (const [varName, varDef] of Object.entries(wf.variables)) {
+      if (varDef.initial !== undefined) {
+        initialVariables = initialVariables ?? {};
+        initialVariables[varName] = varDef.initial;
+      }
+    }
+  }
+
+  // ── RC-R06c: Initialize context_blocks from workflow definition ────────────
+  // Collect all context blocks that have an `initial_artifact` declared.
+  // Version starts at 0 (no context patches applied yet).
+  let initialContextBlocks:
+    | Record<string, { current_version: number; current_artifact: string }>
+    | undefined;
+  if (wf.context_blocks) {
+    for (const [blockId, blockDef] of Object.entries(wf.context_blocks)) {
+      if (blockDef.initial_artifact !== undefined && blockDef.initial_artifact !== null) {
+        initialContextBlocks = initialContextBlocks ?? {};
+        initialContextBlocks[blockId] = {
+          current_version: 0,
+          current_artifact: blockDef.initial_artifact,
+        };
+      }
+    }
+  }
+
   // RC-R09/R10: Event counter — sequential evt-NNN ids
   let eventCounter = 1;
   function nextEventId(): string {
@@ -156,6 +192,8 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     created_at: createdAt,
     last_event_id: lastEventId,
     jobs,
+    ...(initialVariables !== undefined ? { variables: initialVariables } : {}),
+    ...(initialContextBlocks !== undefined ? { context_blocks: initialContextBlocks } : {}),
   };
 
   // RC-R07/R11: Atomically write state.json via StateStore (Engine is sole writer)
@@ -355,10 +393,54 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
 
   const currentStep = jobState.current_step;
   let currentIndex: number;
+  let implicitStepVisits: Record<string, number> | undefined;
 
   if (currentStep === undefined) {
     // FP-MULTISTEP-POINTER-INIT: undefined means "implicit first step just finished"
     currentIndex = 0;
+
+    // WF-P13-FLOW: Count the implicit first step's visit if it doesn't have if:
+    // (if: false means the step was skipped, not completed, so no visit counted)
+    const firstStepDef = steps[0];
+    if (firstStepDef && !firstStepDef.if) {
+      const firstMaxVisits = firstStepDef.max_visits ?? 3;
+      const firstCurrentVisits = jobState.step_visits?.[firstStepDef.id] ?? 0;
+      const newFirstVisitCount = firstCurrentVisits + 1;
+
+      if (newFirstVisitCount > firstMaxVisits) {
+        // Implicit first step exceeded max_visits — block immediately
+        const exceededEventId = await nextSequentialEventId(runDir, eventWriter);
+        await eventWriter.appendEvent(runDir, {
+          id: exceededEventId,
+          run_id: runId,
+          type: "step_visit_exceeded",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: jobId,
+          step: firstStepDef.id,
+          attempt: jobState.attempt ?? 1,
+          payload: { job_id: jobId, step_id: firstStepDef.id, max_visits: firstMaxVisits, visit_count: newFirstVisitCount },
+        });
+
+        const blockedState: RunState = {
+          ...state,
+          last_event_id: exceededEventId,
+          jobs: {
+            ...state.jobs,
+            [jobId]: {
+              ...jobState,
+              status: "blocked",
+              current_step: firstStepDef.id,
+              step_visits: { ...(jobState.step_visits ?? {}), [firstStepDef.id]: newFirstVisitCount },
+            },
+          },
+        };
+        await stateStore.writeSnapshot(runDir, blockedState);
+        return false;
+      }
+
+      implicitStepVisits = { [firstStepDef.id]: newFirstVisitCount };
+    }
   } else {
     const idx = steps.findIndex((s) => s.id === currentStep);
     if (idx === -1) {
@@ -375,9 +457,129 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
   const nextIndex = currentIndex + 1;
 
   if (nextIndex < steps.length) {
-    // ── 8a. Non-terminal: advance pointer, write snapshot, return true ──────
-    // FP-MULTISTEP-POINTER-WRITE: no new events, just update current_step
-    const nextStepId = steps[nextIndex]!.id;
+    // ── 8a. Non-terminal: advance pointer with max_visits / if: logic ────────
+
+    const nextStepDef = steps[nextIndex]!;
+    const nextStepId = nextStepDef.id;
+
+    // ── Build merged step_visits base (including implicit step if any) ────────
+
+    let mergedVisits: Record<string, number> = { ...(jobState.step_visits ?? {}) };
+    if (implicitStepVisits) {
+      mergedVisits = { ...mergedVisits, ...implicitStepVisits };
+    }
+
+    // ── max_visits guard for the next step being entered ──────────────────────
+
+    const maxVisits = nextStepDef.max_visits ?? 3;
+    const currentStepVisits = mergedVisits[nextStepId] ?? 0;
+    const newVisitCount = currentStepVisits + 1;
+
+    if (newVisitCount > maxVisits) {
+      // Exceeded max_visits — block the job
+      const exceededEventId = await nextSequentialEventId(runDir, eventWriter);
+      await eventWriter.appendEvent(runDir, {
+        id: exceededEventId,
+        run_id: runId,
+        type: "step_visit_exceeded",
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: nextStepId,
+        attempt: jobState.attempt ?? 1,
+        payload: { job_id: jobId, step_id: nextStepId, max_visits: maxVisits, visit_count: newVisitCount },
+      });
+
+      mergedVisits[nextStepId] = newVisitCount;
+      const blockedState: RunState = {
+        ...state,
+        last_event_id: exceededEventId,
+        jobs: {
+          ...state.jobs,
+          [jobId]: {
+            ...jobState,
+            status: "blocked",
+            current_step: nextStepId,
+            step_visits: mergedVisits,
+          },
+        },
+      };
+      await stateStore.writeSnapshot(runDir, blockedState);
+      return false;
+    }
+
+    // ── if: condition evaluation ─────────────────────────────────────────────
+
+    if (nextStepDef.if) {
+      // Build expression context
+      const jobStateAny = jobState as unknown as Record<string, unknown>;
+      const jobVariables = jobStateAny["variables"] as Record<string, unknown> | undefined;
+      const variables = jobVariables ?? state.variables;
+
+      const exprCtx: ExpressionContext = {
+        inputs: { task: state.task },
+        run: { id: state.run_id, workflow: state.workflow },
+        ...(variables !== undefined ? { variables } : {}),
+        jobs: Object.fromEntries(
+          Object.entries(state.jobs).map(([id, js]) => [
+            id,
+            js.outputs !== undefined ? { outputs: js.outputs } : {},
+          ])
+        ) as Record<string, { outputs?: Record<string, unknown> }>,
+      };
+
+      let conditionResult: boolean;
+      try {
+        conditionResult = evaluateCondition(nextStepDef.if, exprCtx);
+      } catch (e: unknown) {
+        // Expression parse error — propagate the ValidationError
+        // (caller is responsible for catching and handling)
+        throw e;
+      }
+
+      if (!conditionResult) {
+        // Step skipped — emit step_skipped event, advance past
+        const skippedEventId = await nextSequentialEventId(runDir, eventWriter);
+        await eventWriter.appendEvent(runDir, {
+          id: skippedEventId,
+          run_id: runId,
+          type: "step_skipped",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: jobId,
+          step: nextStepId,
+          attempt: jobState.attempt ?? 1,
+          payload: { job_id: jobId, step_id: nextStepId, condition: nextStepDef.if },
+        });
+
+        // Move to the step after the skipped one
+        const skipNextIndex = nextIndex + 1;
+        if (skipNextIndex < steps.length) {
+          const afterSkipStepId = steps[skipNextIndex]!.id;
+          const afterSkipState: RunState = {
+            ...state,
+            last_event_id: skippedEventId,
+            jobs: {
+              ...state.jobs,
+              [jobId]: {
+                ...jobState,
+                current_step: afterSkipStepId,
+                step_visits: mergedVisits,
+              },
+            },
+          };
+          await stateStore.writeSnapshot(runDir, afterSkipState);
+          return true;
+        } else {
+          // Last step skipped — job completed (no visit counted for skipped step)
+          return await appendJobCompleted({ state, stateStore, eventWriter, runDir, runId, jobId, clock, wf });
+        }
+      }
+    }
+
+    // ── Normal entry: increment visit count, set current_step ────────────────
+
+    mergedVisits[nextStepId] = newVisitCount;
     const updatedState: RunState = {
       ...state,
       jobs: {
@@ -385,6 +587,7 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
         [jobId]: {
           ...jobState,
           current_step: nextStepId,
+          step_visits: mergedVisits,
         },
       },
     };

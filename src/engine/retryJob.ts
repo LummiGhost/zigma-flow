@@ -212,6 +212,8 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
   retryJobState.status = "ready";
   retryJobState.attempt = nextAttempt;
   delete retryJobState.current_step;
+  // Reset step_visits on retry (WF-P13-FLOW)
+  delete (retryJobState as Record<string, unknown>)["step_visits"];
   if (reason !== undefined) {
     retryJobState.retry_reason = reason;
   }

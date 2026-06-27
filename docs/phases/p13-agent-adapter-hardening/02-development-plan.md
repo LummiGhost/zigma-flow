@@ -238,14 +238,14 @@ WF-P13-ENGINE-RUNALL (refactor骨架, 不改外观)
            └─ WF-P13-BACKEND-CONFIG
 ```
 
-全部并入 **PR #88（feature/p13-agent-adapter-hardening）**。
+全部并入 **PR #89（feature/p13-agent-adapter-hardening）**。
 
 不拆 PR 的理由：
 
 - 事件/Artifact 契约变更若分多 PR，CI 中间状态会出现"主循环已搬走但事件没补全"的不可用版本。
 - 重构和契约扩张同 PR 时，回归测试可以一次锁定新行为；分 PR 反而要写中间过渡测试。
 
-如果 PR 体量过大（>2000 行），允许临阵拆为 PR #88a（ENGINE-RUNALL + EVENTS-ARTIFACTS + 事件端口）+ PR #88b（RETRY + RESUME-CANCEL + BACKEND-CONFIG）；保留单 PR 为首选。
+如果 PR 体量过大（>2000 行），允许临阵拆为 PR #89a（ENGINE-RUNALL + EVENTS-ARTIFACTS + 事件端口）+ PR #89b（RETRY + RESUME-CANCEL + BACKEND-CONFIG）；保留单 PR 为首选。
 
 ## 7. 测试规划
 
@@ -302,7 +302,7 @@ pnpm test:ci
 
 ## 12. PR 结构
 
-- **PR #88（feature/p13-agent-adapter-hardening）**
+- **PR #89（feature/p13-agent-adapter-hardening）**
   - branch from origin/main
   - 包含 WF-P13-ENGINE-RUNALL → ... → WF-P13-BACKEND-CONFIG 全部内容
   - PR 描述需附：新增事件列表、新增 artifact 列表、`--resume` 用法、迁移说明（无 breaking change，但新 event 类型）

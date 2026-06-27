@@ -4,7 +4,7 @@ title: Concurrent Read-Only Job Execution
 status: proposed
 date: 2026-06-27
 authority: docs/prd.md §4 §14 §24, docs/mvp-contracts.md §2.3 §2.4 §5, docs/architecture.md §6.2 §7
-predecessor: P13 (PR #88) merged
+predecessor: P13 (PR #89) merged
 target-pr: 1
 ---
 
@@ -229,7 +229,7 @@ WF-P14-SCHEDULER (纯函数)
            └─ WF-P14-CONFIG-DOCS
 ```
 
-合入 **PR #89（feature/p14-concurrent-execution）**。
+合入 **PR #90（feature/p14-concurrent-execution）**。
 
 ## 7. 测试规划
 
@@ -287,7 +287,7 @@ dogfood 阶段对比测量：在 P14 PR 描述中附上 baseline run 和 P14 run
 
 ## 12. PR 结构
 
-- **PR #89（feature/p14-concurrent-execution）**
+- **PR #90（feature/p14-concurrent-execution）**
   - branch from origin/main (要求 P13 已 merge)
   - PR 描述附：调度规则总结、性能对比表、`--parallelism` 默认值理由
   - 关联 GitHub Project P14 条目

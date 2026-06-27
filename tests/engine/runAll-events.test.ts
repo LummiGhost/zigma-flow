@@ -141,6 +141,9 @@ interface FakeBackendConfig {
 
 class FakeBackend implements AgentBackend {
   readonly name = "fake-events";
+  readonly backendCommand = "fake";
+  readonly backendArgs: readonly string[] = ["-p"];
+  readonly backendTimeoutMs = 600_000;
   private readonly config: Required<FakeBackendConfig>;
 
   /** Tracks the number of times execute() was called. */
@@ -269,7 +272,7 @@ class FakeBackend implements AgentBackend {
           stdoutPath,
           stderrPath,
           invocationPath,
-          durationMs,
+          durationMs: this.backendTimeoutMs, // simulate: ran for exactly the timeout duration
         };
       }
 

@@ -226,7 +226,7 @@ Agent Step 输出必须写入约定 report。MVP 最小 report：
   "status": "approved",
   "context_patches": [
     { "kind": "variable_set", "name": "plan_status", "value": "ready" },
-    { "kind": "context_block_set", "id": "current-plan", "content": "..." }
+    { "kind": "context_block_set", "name": "current-plan", "value": "..." }
   ],
   "summary": ""
 }

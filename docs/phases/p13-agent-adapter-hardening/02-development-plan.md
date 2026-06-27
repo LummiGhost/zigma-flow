@@ -360,17 +360,19 @@ Agent report `context_patches` 字段为数组，每条形如：
 [
   { "kind": "variable_set", "name": "plan_status", "value": "ready" },
   { "kind": "variable_delete", "name": "open_questions" },
-  { "kind": "context_block_set", "id": "current-plan", "content": "..." },
-  { "kind": "context_block_append", "id": "reviewer-notes", "content": "..." }
+  { "kind": "context_block_set", "name": "current-plan", "value": "..." },
+  { "kind": "context_block_append", "name": "reviewer-notes", "value": "..." }
 ]
 ```
+
+> **实现注记（P13b 落地后）：** `ContextPatch` 统一使用 `{ kind, name, value }` 形状，对所有 5 种 kind 通用（不区分 context_block 用 `id`/`content`）。此处示例已更新为与实现一致。
 
 **Engine 入口 `applyContextPatch`**：
 
 - 在 `acceptAgentReport` 处理 outputs 之后、处理 status/signals 之前执行。
 - 对每条 patch：
   - 校验 step 是否在 `allowed_writers`（精确匹配或 `<job>.*` 通配）；权限拒绝 → ValidationError。
-  - 校验 `kind` 与 schema：variable_set 的 value 必须符合 variable.type 与 enum；context_block_set 的 content 是 string。
+  - 校验 `kind` 与 schema：variable_set 的 value 必须符合 variable.type 与 enum；context_block_set 的 value 是 string。
   - **批次原子性**：任意一条失败整批回滚，不写 state、不写事件、不写 artifact。
   - 校验通过后：
     - variable_set / variable_delete → 修改 state.variables 段（in-memory）。

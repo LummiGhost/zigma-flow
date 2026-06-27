@@ -25,6 +25,8 @@ import { abortAction } from "./commands/abort.js";
 import { listRunsAction } from "./commands/list-runs.js";
 import { showAction } from "./commands/show.js";
 import { runAllAction } from "./commands/run-all.js";
+import { approveAction } from "./commands/approve.js";
+import { rejectAction } from "./commands/reject.js";
 import { SystemClock } from "./run/index.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -224,6 +226,55 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       await stepAction({
         zigmaflowDir: process.cwd(),
         ...(options.job !== undefined ? { job: options.job } : {}),
+        clock: new SystemClock(),
+      });
+    });
+
+  program
+    .command("approve")
+    .description("Approve a human gate step in the active run.")
+    .requiredOption("--job <job>", "Job id to approve.")
+    .option("--step <step>", "Step id to approve (auto-detected if only one awaiting).")
+    .option("--comment <text>", "Optional approval comment.")
+    .option("--output <pairs>", "Optional key=value output pairs (repeatable).", (v, prev: string[]) => [...(prev ?? []), v], [] as string[])
+    .exitOverride()
+    .action(async (options: { job: string; step?: string; comment?: string; output?: string[] }) => {
+      let outputs: Record<string, string> | undefined;
+      if (options.output !== undefined && options.output.length > 0) {
+        outputs = {};
+        for (const pair of options.output) {
+          const eqIdx = pair.indexOf("=");
+          if (eqIdx <= 0) {
+            console.error(`--output must be key=value, got: ${pair}`);
+            process.exitCode = 2;
+            return;
+          }
+          outputs[pair.slice(0, eqIdx)] = pair.slice(eqIdx + 1);
+        }
+      }
+      await approveAction({
+        zigmaflowDir: process.cwd(),
+        jobId: options.job,
+        ...(options.step !== undefined ? { stepId: options.step } : {}),
+        ...(options.comment !== undefined ? { comment: options.comment } : {}),
+        ...(outputs !== undefined ? { outputs } : {}),
+        clock: new SystemClock(),
+      });
+    });
+
+  program
+    .command("reject")
+    .description("Reject a human gate step in the active run.")
+    .requiredOption("--job <job>", "Job id to reject.")
+    .requiredOption("--comment <text>", "Reason for rejection.")
+    .option("--step <step>", "Step id to reject (auto-detected if only one awaiting).")
+    .exitOverride()
+    .action(async (options: { job: string; comment: string; step?: string }) => {
+      await rejectAction({
+        zigmaflowDir: process.cwd(),
+        jobId: options.job,
+        comment: options.comment,
+        ...(options.step !== undefined ? { stepId: options.step } : {}),
         clock: new SystemClock(),
       });
     });

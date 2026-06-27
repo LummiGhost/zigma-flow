@@ -42,6 +42,7 @@ import {
   ValidationError,
 } from "../utils/index.js";
 import { advanceJob, createRun, executeCurrentStep } from "./index.js";
+import { enterHumanGate } from "./humanGate.js";
 import { recordAgentFailure } from "./recordAgentFailure.js";
 import { appendArtifactIndex } from "../artifact/artifactIndex.js";
 import { artifactId } from "../artifact/artifactMetadata.js";
@@ -305,6 +306,14 @@ async function executeJobOnce(
       runDir, runId, zigmaflowDir, jobId, wf, state,
       backendResolver, stateStore, eventWriter, clock,
       signal, batchId, onEvent,
+      stepDef, stepId,
+    });
+  }
+
+  if (stepDef.type === "human") {
+    return executeHumanStep({
+      runDir, runId, jobId, wf, state,
+      stateStore, eventWriter, clock,
       stepDef, stepId,
     });
   }
@@ -761,6 +770,61 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
 }
 
 // ---------------------------------------------------------------------------
+// executeHumanStep — human gate step lifecycle (WF-P15-ENGINE, AD-P15-003)
+// ---------------------------------------------------------------------------
+
+interface HumanStepCtx {
+  runDir: string;
+  runId: string;
+  jobId: string;
+  wf: import("../workflow/index.js").WorkflowDefinition;
+  state: RunState;
+  stateStore: LocalStateStore;
+  eventWriter: JsonlEventWriter;
+  clock: Clock;
+  stepDef: import("../workflow/index.js").StepDefinition;
+  stepId: string;
+}
+
+async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
+  const {
+    runDir, runId, jobId, state,
+    stateStore, eventWriter, clock,
+    stepDef, stepId,
+  } = ctx;
+
+  const jobState = state.jobs[jobId];
+  if (jobState === undefined) {
+    return { jobId, success: false, action: "blocked", detail: "Job not found in run state" };
+  }
+
+  // Idempotent: if already awaiting_human, no-op
+  if (jobState.step_status === "awaiting_human") {
+    return { jobId, success: true, action: "completed", detail: "awaiting_human" };
+  }
+
+  const prompt = stepDef.prompt;
+  if (prompt === undefined || prompt.trim().length === 0) {
+    return { jobId, success: false, action: "failed", detail: "Human step missing prompt" };
+  }
+
+  await enterHumanGate({
+    runDir,
+    runId,
+    jobId,
+    stepId,
+    clock,
+    stepPrompt: prompt,
+    ...(stepDef.approvers !== undefined ? { stepApprovers: stepDef.approvers } : {}),
+    ...(stepDef.instructions !== undefined ? { stepInstructions: stepDef.instructions } : {}),
+    stateStore,
+    eventWriter,
+  });
+
+  return { jobId, success: true, action: "completed", detail: "awaiting_human" };
+}
+
+// ---------------------------------------------------------------------------
 // runAll
 // ---------------------------------------------------------------------------
 
@@ -960,6 +1024,34 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
     // Wait for all jobs in the batch to settle
     const settled = await Promise.allSettled(jobPromises);
+
+    // ── Post-batch: human gate check (WF-P15-ENGINE, AD-P15-007) ─────────
+
+    // If any job entered awaiting_human, break the loop so the user can act.
+    const postBatchState = await stateStore.readSnapshot(runDir);
+    if (postBatchState !== null) {
+      const awaitingHumanJobs = Object.entries(postBatchState.jobs)
+        .filter(([, js]) => js.step_status === "awaiting_human");
+
+      if (awaitingHumanJobs.length > 0) {
+        // Print human gate instructions to console
+        const [hjId, hjState] = awaitingHumanJobs[0]!;
+        console.log();
+        console.log(`Run ${runId} paused on human gate.`);
+        console.log(`  Job: ${hjId} / Step: ${hjState.current_step ?? "?"}`);
+        console.log();
+        console.log("To approve:");
+        console.log(`  zigma-flow approve --job ${hjId} --comment "..."`);
+        console.log();
+        console.log("To reject and retry:");
+        console.log(`  zigma-flow reject --job ${hjId} --comment "..."`);
+        console.log();
+        console.log(`Then resume:`);
+        console.log(`  zigma-flow run-all <workflow> --resume ${runId}`);
+        console.log();
+        break;
+      }
+    }
 
     // ── Post-batch: re-read fresh state (AD-P14-004) ─────────────────────
 

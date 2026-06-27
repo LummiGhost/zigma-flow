@@ -49,6 +49,8 @@ export { applyStatusReturn } from "./applyStatusReturn.js";
 export type { ApplyStatusReturnOpts } from "./applyStatusReturn.js";
 export { applyContextPatch } from "./applyContextPatch.js";
 export type { ApplyContextPatchOpts, ContextPatch, ContextPatchKind } from "./applyContextPatch.js";
+export { enterHumanGate, recordHumanDecision } from "./humanGate.js";
+export type { EnterHumanGateOpts, RecordHumanDecisionOpts } from "./humanGate.js";
 
 export interface CreateRunInputs {
   workflowPath: string;

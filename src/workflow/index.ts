@@ -117,6 +117,9 @@ const StepBaseSchema = z.object({
       write: z.array(z.string()).optional(),
     }).optional(),
   }).passthrough().optional(),
+  // Human step fields (WF-P15-SCHEMA)
+  approvers: z.array(z.string()).optional(),
+  instructions: z.string().optional(),
 });
 
 export interface StepDefinition {
@@ -158,6 +161,9 @@ export interface StepDefinition {
     context_blocks?: { read?: string[]; write?: string[] };
     [key: string]: unknown;
   };
+  // Human step fields (WF-P15-SCHEMA)
+  approvers?: string[];
+  instructions?: string;
   [key: string]: unknown;
 }
 
@@ -451,6 +457,48 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
     for (const [blockName, blockDef] of Object.entries(wf.context_blocks)) {
       if (blockDef.allowed_writers && blockDef.allowed_writers.length > 0) {
         validateAllowedWriters("context_block", blockName, blockDef.allowed_writers);
+      }
+    }
+  }
+
+  // 10. Human step field validation (WF-P15-SCHEMA, AD-P15-002)
+  for (const [jobName, job] of Object.entries(wf.jobs)) {
+    for (const step of job.steps) {
+      if (step.type !== "human") continue;
+
+      if (step.prompt === undefined || step.prompt.trim().length === 0) {
+        throw new ValidationError(
+          `Human step "${step.id}" in job "${jobName}" requires a non-empty "prompt" field`,
+          { details: { job: jobName, step: step.id, missingField: "prompt" } }
+        );
+      }
+
+      if (step.expose !== undefined) {
+        throw new ValidationError(
+          `Human step "${step.id}" in job "${jobName}" must not declare "expose"`,
+          { details: { job: jobName, step: step.id, forbiddenField: "expose" } }
+        );
+      }
+
+      if (step.uses !== undefined) {
+        throw new ValidationError(
+          `Human step "${step.id}" in job "${jobName}" must not declare "uses"`,
+          { details: { job: jobName, step: step.id, forbiddenField: "uses" } }
+        );
+      }
+
+      if (step.run !== undefined) {
+        throw new ValidationError(
+          `Human step "${step.id}" in job "${jobName}" must not declare "run"`,
+          { details: { job: jobName, step: step.id, forbiddenField: "run" } }
+        );
+      }
+
+      if (step.approvers !== undefined && !Array.isArray(step.approvers)) {
+        throw new ValidationError(
+          `Human step "${step.id}" in job "${jobName}" has non-array "approvers"`,
+          { details: { job: jobName, step: step.id, field: "approvers" } }
+        );
       }
     }
   }

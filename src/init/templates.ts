@@ -267,9 +267,28 @@ jobs:
           skills:
             - code
 
+  gate-merge:
+    activation: "manual"
+    needs:
+      - review
+    steps:
+      - id: gate-merge
+        type: human
+        prompt: |
+          Review the implementation summary and approve before merging.
+        instructions: |
+          Use \`zigma-flow approve --job gate-merge\` to proceed,
+          or \`zigma-flow reject --job gate-merge --comment "reason"\` to send back.
+        approvers: []
+        outputs:
+          decision: human.decision
+          comment: human.comment
+
   summarize:
     needs:
       - review
+    optional_needs:
+      - gate-merge
     workspace:
       mode: read-only
     steps:

@@ -419,6 +419,7 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
       [
         "architecture-design",
         "code-map",
+        "gate-merge",
         "implement",
         "intake",
         "plan",
@@ -533,6 +534,7 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
     expect(needsOf("unit-test")).toEqual(["implement"]);
     expect(needsOf("review")).toEqual(["static-check", "unit-test"]);
     expect(needsOf("summarize")).toEqual(["review"]);
+    expect(needsOf("gate-merge")).toEqual(["review"]);
   });
 
   // ---------- TC-WORKFLOW-6 ----------

@@ -45,6 +45,8 @@ export {
   type StepRevisitedPayload,
   type StepVisitExceededPayload,
   type StepStartedPayload,
+  type HumanGateWaitingPayload,
+  type HumanDecisionPayload,
   type ZigmaFlowEvent,
   type ZigmaFlowEventType,
 } from "./eventTypes.js";

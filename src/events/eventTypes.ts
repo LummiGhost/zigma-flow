@@ -6,7 +6,7 @@
  */
 
 // ---------------------------------------------------------------------------
-// ZigmaFlowEventType — the 21 MVP event type tags (closed string union)
+// ZigmaFlowEventType — the 26 event type tags (closed string union)
 // ---------------------------------------------------------------------------
 
 export type ZigmaFlowEventType =
@@ -17,6 +17,11 @@ export type ZigmaFlowEventType =
   | "step_failed"
   | "prompt_generated"
   | "agent_report_accepted"
+  | "agent_invoked"
+  | "agent_completed"
+  | "agent_timed_out"
+  | "agent_failed"
+  | "agent_cancelled"
   | "script_completed"
   | "check_completed"
   | "signal_received"
@@ -33,7 +38,7 @@ export type ZigmaFlowEventType =
   | "job_failed";
 
 /**
- * Runtime tuple of all 21 event type tags.
+ * Runtime tuple of all 26 event type tags.
  * Length is statically checked by the test suite.
  */
 export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
@@ -44,6 +49,11 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "step_failed",
   "prompt_generated",
   "agent_report_accepted",
+  "agent_invoked",
+  "agent_completed",
+  "agent_timed_out",
+  "agent_failed",
+  "agent_cancelled",
   "script_completed",
   "check_completed",
   "signal_received",
@@ -111,6 +121,41 @@ export interface AgentReportAcceptedPayload {
   job_id: string;
   step_id: string;
   report_artifact: string;
+}
+
+export interface AgentInvokedPayload {
+  backend_name: string;
+  command: string;
+  args_hash: string;
+  timeout_ms: number;
+  step_artifact_dir: string;
+}
+
+export interface AgentCompletedPayload {
+  duration_ms: number;
+  stdout_artifact?: string;
+  stderr_artifact?: string;
+  invocation_artifact?: string;
+}
+
+export interface AgentTimedOutPayload {
+  duration_ms: number;
+  timeout_ms: number;
+  stdout_artifact?: string;
+  stderr_artifact?: string;
+}
+
+export interface AgentFailedPayload {
+  duration_ms: number;
+  exit_code: number;
+  reason: string;
+  stdout_artifact?: string;
+  stderr_artifact?: string;
+}
+
+export interface AgentCancelledPayload {
+  duration_ms: number;
+  reason: string;
 }
 
 export interface ScriptCompletedPayload {
@@ -216,6 +261,11 @@ export type ZigmaFlowEvent =
   | (EventEnvelope & { type: "step_failed"; payload: StepFailedPayload })
   | (EventEnvelope & { type: "prompt_generated"; payload: PromptGeneratedPayload })
   | (EventEnvelope & { type: "agent_report_accepted"; payload: AgentReportAcceptedPayload })
+  | (EventEnvelope & { type: "agent_invoked"; payload: AgentInvokedPayload })
+  | (EventEnvelope & { type: "agent_completed"; payload: AgentCompletedPayload })
+  | (EventEnvelope & { type: "agent_timed_out"; payload: AgentTimedOutPayload })
+  | (EventEnvelope & { type: "agent_failed"; payload: AgentFailedPayload })
+  | (EventEnvelope & { type: "agent_cancelled"; payload: AgentCancelledPayload })
   | (EventEnvelope & { type: "script_completed"; payload: ScriptCompletedPayload })
   | (EventEnvelope & { type: "check_completed"; payload: CheckCompletedPayload })
   | (EventEnvelope & { type: "signal_received"; payload: SignalReceivedPayload })

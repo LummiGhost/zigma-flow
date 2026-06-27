@@ -10,8 +10,9 @@
  * WF-P13-ENGINE-RUNALL Step 2.
  */
 
-import { readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { createHash } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
+import { basename, join, relative } from "node:path";
 
 import type { AgentBackend } from "../agent/index.js";
 import { buildContext } from "../context/index.js";
@@ -31,6 +32,53 @@ import {
 import { loadWorkflowFile } from "../workflow/index.js";
 import { StateError, ValidationError } from "../utils/index.js";
 import { advanceJob, createRun, executeCurrentStep } from "./index.js";
+import { appendArtifactIndex } from "../artifact/artifactIndex.js";
+import { artifactId } from "../artifact/artifactMetadata.js";
+import type { ArtifactMetadata } from "../artifact/artifactMetadata.js";
+
+/** Fallback timeout when backend does not expose a timeout value. */
+const DEFAULT_BACKEND_TIMEOUT = 600_000;
+
+/**
+ * Register a single step artifact in the artifact index.
+ * Returns the relative POSIX path if successful, or undefined if the file is missing.
+ */
+async function registerStepArtifact(
+  runDir: string,
+  runId: string,
+  jobId: string,
+  stepId: string,
+  attempt: number,
+  filePath: string | undefined,
+  kind: string,
+  contentType: string,
+  clock: Clock,
+): Promise<string | undefined> {
+  if (!filePath) return undefined;
+
+  try {
+    const stats = await stat(filePath);
+    const relPath = relative(runDir, filePath).replace(/\\/g, "/");
+    const filename = basename(filePath);
+
+    const metadata: ArtifactMetadata = {
+      id: artifactId(runId, jobId, attempt, stepId, filename),
+      run_id: runId,
+      producer: { job: jobId, step: stepId, attempt },
+      kind,
+      path: relPath,
+      content_type: contentType,
+      size: stats.size,
+      summary: "",
+      created_at: clock.now(),
+    };
+
+    await appendArtifactIndex(runDir, metadata);
+    return relPath;
+  } catch {
+    return undefined;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -288,6 +336,15 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       // Resolve the agent backend (pass step-level backend name if declared)
       const backend = backendResolver(stepDef.backend as string | undefined);
 
+      // Compute args_hash before execution (prompt MUST NOT be included in hash)
+      const argsHashInput = [
+        backend.backendCommand ?? "",
+        ...(backend.backendArgs ?? []),
+      ].join(" ");
+      const argsHash = createHash("sha256")
+        .update(argsHashInput)
+        .digest("hex");
+
       // Invoke agent backend
       const stepDir = join(
         runDir,
@@ -300,6 +357,28 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       );
       const reportPath = join(stepDir, "report.json");
 
+      // Emit agent_invoked event before backend.execute
+      const invokedEventId = await nextSequentialEventId(runDir, eventWriter);
+      const invokedEvent: ZigmaFlowEvent = {
+        id: invokedEventId,
+        type: "agent_invoked",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: bundle.stepId,
+        attempt,
+        payload: {
+          backend_name: backend.name,
+          command: backend.backendCommand ?? backend.name,
+          args_hash: argsHash,
+          timeout_ms: backend.backendTimeoutMs ?? DEFAULT_BACKEND_TIMEOUT,
+          step_artifact_dir: relative(runDir, stepDir).replace(/\\/g, "/"),
+        },
+      };
+      await eventWriter.appendEvent(runDir, invokedEvent);
+      onEvent?.(invokedEvent);
+
       const result = await backend.execute({
         prompt: promptText,
         reportPath,
@@ -308,6 +387,99 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       });
 
       if (!result.success) {
+        // Determine failure mode
+        const isCancelled = signal?.aborted === true;
+        const isTimeout = !isCancelled &&
+          (result.error ?? "").toLowerCase().includes("timed out");
+
+        if (isCancelled) {
+          // ── Agent cancelled path ──────────────────────────────────────
+          const cancelledEventId = await nextSequentialEventId(runDir, eventWriter);
+          const cancelledEvent: ZigmaFlowEvent = {
+            id: cancelledEventId,
+            type: "agent_cancelled",
+            run_id: runId,
+            timestamp: clock.now(),
+            producer: "engine",
+            job: jobId,
+            step: bundle.stepId,
+            attempt,
+            payload: {
+              duration_ms: result.durationMs ?? 0,
+              reason: result.error ?? "Agent execution was cancelled.",
+            },
+          };
+          await eventWriter.appendEvent(runDir, cancelledEvent);
+          onEvent?.(cancelledEvent);
+
+          const cancelledState: RunState = {
+            ...runningState,
+            status: "cancelled",
+            last_event_id: cancelledEventId,
+          };
+          await stateStore.writeSnapshot(runDir, cancelledState);
+          break;
+        }
+
+        // Register artifacts for timeout/failure paths
+        const failStdoutArtifact = await registerStepArtifact(
+          runDir, runId, jobId, bundle.stepId, attempt,
+          result.stdoutPath, "agent_stdout", "text/plain", clock,
+        );
+        const failStderrArtifact = await registerStepArtifact(
+          runDir, runId, jobId, bundle.stepId, attempt,
+          result.stderrPath, "agent_stderr", "text/plain", clock,
+        );
+
+        const terminalEventId = await nextSequentialEventId(runDir, eventWriter);
+
+        if (isTimeout) {
+          const timeoutEvent: ZigmaFlowEvent = {
+            id: terminalEventId,
+            type: "agent_timed_out",
+            run_id: runId,
+            timestamp: clock.now(),
+            producer: "engine",
+            job: jobId,
+            step: bundle.stepId,
+            attempt,
+            payload: {
+              duration_ms: result.durationMs ?? 0,
+              timeout_ms: backend.backendTimeoutMs ?? result.durationMs ?? 0,
+              ...(failStdoutArtifact !== undefined ? { stdout_artifact: failStdoutArtifact } : {}),
+              ...(failStderrArtifact !== undefined ? { stderr_artifact: failStderrArtifact } : {}),
+            },
+          };
+          await eventWriter.appendEvent(runDir, timeoutEvent);
+          onEvent?.(timeoutEvent);
+        } else {
+          // Register invocation artifact for failure (not available on timeout)
+          const failInvocationArtifact = await registerStepArtifact(
+            runDir, runId, jobId, bundle.stepId, attempt,
+            result.invocationPath, "agent_invocation", "application/json", clock,
+          );
+
+          const failedEvent: ZigmaFlowEvent = {
+            id: terminalEventId,
+            type: "agent_failed",
+            run_id: runId,
+            timestamp: clock.now(),
+            producer: "engine",
+            job: jobId,
+            step: bundle.stepId,
+            attempt,
+            payload: {
+              duration_ms: result.durationMs ?? 0,
+              exit_code: result.exitCode ?? 1,
+              reason: result.error ?? "Agent backend failed",
+              ...(failStdoutArtifact !== undefined ? { stdout_artifact: failStdoutArtifact } : {}),
+              ...(failStderrArtifact !== undefined ? { stderr_artifact: failStderrArtifact } : {}),
+            },
+          };
+          await eventWriter.appendEvent(runDir, failedEvent);
+          onEvent?.(failedEvent);
+        }
+
         // Mark job as failed
         const failEventId = await nextSequentialEventId(runDir, eventWriter);
 
@@ -345,6 +517,43 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         await stateStore.writeSnapshot(runDir, failedState);
         break;
       }
+
+      // ── Agent success path ──────────────────────────────────────────────
+
+      // Register artifacts for the successful execution
+      const successStdoutArtifact = await registerStepArtifact(
+        runDir, runId, jobId, bundle.stepId, attempt,
+        result.stdoutPath, "agent_stdout", "text/plain", clock,
+      );
+      const successStderrArtifact = await registerStepArtifact(
+        runDir, runId, jobId, bundle.stepId, attempt,
+        result.stderrPath, "agent_stderr", "text/plain", clock,
+      );
+      const successInvocationArtifact = await registerStepArtifact(
+        runDir, runId, jobId, bundle.stepId, attempt,
+        result.invocationPath, "agent_invocation", "application/json", clock,
+      );
+
+      // Emit agent_completed event
+      const completedEventId = await nextSequentialEventId(runDir, eventWriter);
+      const completedEvent: ZigmaFlowEvent = {
+        id: completedEventId,
+        type: "agent_completed",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: bundle.stepId,
+        attempt,
+        payload: {
+          duration_ms: result.durationMs ?? 0,
+          ...(successStdoutArtifact !== undefined ? { stdout_artifact: successStdoutArtifact } : {}),
+          ...(successStderrArtifact !== undefined ? { stderr_artifact: successStderrArtifact } : {}),
+          ...(successInvocationArtifact !== undefined ? { invocation_artifact: successInvocationArtifact } : {}),
+        },
+      };
+      await eventWriter.appendEvent(runDir, completedEvent);
+      onEvent?.(completedEvent);
 
       // Read and process the agent report inline.
       // runAll handles report acceptance directly rather than delegating to

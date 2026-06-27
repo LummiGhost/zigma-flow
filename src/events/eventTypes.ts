@@ -35,7 +35,15 @@ export type ZigmaFlowEventType =
   | "job_activated"
   | "job_skipped"
   | "job_blocked"
-  | "job_failed";
+  | "job_failed"
+  | "step_returned"
+  | "variable_set"
+  | "variable_deleted"
+  | "context_block_updated"
+  | "context_block_deleted"
+  | "step_skipped"
+  | "step_revisited"
+  | "step_visit_exceeded";
 
 /**
  * Runtime tuple of all 26 event type tags.
@@ -68,6 +76,14 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "job_skipped",
   "job_blocked",
   "job_failed",
+  "step_returned",
+  "variable_set",
+  "variable_deleted",
+  "context_block_updated",
+  "context_block_deleted",
+  "step_skipped",
+  "step_revisited",
+  "step_visit_exceeded",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -234,6 +250,65 @@ export interface JobFailedPayload {
   reason: string;
 }
 
+export interface StepReturnedPayload {
+  job_id: string;
+  step_id: string;
+  status: string;
+  mapped_action: string;
+}
+
+// ---------------------------------------------------------------------------
+// WF-P13-VARIABLES payload interfaces
+// ---------------------------------------------------------------------------
+
+export interface VariableSetPayload {
+  variable: string;
+  value: unknown;
+  producer: string;
+}
+
+export interface VariableDeletedPayload {
+  variable: string;
+  producer: string;
+}
+
+export interface ContextBlockUpdatedPayload {
+  block: string;
+  version: number;
+  artifact_ref: string;
+  producer: string;
+  operation?: string;
+}
+
+export interface ContextBlockDeletedPayload {
+  block: string;
+  producer: string;
+}
+
+// ---------------------------------------------------------------------------
+// WF-P13-FLOW payload interfaces
+// ---------------------------------------------------------------------------
+
+export interface StepSkippedPayload {
+  job_id: string;
+  step_id: string;
+  condition: string;
+}
+
+export interface StepRevisitedPayload {
+  job_id: string;
+  step_id: string;
+  target_step: string;
+  visit_count: number;
+}
+
+export interface StepVisitExceededPayload {
+  job_id: string;
+  step_id: string;
+  max_visits: number;
+  visit_count: number;
+}
+
 // ---------------------------------------------------------------------------
 // EventEnvelope — the common envelope wrapping every event
 // ---------------------------------------------------------------------------
@@ -279,7 +354,15 @@ export type ZigmaFlowEvent =
   | (EventEnvelope & { type: "job_activated"; payload: JobActivatedPayload })
   | (EventEnvelope & { type: "job_skipped"; payload: JobSkippedPayload })
   | (EventEnvelope & { type: "job_blocked"; payload: JobBlockedPayload })
-  | (EventEnvelope & { type: "job_failed"; payload: JobFailedPayload });
+  | (EventEnvelope & { type: "job_failed"; payload: JobFailedPayload })
+  | (EventEnvelope & { type: "step_returned"; payload: StepReturnedPayload })
+  | (EventEnvelope & { type: "variable_set"; payload: VariableSetPayload })
+  | (EventEnvelope & { type: "variable_deleted"; payload: VariableDeletedPayload })
+  | (EventEnvelope & { type: "context_block_updated"; payload: ContextBlockUpdatedPayload })
+  | (EventEnvelope & { type: "context_block_deleted"; payload: ContextBlockDeletedPayload })
+  | (EventEnvelope & { type: "step_skipped"; payload: StepSkippedPayload })
+  | (EventEnvelope & { type: "step_revisited"; payload: StepRevisitedPayload })
+  | (EventEnvelope & { type: "step_visit_exceeded"; payload: StepVisitExceededPayload });
 
 // ---------------------------------------------------------------------------
 // nextEventId — sequential event id formatter

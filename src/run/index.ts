@@ -59,6 +59,7 @@ export interface JobState {
   retry_reason?: string;         // reason from opts.reason on retry_job (WF-P8-SIGNALS)
   retry_inputs?: Record<string, string>; // retry_with payload from the router action that triggered this retry
   outputs?: Record<string, unknown>; // persisted from report.json.outputs by acceptAgentReport (WF-P9-ACCEPT)
+  step_visits?: Record<string, number>; // visit count per step id (WF-P13-VARIABLES)
 }
 
 export interface RunState {
@@ -69,6 +70,8 @@ export interface RunState {
   status?: "running" | "blocked" | "failed" | "completed" | "cancelled"; // mvp-contracts §2.3
   last_event_id: string; // id of tail event in events.jsonl
   jobs: Record<string, JobState>;
+  variables?: Record<string, unknown>; // WF-P13-VARIABLES
+  context_blocks?: Record<string, { current_version: number; current_artifact: string }>; // WF-P13-VARIABLES
 }
 
 export interface RunYamlMeta {

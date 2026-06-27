@@ -1,7 +1,8 @@
 ---
 phase: p13
 title: Agent Adapter Hardening and Agent-Driven Flow Control
-status: proposed
+status: frozen
+frozen-at: 2026-06-27
 date: 2026-06-27
 last-revised: 2026-06-27 (scope expansion: structured returns, context variables, conditional flow)
 authority: docs/prd.md §FR-005 §FR-009 §FR-010 §FR-012 §FR-014 §FR-015 §13 §24, docs/mvp-contracts.md §2.1 §2.3 §2.4 §2.5 §2.6

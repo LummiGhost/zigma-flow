@@ -459,7 +459,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         reportPath,
         stepDir,
         projectRoot: zigmaflowDir,
-        signal,
+        ...(signal !== undefined ? { signal } : {}),
       });
 
       if (!result.success) {

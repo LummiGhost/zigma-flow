@@ -4,7 +4,7 @@ title: Human Gate Step
 status: proposed
 date: 2026-06-27
 authority: docs/prd.md §3 §12 §24, docs/mvp-contracts.md §2.1 §2.3 §2.4
-predecessor: P13 (PR #89), P14 (PR #90) merged
+predecessor: P13 (PR #90), P14 (PR #91) merged
 target-pr: 1
 ---
 
@@ -276,7 +276,7 @@ WF-P15-SCHEMA
            └─ WF-P15-WORKFLOW-TEMPLATE
 ```
 
-合入 **PR #91（feature/p15-human-gate）**。`steps.<id>.outputs.<key>` 表达式（原 WF-P15-EXPR）由 P13 完成，P15 直接依赖。
+合入 **PR #92（feature/p15-human-gate）**。`steps.<id>.outputs.<key>` 表达式（原 WF-P15-EXPR）由 P13 完成，P15 直接依赖。
 
 ## 7. 测试规划
 
@@ -330,14 +330,14 @@ pnpm test:ci
 
 ## 12. PR 结构
 
-- **PR #91（feature/p15-human-gate）**
+- **PR #92（feature/p15-human-gate）**
   - branch from origin/main (要求 P13 + P14 已 merge)
   - PR 描述附：新增 step type / event / artifact / CLI 命令清单；内置 workflow 改动说明；TD-P9-002 清偿。
   - 关联 GitHub Project P15 条目。
 
 ## 13. v0.2 收尾
 
-PR #91 merge 后即可：
+PR #92 merge 后即可：
 
 - 打 `v0.2.0` tag。
 - 撰写 `docs/release-notes/v0.2.0.md`（或在 GitHub Release 描述），覆盖 P13/P14/P15 变更概览。

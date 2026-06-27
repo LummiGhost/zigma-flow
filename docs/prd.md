@@ -1,11 +1,23 @@
 # Zigma Flow PRD
 
-文档版本：v0.3
+文档版本：v0.3（含 v0.2 修订增量，2026-06-27）
 日期：2026-06-06
-项目阶段：MVP 设计
+项目阶段：MVP 已发布，v0.2 设计
 项目定位：本地 Agent Workflow Runtime / Workflow Harness
 暂定名称：Zigma Flow
 备用名称：Zigma Workflow Harness、Zigma Agent Runtime
+
+## 0. v0.2 修订说明（2026-06-27）
+
+本 PRD 自 2026-06-06 起冻结为 v0.3 内容。MVP v0.1.0 发布后，v0.2 阶段在 P13 中引入三类 Agent 主动控制流能力，需要扩展若干 FR 与非目标条款。修订原则：
+
+- **加法优先**：尽量保留原文，新增条款追加在节末或新章节中，不改动 v0.3 已有判定。
+- **不改变"Engine 唯一写者"的核心精神**：Agent 仍不能直接修改 `state.json` 的状态机字段（job/step status、attempts、signals 注册表、last_event_id 等）。
+- **新增"工作流数据层"**：v0.2 引入 `variables` 与 `context_blocks` 两个新命名空间，作为 Agent 可通过 Engine 入口修改的数据层；它们与状态机字段隔离。
+
+涉及的修订点集中在：§3（Signal/Gate 解释）、§5（非目标范围措辞）、§FR-006、§FR-009、§FR-010、§FR-014、新增 §FR-016/§FR-017/§FR-018、§13（表达式上下文）、§22（成功标准）、§23（风险三）。每处修订都以"v0.2 修订"字样标记，便于检视。
+
+具体设计落在 `docs/phases/v0.2-roadmap.md` 与 `docs/phases/p13-agent-adapter-hardening/02-development-plan.md`。
 
 ## 1. 产品背景
 
@@ -96,6 +108,15 @@ Signal：Agent 对流程变化的结构化请求。Agent 可以请求 `needs_arc
 
 Gate：Engine 对流程变化的裁决。Workflow Engine 根据预声明规则、check 结果和 signal schema 决定是否推进、阻塞、重试或激活 optional job。
 
+> **v0.2 修订（2026-06-27）：** 此处"不能直接修改 workflow 状态"特指 `state.json` 的状态机字段（job/step status、attempts、signals 注册表、last_event_id 等），这些仍只允许 Engine 写入。v0.2 在 P13 中新增"工作流数据层"——`variables` 与 `context_blocks` 两个命名空间，Agent 可通过 `report.context_patches` 修改它们，但仍需经 Engine 入口 `applyContextPatch` 校验权限、Schema 与批次原子性；状态机字段保持禁止 patch。
+>
+> 同时，v0.2 引入三种与 Engine 交互的结构化通道：
+> - **Step Status Return**（见 §FR-016）：step 本地决策，触发预声明的 `on_return` action（含新增 `goto_step`）。
+> - **Workflow Variables / Context Blocks**（见 §FR-017）：变量与上下文块的 patch 操作。
+> - **Conditional / goto_step / Bounded Loops**（见 §FR-018）：step `if:`、router `goto_step`、step `max_visits`。
+>
+> 三者均不绕开 Engine，且 acceptAgentReport 按固定流水线顺序处理（context_patches → status → signals → advance）。
+
 ## 4. 产品目标
 
 核心目标有七个。
@@ -122,9 +143,9 @@ MVP 阶段不实现以下能力：
 
 真正动态生成新 job；
 
-Agent 直接修改 workflow 状态；
+Agent 直接修改 workflow 状态；【v0.2 修订】此条限定为：Agent 直接修改 `state.json` 的状态机字段（jobs/signals/attempts/last_event_id 等）；v0.2 在 P13 中允许 Agent 通过 `report.context_patches` 修改新增的 `variables` 与 `context_blocks` 命名空间，但必须经 Engine 入口校验，Engine 仍是状态机字段的唯一写者。
 
-任意循环、任意表达式、运行时 YAML patch；
+任意循环、任意表达式、运行时 YAML patch；【v0.2 修订】仍禁止 `while`/`for` DSL 关键字与任意脚本执行；v0.2 引入 `goto_step`（同 job 跳转）与每 step `max_visits`（默认 3）作为有界循环安全阀，不构成"任意循环"。运行时 YAML patch 保持禁止——workflow 定义在 run 期间不可变；`variables` 与 `context_blocks` 只在 run state 层修改，不回写 workflow YAML。表达式仍限于 `${{ ... }}` 受限插值 + 等值/逻辑组合，不支持函数调用、算术、字符串拼接、JS 求值等任意表达式。
 
 远程 Skill Registry；
 
@@ -537,6 +558,13 @@ zigma-flow prompt --job plan
 
 包含“完成当前 step 后停止”的要求。
 
+【v0.2 修订】Context Builder 还需注入以下内容（仅当 step 声明对应权限时）：
+
+- **可读变量清单**：来自 workflow 顶层 `variables` 段，按 `step.permissions.variables.read` 白名单过滤后展示当前值。
+- **可写变量声明**：按 `step.permissions.variables.write` 白名单告知 Agent 可通过 `report.context_patches` 修改哪些变量。
+- **上下文块内容**：来自 workflow 顶层 `context_blocks` 段，按 `step.permissions.context_blocks.read` 白名单注入当前版本内容；按 `step.permissions.context_blocks.write` 告知可写性。
+- **结构化返回状态约束**：如果 step 声明了 `returns.status`，必须告知 Agent 允许的 status 值及对应 on_return 行为，便于 Agent 做出合规决策。
+
 提示词示例片段：
 
 ```md
@@ -693,7 +721,15 @@ block
 retry_job
 activate_job
 goto_job
+goto_step          # v0.2 新增（P13）
 ```
+
+【v0.2 修订】`goto_step` 限制：
+
+- 目标 step 必须存在于**当前 job** 内；跨 job 跳转使用既有 `goto_job`。
+- 触发时写入 `step_revisited` 事件；目标 step 状态重置为 `pending`，job 的 `current_step` 指向目标 step。
+- 与每 step `max_visits`（默认 3，详见 §FR-018）协同工作，作为环路安全阀。
+- attempt 数不因 `goto_step` 增加（attempt 是 job 级别的概念）。
 
 暂不支持：
 
@@ -748,6 +784,21 @@ Engine 校验 signal 是否允许从当前 job/step 发出；
 Engine 根据 signal 的 severity、priority 和 action 处理流程；
 
 当多个 signal 同时出现时，按优先级处理。
+
+【v0.2 修订】Agent Report 在 v0.2 中扩展为支持三种结构化通道，处理顺序固定为 **context_patches → status → signals → advance**（详见 §FR-016/§FR-017/§FR-018 与 mvp-contracts §2.6）：
+
+| 通道 | 字段 | 触达范围 | 引擎入口 |
+|---|---|---|---|
+| 变量与上下文块 patch | `context_patches[]` | workflow 数据层 | `applyContextPatch` |
+| Step 结构化返回 | `status` | 当前 step 的本地决策 | `applyStatusReturn` |
+| 顶层 signals | `signals[]` | 跨 step 升级 | 既有 signal handler |
+
+三者并行存在但不冲突：
+
+- `context_patches` 仅修改 `variables` / `context_blocks` 命名空间，不会触发 routing action。
+- `status` 是 step-local 决策（如 review 的 approved/rejected），通过 step.on_return 翻译为 retry/goto/fail 等 action。
+- `signals` 仍是 workflow-wide 升级（如 needs_architecture_design），按 severity/priority 处理。
+- 当 `status` 已触发 action 时，`signals` 的 action 被忽略（但仍记录 `signal_received` 事件以备审计）。
 
 示例：
 
@@ -972,6 +1023,31 @@ workspace:
   branch: "zigma/${{ run.id }}/implement"
 ```
 
+【v0.2 修订】权限模型增加三轴，**完全独立于既有的 `edits` 文件编辑权限**：
+
+```yaml
+permissions:
+  contents: read
+  edits: none                # 既有：文件编辑
+  commands: none             # 既有：shell 命令
+  workflow_state: none       # 既有：禁止改 state.json 状态机字段
+  variables:                 # v0.2 新增：workflow 变量读写白名单
+    read: [plan_status, iteration_count]
+    write: [plan_status]
+  context_edit: read         # v0.2 新增：none | read | write
+  context_blocks:            # v0.2 新增：上下文块读写白名单
+    read: [current-plan, reviewer-notes]
+    write: [current-plan]
+```
+
+约束：
+
+- `variables.write` 的每项必须同时出现在 workflow 顶层 `variables.<name>.allowed_writers`（双重校验：step 自身声明 + workflow 顶层声明）。
+- `context_blocks.write` 同理双重校验。
+- `context_edit: none` 时 step 提交的 `report.context_patches` 整批拒绝（即使 step 列了 write 项）。
+- 未声明的字段默认全部 `none`/空数组（最小权限原则）。
+- 同一 step 完全允许 `edits: none, variables: write, context_edit: write`（典型 planner / reviewer 配置）或 `edits: write, variables: write, context_edit: write`（典型 implementer 配置）。
+
 验收标准：
 
 Prompt 必须显示当前 step 权限；
@@ -980,7 +1056,9 @@ Runtime check 必须发现只读 Agent Step 修改文件；
 
 多个 writable jobs 不允许同时 running；
 
-未来多写 job 并行必须通过独立 branch 或 worktree。
+未来多写 job 并行必须通过独立 branch 或 worktree；
+
+【v0.2 修订】Engine 必须拒绝任何 patch 操作触及 `state.json` 的状态机字段（jobs/signals/attempts/last_event_id/run.status 等），即使 step 声明了 `variables.write` 或 `context_edit: write`，被保留字段不可写。
 
 ### FR-015 事件日志
 
@@ -1013,6 +1091,238 @@ job / step 相关事件必须包含 job_id、step_id 和 attempt；
 signal、router、retry、activation 必须有独立事件；
 
 check 失败原因必须记录。
+
+【v0.2 修订】v0.2 在 P13 中新增以下事件类型（mvp-contracts §2.4 维护权威清单）：
+
+- adapter 生命周期：`agent_invoked` / `agent_completed` / `agent_timed_out` / `agent_failed` / `agent_cancelled` / `run_cancelled`
+- step 控制流：`step_returned` / `step_skipped` / `step_revisited` / `step_visit_exceeded`
+- 数据层：`variable_set` / `variable_deleted` / `context_block_updated` / `context_block_deleted`
+
+P15 还会新增 `human_gate_waiting` / `human_decision`。
+
+### FR-016 Step 结构化返回（Step Status Return，v0.2 新增）
+
+功能：
+
+step 可声明结构化返回状态，Agent 在 `report.status` 中返回，Engine 据此触发预声明的 action。
+
+workflow 定义：
+
+```yaml
+- id: review
+  type: agent
+  uses: agent://reviewer
+  returns:
+    status:
+      values: [approved, rejected, needs_clarification]
+      required: true        # 强制要求 report 必须包含 status
+  on_return:
+    approved:
+      continue: true
+    rejected:
+      retry_job: implement
+      retry_with:
+        review_comments: "${{ steps.review.outputs.comments }}"
+    needs_clarification:
+      goto_step: gather-context
+```
+
+Agent report 中的 status：
+
+```json
+{
+  "summary": "...",
+  "outputs": {...},
+  "status": "rejected",
+  "signals": []
+}
+```
+
+Engine 行为：
+
+1. 若 `status` 出现且 step 声明了 `returns.status`：调用 `applyStatusReturn`，按 `on_return[status]` 翻译为既有 router action（continue / retry_job / activate_job / goto_job / goto_step / fail / block）。
+2. `required=true` 但 `status` 缺失 → ValidationError → step_failed。
+3. `status` 不在 `returns.status.values` 中 → ValidationError → step_failed。
+4. 若未声明 `returns.status`，`status` 字段被记录在 outputs 中，不触发动作。
+5. status 触发的 action 优先于 signals action；signals 仍记录 `signal_received` 事件。
+
+验收标准：
+
+- 已声明 status 必须严格枚举校验；
+- `step_returned` 事件 payload 含 status 与 mapped_action；
+- 未声明 `returns` 时不破坏既有路径。
+
+### FR-017 Workflow 变量与上下文块（v0.2 新增）
+
+功能：
+
+引入"工作流数据层"，作为 Agent 可通过 Engine 入口修改的命名空间，与 `state.json` 状态机字段隔离。
+
+#### 变量声明（workflow 顶层）
+
+```yaml
+variables:
+  plan_status:
+    type: string
+    initial: pending
+    enum: [pending, ready, blocked]
+    allowed_writers:
+      - plan.plan
+      - review.review
+  open_questions:
+    type: array
+    initial: []
+    allowed_writers:
+      - plan.plan
+      - review.review
+  iteration_count:
+    type: number
+    initial: 0
+    allowed_writers:
+      - implement.*       # 通配整个 job
+```
+
+`type` 支持：`string` / `number` / `boolean` / `array` / `object`。v0.2 不做深层 schema 校验；顶层 type + enum（仅 string）校验。
+
+#### 上下文块声明（workflow 顶层）
+
+```yaml
+context_blocks:
+  current-plan:
+    initial_artifact: null
+    allowed_writers: [plan.plan, implement.edit]
+  reviewer-notes:
+    initial_artifact: null
+    allowed_writers: [review.review]
+```
+
+每个上下文块在 run 目录下作为版本化 artifact 存在：
+
+```
+runs/<runId>/context-blocks/<block-id>/v<N>.md
+```
+
+artifact kind 为 `context_block`，metadata 含 producer、version、size、created_at；旧版本保留可审计，不被自动删除。
+
+#### state.json 新增段
+
+```json
+{
+  "variables": {
+    "plan_status": "ready",
+    "open_questions": [],
+    "iteration_count": 2
+  },
+  "context_blocks": {
+    "current-plan": {
+      "current_version": 3,
+      "current_artifact": "artifact://.../context-blocks/current-plan/v3.md"
+    }
+  }
+}
+```
+
+#### Patch 操作
+
+Agent report 增字段 `context_patches`：
+
+```json
+{
+  "context_patches": [
+    { "kind": "variable_set", "name": "plan_status", "value": "ready" },
+    { "kind": "variable_delete", "name": "open_questions" },
+    { "kind": "context_block_set", "id": "current-plan", "content": "..." },
+    { "kind": "context_block_append", "id": "reviewer-notes", "content": "..." },
+    { "kind": "context_block_delete", "id": "draft-notes" }
+  ]
+}
+```
+
+#### Engine 入口 `applyContextPatch`
+
+- 在 acceptAgentReport 处理 outputs 之后、status/signals 之前执行。
+- 对每条 patch：
+  - 校验 step 是否在 `allowed_writers`（精确匹配 `<job>.<step>` 或 `<job>.*` 通配）；未授权 → ValidationError。
+  - 校验 kind 与 schema；类型/enum 不匹配 → ValidationError。
+  - 批次原子性：任一条失败整批回滚，不写 state、不写事件、不写 artifact。
+- 全部校验通过后：原子写一次 state.json + 每条 patch 一条事件 + 必要的 context_block artifact 写入。
+
+#### 状态机隔离（不变量）
+
+`applyContextPatch` 永远不允许触及：
+
+- `state.status`、`state.last_event_id`
+- `state.jobs[*].status` / `attempt` / `current_step` / `retry_*` / `activation*` / `step_visits`
+- `state.signals` 注册表
+
+任何对这些字段的 patch 请求都是 `ValidationError`，整批回滚。
+
+验收标准：
+
+- 变量与上下文块只能通过 patch 修改；
+- 权限不通过的 patch 整批回滚，状态/事件/artifact 三者一致；
+- 历史版本 artifact 不被覆盖；
+- 试图触及保留字段必须拒绝并写出明确错误。
+
+### FR-018 条件、跳转与有界循环（v0.2 新增）
+
+功能：
+
+允许 workflow 通过 step `if:`、router `goto_step` 与 step `max_visits` 表达条件、跳转与有界循环，**不引入 `while`/`for` DSL，不支持任意脚本表达式**。
+
+#### Step `if:`
+
+```yaml
+- id: gather-context
+  type: agent
+  if: "${{ variables.plan_status == 'needs_context' }}"
+  uses: agent://researcher
+```
+
+约束：
+
+- 表达式语法白名单：`${{ ... }}` 受限插值 + `==` / `!=` / `&&` / `||` / `!`。
+- 禁止：函数调用、算术、字符串拼接、JS 求值、对象属性访问深度 > 3。
+- 求值 false → step 状态 `skipped`，写 `step_skipped` 事件（payload: condition string），调用 advanceJob 推进到下一 step。
+- 表达式解析失败（变量未声明、语法错） → ValidationError → step_failed。
+
+#### Router `goto_step`
+
+```yaml
+- id: route-plan
+  type: router
+  switch: "${{ steps.plan.outputs.status }}"
+  cases:
+    incomplete:
+      goto_step: gather-context
+    ready:
+      continue: true
+```
+
+约束（同 §FR-009）：
+
+- 目标 step 必须存在于同一 job；跨 job 用 `goto_job`。
+- 触发时写 `step_revisited` 事件，重置目标 step 状态为 pending，更新 current_step，目标 step 的 visit 计数 +1。
+
+#### Step `max_visits`
+
+```yaml
+- id: gather-context
+  max_visits: 5
+```
+
+约束：
+
+- 每次进入 step 时 `state.jobs[<jobId>].step_visits[stepId]` 计数 +1。
+- 超过 `max_visits`（默认 3） → step 状态 `blocked`、job 状态 `blocked`、写 `step_visit_exceeded` 事件。
+- visit 计数随 `retryJob`（attempt+1）重置为 0；不允许通过 context_patch 重置。
+
+验收标准：
+
+- 表达式语法严格白名单；非白名单语法 → ValidationError；
+- goto_step 跨 job → ValidationError；
+- 循环超过 max_visits 必须 blocked，事件链可单独审计；
+- retry 重置 visit 计数。
 
 ## 11. Skill Pack Manifest 规范
 
@@ -1527,6 +1837,22 @@ ${{ steps.plan.outputs.test_plan }}
 ${{ retry.inputs.review_comments }}
 ${{ signals.needs_architecture_design.reason }}
 ```
+
+【v0.2 修订】v0.2 在 P13 中扩展以下表达式上下文：
+
+```text
+${{ variables.<name> }}                     # v0.2 新增：workflow 变量当前值
+${{ jobs.<id>.outputs.<key> }}              # P13 清偿 TD-P9-001：层级 outputs 访问
+${{ steps.<id>.outputs.<key> }}             # P13 清偿 TD-P9-002：同 job 内 step outputs 访问
+```
+
+同时在 `if:` / `goto_step` 等条件场景支持有限组合：
+
+- 等值/不等：`==` `!=`
+- 逻辑：`&&` `||` `!`
+- 括号：`( ... )`
+
+**仍禁止**：函数调用、算术（`+` `-` `*` `/`）、字符串拼接、对象/数组方法、JS 求值。表达式解析在静态层（schema 校验）与求值层（runtime）双重过滤。
 
 暂不支持任意脚本表达式。
 
@@ -2330,6 +2656,19 @@ Context Builder 能限制 Agent 可见能力；
 
 用户主观感受上，流程可控性高于长 Skill 提示词。
 
+【v0.2 修订】v0.2 在保持上述全部标准的前提下，将"Agent 不能直接修改 workflow 状态"的口径调整为：
+
+- Agent 通过 Engine 提供的入口（report.outputs、report.signals、report.status、report.context_patches）影响流程；
+- Agent 永远不直接写 `state.json` 的状态机字段；
+- `state.json` 的状态机字段（job/step status、attempts、signals 注册表、last_event_id、run.status 等）仍只能由 Engine 通过 acceptAgentReport、applyContextPatch、applyStatusReturn、advanceJob、retryJob 等内部入口写入；
+- 新增"工作流数据层"（variables、context_blocks）由 Engine 入口 applyContextPatch 校验后写入，与状态机字段隔离。
+
+v0.2 新增成功标准：
+
+- planner / reviewer 等 Agent 可通过 status 与 context_patches 显式影响流程，而无需为每种决策都建模为顶层 signal；
+- goto_step 与 max_visits 让"返工→重试→升级"模式具备结构化表达，避免靠 prompt 提醒；
+- 上下文块编辑权限独立于文件编辑权限，能区分"改源码的写者"与"改 plan/notes 的写者"。
+
 ## 23. 主要风险与应对
 
 风险一：Workflow DSL 变成通用编程语言。
@@ -2343,6 +2682,14 @@ Context Builder 能限制 Agent 可见能力；
 风险三：Agent 通过 signal 过度影响流程。
 
 应对：Agent 只能请求流程变化，signal 必须由 workflow 顶层声明，Engine 根据 allowed_from、priority 和 action 裁决。
+
+【v0.2 修订】Agent 在 v0.2 中获得额外的影响通道（status、context_patches、status 触发的 goto_step）。新增缓解措施：
+
+- status 必须出现在 step 的 `returns.status.values` 枚举内，未声明的 status 拒绝；
+- context_patches 受 step 权限（variables/context_edit/context_blocks）与 workflow 顶层 allowed_writers 双重校验；
+- 任何 patch 触及状态机字段一律拒绝（保留字段集合在 Engine 代码中硬编码 + 单测覆盖）；
+- goto_step 形成的环路由每 step `max_visits` 兜底（默认 3），超出即 blocked；
+- patch 操作批次原子，失败整批回滚；每条 patch 都有独立事件可审计。
 
 风险四：并行 job 产生工作区冲突。
 

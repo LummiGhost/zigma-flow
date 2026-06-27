@@ -163,6 +163,7 @@ export class ClaudeCodeBackend implements AgentBackend {
         isCanceled?: boolean;
         isTerminated?: boolean;
         timedOut?: boolean;
+        code?: string;
       };
 
       // Always write whatever output was captured before the error
@@ -210,6 +211,50 @@ export class ClaudeCodeBackend implements AgentBackend {
           error: `Claude Code timed out after ${this.timeout}ms. See agent.stdout.log and agent.stderr.log for full output.`,
           stdoutPath,
           stderrPath,
+          durationMs,
+        };
+      }
+
+      // Classify the error for better diagnostics and retry behaviour
+
+      // Command not found (ENOENT) → ConfigError-like diagnostic
+      if (err.code === "ENOENT" || (err.message ?? "").toLowerCase().includes("command not found")) {
+        return {
+          success: false,
+          error: `ConfigError: Agent command "${this.command}" was not found. Please check your PATH or install the CLI.`,
+          stdoutPath,
+          stderrPath,
+          durationMs,
+        };
+      }
+
+      // Authentication error → PermissionError-like diagnostic
+      const stderrLower = (err.stderr ?? "").toLowerCase();
+      if (
+        stderrLower.includes("not logged in") ||
+        stderrLower.includes("authenticate") ||
+        err.exitCode === 401
+      ) {
+        return {
+          success: false,
+          exitCode: err.exitCode ?? 1,
+          error: `PermissionError: Claude Code is not logged in. Please run \`claude login\` to authenticate.`,
+          stdoutPath,
+          stderrPath,
+          invocationPath,
+          durationMs,
+        };
+      }
+
+      // Rate limited → retryable error with suggestion
+      if (stderrLower.includes("rate limit") || stderrLower.includes("429")) {
+        return {
+          success: false,
+          exitCode: err.exitCode ?? 1,
+          error: `Agent process exited with code ${err.exitCode ?? 1}: rate limit exceeded. Consider waiting before retrying.`,
+          stdoutPath,
+          stderrPath,
+          invocationPath,
           durationMs,
         };
       }

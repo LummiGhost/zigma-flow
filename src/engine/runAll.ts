@@ -30,8 +30,14 @@ import {
   SystemClock,
 } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
-import { StateError, ValidationError } from "../utils/index.js";
+import {
+  ConfigError,
+  PermissionError,
+  StateError,
+  ValidationError,
+} from "../utils/index.js";
 import { advanceJob, createRun, executeCurrentStep } from "./index.js";
+import { recordAgentFailure } from "./recordAgentFailure.js";
 import { appendArtifactIndex } from "../artifact/artifactIndex.js";
 import { artifactId } from "../artifact/artifactMetadata.js";
 import type { ArtifactMetadata } from "../artifact/artifactMetadata.js";
@@ -78,6 +84,47 @@ async function registerStepArtifact(
   } catch {
     return undefined;
   }
+}
+
+// ---------------------------------------------------------------------------
+// classifyError — classify an agent failure result into a retry category
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify the error type from an AgentExecuteResult for use with
+ * recordAgentFailure. Pure string-matching on `result.error`.
+ *
+ * - "ConfigError" or "not configured" → "config"
+ * - "PermissionError" or "not logged in" or "401" or "403" → "permission"
+ * - "timed out" or "timeout" → "timeout"
+ * - Otherwise → "execution"
+ */
+export function classifyError(result: {
+  error?: string;
+}): "config" | "permission" | "timeout" | "execution" {
+  const msg = (result.error ?? "").toLowerCase();
+
+  if (
+    msg.includes("configerror") ||
+    msg.includes("not configured")
+  ) {
+    return "config";
+  }
+
+  if (
+    msg.includes("permissionerror") ||
+    msg.includes("not logged in") ||
+    msg.includes("401") ||
+    msg.includes("403")
+  ) {
+    return "permission";
+  }
+
+  if (msg.includes("timed out") || msg.includes("timeout")) {
+    return "timeout";
+  }
+
+  return "execution";
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +238,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
   // ── 3. Main execution loop ─────────────────────────────────────────────
 
   let iteration = 0;
+  let backendCache: { key: string; backend: AgentBackend } | undefined;
 
   while (iteration < maxIterations) {
     // Check abort signal
@@ -333,8 +381,35 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       };
       await stateStore.writeSnapshot(runDir, runningState);
 
-      // Resolve the agent backend (pass step-level backend name if declared)
-      const backend = backendResolver(stepDef.backend as string | undefined);
+      // Resolve the agent backend (cached per job+step for retry continuity)
+      let backend: AgentBackend;
+      const cacheKey = `${jobId}::${stepDef.backend ?? ""}`;
+      if (backendCache === undefined || backendCache.key !== cacheKey) {
+        try {
+          const bk = backendResolver(stepDef.backend as string | undefined);
+          backendCache = { key: cacheKey, backend: bk };
+          backend = bk;
+        } catch (err) {
+          if (err instanceof ConfigError || err instanceof PermissionError) {
+            const errorType = err instanceof ConfigError ? "config" : "permission";
+            await recordAgentFailure({
+              runDir,
+              runId,
+              jobId,
+              stepId: bundle.stepId,
+              attempt,
+              reason: err.message,
+              errorType,
+              clock,
+              stateStore,
+              eventWriter,
+            });
+          }
+          break;
+        }
+      } else {
+        backend = backendCache.backend;
+      }
 
       // Compute args_hash before execution (prompt MUST NOT be included in hash)
       const argsHashInput = [
@@ -384,13 +459,14 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         reportPath,
         stepDir,
         projectRoot: zigmaflowDir,
+        signal,
       });
 
       if (!result.success) {
+        // ── Agent failure path ─────────────────────────────────────────
+
         // Determine failure mode
         const isCancelled = signal?.aborted === true;
-        const isTimeout = !isCancelled &&
-          (result.error ?? "").toLowerCase().includes("timed out");
 
         if (isCancelled) {
           // ── Agent cancelled path ──────────────────────────────────────
@@ -412,10 +488,26 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
           await eventWriter.appendEvent(runDir, cancelledEvent);
           onEvent?.(cancelledEvent);
 
+          // Write run_cancelled event
+          const runCancelledEventId = await nextSequentialEventId(runDir, eventWriter);
+          const runCancelledEvent: ZigmaFlowEvent = {
+            id: runCancelledEventId,
+            type: "run_cancelled",
+            run_id: runId,
+            timestamp: clock.now(),
+            producer: "engine",
+            job: jobId,
+            step: bundle.stepId,
+            attempt,
+            payload: { reason: result.error ?? "Agent execution was cancelled." },
+          };
+          await eventWriter.appendEvent(runDir, runCancelledEvent);
+          onEvent?.(runCancelledEvent);
+
           const cancelledState: RunState = {
             ...runningState,
             status: "cancelled",
-            last_event_id: cancelledEventId,
+            last_event_id: runCancelledEventId,
           };
           await stateStore.writeSnapshot(runDir, cancelledState);
           break;
@@ -432,6 +524,8 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         );
 
         const terminalEventId = await nextSequentialEventId(runDir, eventWriter);
+
+        const isTimeout = (result.error ?? "").toLowerCase().includes("timed out");
 
         if (isTimeout) {
           const timeoutEvent: ZigmaFlowEvent = {
@@ -480,41 +574,25 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
           onEvent?.(failedEvent);
         }
 
-        // Mark job as failed
-        const failEventId = await nextSequentialEventId(runDir, eventWriter);
-
-        const failEvent: ZigmaFlowEvent = {
-          id: failEventId,
-          type: "step_failed",
-          run_id: runId,
-          timestamp: clock.now(),
-          producer: "engine",
-          job: jobId,
-          step: bundle.stepId,
+        // Delegate retry/block/fail decision to recordAgentFailure
+        const errorType = classifyError(result);
+        const failureResult = await recordAgentFailure({
+          runDir,
+          runId,
+          jobId,
+          stepId: bundle.stepId,
           attempt,
-          payload: {
-            job_id: jobId,
-            step_id: bundle.stepId,
-            attempt,
-            reason: result.error ?? "Agent backend failed",
-          },
-        };
-        await eventWriter.appendEvent(runDir, failEvent);
-        onEvent?.(failEvent);
+          reason: result.error ?? "Agent backend failed",
+          errorType,
+          clock,
+          stateStore,
+          eventWriter,
+        });
 
-        const failedState: RunState = {
-          ...runningState,
-          status: "failed",
-          last_event_id: failEventId,
-          jobs: {
-            ...runningState.jobs,
-            [jobId]: {
-              ...runningState.jobs[jobId]!,
-              status: "failed",
-            },
-          },
-        };
-        await stateStore.writeSnapshot(runDir, failedState);
+        if (failureResult.action === "retried") {
+          iteration++;
+          continue;
+        }
         break;
       }
 

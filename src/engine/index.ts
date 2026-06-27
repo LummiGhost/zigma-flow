@@ -41,6 +41,8 @@ export { abortRun } from "./abort.js";
 export type { AbortRunOpts } from "./abort.js";
 export { runAll } from "./runAll.js";
 export type { RunAllOpts, RunAllSummary } from "./runAll.js";
+export { recordAgentFailure } from "./recordAgentFailure.js";
+export type { RecordAgentFailureOpts, RecordAgentFailureResult } from "./recordAgentFailure.js";
 
 export interface CreateRunInputs {
   workflowPath: string;

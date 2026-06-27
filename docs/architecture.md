@@ -398,6 +398,69 @@ MVP 采用 event log 加 state snapshot：
 
 该策略不承诺完整 event sourcing，但避免从第一版丢失审计信息。
 
+### 7.4 Concurrency model (v0.2)
+
+P14 引入并发调度，让 read-only jobs 在 `run-all` 中并行执行。核心设计原则：
+
+1. **Scheduler 是纯函数**（`src/engine/scheduler.ts`）：`selectExecutable(state, workflow, config)` 不执行任何 IO。它从 `RunState` 和 `WorkflowDefinition` 中计算出一个 `ExecutableBatch`。输入决定输出——无文件访问、无异步行为。
+2. **Read-only 并行，writable 串行**：Read-only jobs 可以同时运行，上限由 `parallelism` 控制。Writable jobs 最多同时运行一个（AD-P14-002）。判定依据是 job 的 `workspace.mode` 字段：`"read-only"` 以外的所有值视为 writable。
+3. **AsyncQueue 提供 per-runDir 写串行**（`src/run/asyncQueue.ts`）：`LocalStateStore.writeSnapshot` 和 `JsonlEventWriter.appendEvent` 各自通过 per-runDir 的 AsyncQueue 排队。多个 job 并发写入同一 run 目录时，写操作按 FIFO 顺序执行，不会出现部分写或行交错。
+4. **`updateState` 原子 read-modify-write**：AsyncQueue 内调用 `updateState(fn)`，其中 `fn` 以当前 state 快照为输入，返回新 state。read-modify-write 在同一队列任务中连续完成，不会被其他写操作打断。
+5. **Event ID 全局单调**：`nextSequentialEventId` 通过 `events.jsonl` 确定下一个 ID。同批次所有并发 job 都经过同一个 AsyncQueue 写事件，因此事件 ID 仍是全局严格递增的。
+6. **`batch_id` 事件分组**：每个调度批次生成一个 `randomUUID()` 作为 `batch_id`，该批次所有事件（`step_started`、`step_completed`、`agent_invoked` 等）的 payload 都包含此 ID。回放工具可按 `batch_id` 分组，识别同批次并发 job。
+
+**Batch execution loop（AD-P14-004）：**
+
+```text
+while (not terminal and iterations < MAX) {
+  state = stateStore.readSnapshot(runDir)
+  batch = selectExecutable({ state, workflow, config })  // pure function
+  if (batch.jobs is empty) break
+
+  batchId = randomUUID()  // AD-P14-006: shared batch_id
+
+  // Create per-job AbortControllers (fail-fast support)
+  for each job in batch.jobs:
+    controller = new AbortController()
+    link external signal to controller
+
+  // Dispatch all jobs concurrently (AD-P14-004)
+  results = Promise.allSettled(
+    batch.jobs.map(j => executeJobOnce(ctx, j, batchId))
+  )
+
+  // Post-batch: state re-read at top of next iteration
+  iteration++
+}
+```
+
+**Fail-fast（AD-P14-005）：**
+
+- `failFast = false`（默认）：同批次单个 job 失败不影响其他 job。失败 job 走 `recordAgentFailure` 进入 retry 路径；其余 job 正常完成。
+- `failFast = true`：第一个 job 失败后，立即 abort 同批次其余所有 job 的 AbortController。被中断 job 写入 `agent_cancelled` 事件（`reason = "fail_fast"`），不进入 retry 计数。
+
+**Scheduler rules applied per iteration（AD-P14-001）：**
+
+1. 收集 `state.jobs` 中 `status === "ready"` 的所有 job。
+2. 检查是否有 writable job 正在运行。若有 → 本批次仅允许 read-only jobs。
+3. 从 ready pool 中取 read-only job，上限为 `parallelism - running_read_only_count`。
+4. 如果 read-only 未填满 parallelism 且没有 writable 在运行，从 ready pool 中取最多 1 个 writable job。
+5. 返回 `ExecutableBatch`（可能为空）和人类可读的 `rationale`。
+
+**默认 parallelism = 4（AD-P14-007）：**
+
+配置优先级：CLI `--parallelism N` > `.zigma-flow/config.json` `agent.parallelism` > `DEFAULT_PARALLELISM = 4`。实际 batch size = `min(parallelism, ready 队列长度)`。
+
+**状态演变（v0.2 新增）：**
+
+```text
+非终态 run → 纯函数 scheduler 选择批次 → 并发执行 → (可选 fail-fast abort) → 聚合结果 → 读最新 snapshot → 下一轮
+```
+
+Reader/writer 分离：
+- **Reader**：`selectExecutable`、`readSnapshot`——无锁并发。
+- **Writer**：`writeSnapshot`、`appendEvent`——AsyncQueue 串行化。
+
 ## 8. 数据所有权与持久化
 
 ### 8.1 目录所有权

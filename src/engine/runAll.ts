@@ -5,12 +5,17 @@
  * maxIterations is reached). Handles agent, script, check, and router step
  * types through the appropriate engine entry points.
  *
+ * P14: Main loop refactored from sequential (one-job-per-iteration) to
+ * scheduler-driven concurrent batch execution using Promise.allSettled.
+ *
  * Reference: docs/mvp-contracts.md §2.3, §2.4
  * docs/phases/p13-agent-adapter-hardening/workflows/wf-p13-engine-runall/
  * WF-P13-ENGINE-RUNALL Step 2.
+ * docs/phases/p14-concurrent-execution/02-development-plan.md
+ * AD-P14-004 (loop), AD-P14-005 (fail-fast), AD-P14-006 (events).
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
@@ -41,6 +46,8 @@ import { recordAgentFailure } from "./recordAgentFailure.js";
 import { appendArtifactIndex } from "../artifact/artifactIndex.js";
 import { artifactId } from "../artifact/artifactMetadata.js";
 import type { ArtifactMetadata } from "../artifact/artifactMetadata.js";
+import { selectExecutable } from "./scheduler.js";
+import type { ExecutableBatch } from "./scheduler.js";
 
 /** Fallback timeout when backend does not expose a timeout value. */
 const DEFAULT_BACKEND_TIMEOUT = 600_000;
@@ -162,6 +169,17 @@ export interface RunAllOpts {
   stateStore?: LocalStateStore;
   /** Injectable event writer (defaults to JsonlEventWriter). */
   eventWriter?: JsonlEventWriter;
+  /**
+   * Maximum concurrent job count (AD-P14-007).
+   * Defaults to 4 when not specified.
+   */
+  parallelism?: number;
+  /**
+   * Enable fail-fast abort propagation (AD-P14-005).
+   * When true, a single job failure in a batch aborts all other jobs in the
+   * same batch. Defaults to false.
+   */
+  failFast?: boolean;
 }
 
 export interface RunAllSummary {
@@ -173,6 +191,573 @@ export interface RunAllSummary {
   jobs: Array<{ id: string; status: string; attempts: number }>;
   /** Number of loop iterations completed. */
   iterations: number;
+}
+
+// ---------------------------------------------------------------------------
+// JobStepResult — per-job execution result within a batch
+// ---------------------------------------------------------------------------
+
+export interface JobStepResult {
+  jobId: string;
+  success: boolean;
+  action: "completed" | "retried" | "failed" | "cancelled" | "blocked" | "skipped";
+  detail?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Internal: getJobMode — derive "read-only" | "writable" from workflow def
+// ---------------------------------------------------------------------------
+
+function getJobMode(
+  jobId: string,
+  workflow: import("../workflow/index.js").WorkflowDefinition,
+): "read-only" | "writable" {
+  const jobDef = workflow.jobs[jobId];
+  if (!jobDef) return "writable";
+  const workspace = jobDef.workspace;
+  if (!workspace) return "writable";
+  return workspace.mode === "read-only" ? "read-only" : "writable";
+}
+
+// ---------------------------------------------------------------------------
+// Internal: ExecuteJobOnceCtx — context for a single job-step execution
+// ---------------------------------------------------------------------------
+
+interface ExecuteJobOnceCtx {
+  runDir: string;
+  runId: string;
+  zigmaflowDir: string;
+  jobId: string;
+  wf: import("../workflow/index.js").WorkflowDefinition;
+  state: RunState;
+  backendResolver: (stepBackendName?: string) => AgentBackend;
+  stateStore: LocalStateStore;
+  eventWriter: JsonlEventWriter;
+  clock: Clock;
+  signal: AbortSignal | undefined;
+  batchId: string;
+  onEvent: ((e: ZigmaFlowEvent) => void) | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// executeJobOnce — process ONE step for ONE job (AD-P14-004)
+//
+// Handles agent, script, check, and router step types. Returns a structured
+// result so the batch loop can make post-batch decisions (fail-fast, etc.).
+// Does NOT manage loop control — that is runAll's responsibility.
+// ---------------------------------------------------------------------------
+
+let backendCache: { key: string; backend: AgentBackend } | undefined;
+
+async function executeJobOnce(
+  ctx: ExecuteJobOnceCtx,
+): Promise<JobStepResult> {
+  const {
+    runDir,
+    runId,
+    zigmaflowDir,
+    jobId,
+    wf,
+    state,
+    backendResolver,
+    stateStore,
+    eventWriter,
+    clock,
+    signal,
+    batchId,
+    onEvent,
+  } = ctx;
+
+  const jobDef = wf.jobs[jobId];
+  if (jobDef === undefined) {
+    return { jobId, success: false, action: "blocked", detail: "Job not found in workflow definition" };
+  }
+
+  const jobState = state.jobs[jobId];
+  if (jobState === undefined) {
+    return { jobId, success: false, action: "blocked", detail: "Job not found in run state" };
+  }
+
+  const stepId = jobState.current_step ?? jobDef.steps[0]?.id;
+  if (stepId === undefined) {
+    return { jobId, success: false, action: "blocked", detail: "No steps defined for job" };
+  }
+
+  const stepDef = jobDef.steps.find((s) => s.id === stepId);
+  if (stepDef === undefined) {
+    return { jobId, success: false, action: "blocked", detail: `Step "${stepId}" not found` };
+  }
+
+  if (stepDef.type === "agent") {
+    return executeAgentStep({
+      runDir, runId, zigmaflowDir, jobId, wf, state,
+      backendResolver, stateStore, eventWriter, clock,
+      signal, batchId, onEvent, stepDef, stepId,
+    });
+  }
+
+  if (
+    stepDef.type === "script" ||
+    stepDef.type === "check" ||
+    stepDef.type === "router"
+  ) {
+    return executeNonAgentStep({
+      runDir, runId, zigmaflowDir, jobId, wf, state,
+      backendResolver, stateStore, eventWriter, clock,
+      signal, batchId, onEvent,
+      stepDef, stepId,
+    });
+  }
+
+  return { jobId, success: false, action: "skipped", detail: `Unsupported step type: ${stepDef.type}` };
+}
+
+// ---------------------------------------------------------------------------
+// executeAgentStep — full agent step lifecycle (prompt → invoke → result)
+// ---------------------------------------------------------------------------
+
+interface StepCtx extends ExecuteJobOnceCtx {
+  stepDef: import("../workflow/index.js").StepDefinition;
+  stepId: string;
+}
+
+async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
+  const {
+    runDir, runId, zigmaflowDir, jobId, wf, state,
+    backendResolver, stateStore, eventWriter, clock,
+    signal, batchId, onEvent, stepDef, stepId,
+  } = ctx;
+
+  // Build context (read-only — no disk writes)
+  const bundle = await buildContext({
+    runDir,
+    zigmaflowDir,
+    workflowDef: wf,
+    state,
+    jobId,
+  });
+
+  if (bundle.stepType !== "agent") {
+    return { jobId, success: false, action: "blocked", detail: "Step type mismatch in buildContext" };
+  }
+
+  const attempt = state.jobs[jobId]?.attempt ?? 1;
+
+  // Build and write prompt artifact
+  const packet = buildPromptPacket(bundle);
+  const rendered = renderPromptPacket(packet, {
+    supportsSystemPrompt: true,
+  });
+  const promptText = rendered.markdown;
+
+  const { artifactRef } = await writePromptArtifact({
+    runDir,
+    runId,
+    jobId,
+    stepId: bundle.stepId,
+    attempt,
+    prompt: promptText,
+    packet,
+    clock,
+  });
+
+  // Emit prompt_generated event
+  const promptEventId = await nextSequentialEventId(runDir, eventWriter);
+
+  const promptEvent: ZigmaFlowEvent = {
+    id: promptEventId,
+    type: "prompt_generated",
+    run_id: runId,
+    timestamp: clock.now(),
+    producer: "engine",
+    job: jobId,
+    step: bundle.stepId,
+    attempt,
+    batch_id: batchId,
+    payload: {
+      job_id: jobId,
+      step_id: bundle.stepId,
+      prompt_artifact: artifactRef,
+    },
+  };
+  await eventWriter.appendEvent(runDir, promptEvent);
+  onEvent?.(promptEvent);
+
+  // Transition job to running (atomic within queue — AD-P14-003)
+  await stateStore.updateState(runDir, (current) => ({
+    ...current,
+    last_event_id: promptEventId,
+    jobs: {
+      ...current.jobs,
+      [jobId]: {
+        ...current.jobs[jobId]!,
+        status: "running",
+        current_step: bundle.stepId,
+        attempt,
+      },
+    },
+  }));
+
+  // Resolve the agent backend (cached per job+step for retry continuity)
+  let backend: AgentBackend;
+  const cacheKey = `${jobId}::${stepDef.backend ?? ""}`;
+  if (backendCache === undefined || backendCache.key !== cacheKey) {
+    try {
+      const bk = backendResolver(stepDef.backend as string | undefined);
+      backendCache = { key: cacheKey, backend: bk };
+      backend = bk;
+    } catch (err) {
+      if (err instanceof ConfigError || err instanceof PermissionError) {
+        const errorType = err instanceof ConfigError ? "config" : "permission";
+        await recordAgentFailure({
+          runDir,
+          runId,
+          jobId,
+          stepId: bundle.stepId,
+          attempt,
+          reason: err.message,
+          errorType,
+          clock,
+          stateStore,
+          eventWriter,
+        });
+      }
+      return { jobId, success: false, action: "failed", detail: err instanceof Error ? err.message : String(err) };
+    }
+  } else {
+    backend = backendCache.backend;
+  }
+
+  // Compute args_hash before execution (prompt MUST NOT be included in hash)
+  const argsHashInput = [
+    backend.backendCommand ?? "",
+    ...(backend.backendArgs ?? []),
+  ].join(" ");
+  const argsHash = createHash("sha256")
+    .update(argsHashInput)
+    .digest("hex");
+
+  // Invoke agent backend
+  const stepDir = join(
+    runDir,
+    "jobs",
+    jobId,
+    "attempts",
+    String(attempt),
+    "steps",
+    bundle.stepId,
+  );
+  const reportPath = join(stepDir, "report.json");
+
+  // Emit agent_invoked event before backend.execute
+  const invokedEventId = await nextSequentialEventId(runDir, eventWriter);
+  const invokedEvent: ZigmaFlowEvent = {
+    id: invokedEventId,
+    type: "agent_invoked",
+    run_id: runId,
+    timestamp: clock.now(),
+    producer: "engine",
+    job: jobId,
+    step: bundle.stepId,
+    attempt,
+    batch_id: batchId,
+    payload: {
+      backend_name: backend.name,
+      command: backend.backendCommand ?? backend.name,
+      args_hash: argsHash,
+      timeout_ms: backend.backendTimeoutMs ?? DEFAULT_BACKEND_TIMEOUT,
+      step_artifact_dir: relative(runDir, stepDir).replace(/\\/g, "/"),
+    },
+  };
+  await eventWriter.appendEvent(runDir, invokedEvent);
+  onEvent?.(invokedEvent);
+
+  const result = await backend.execute({
+    prompt: promptText,
+    reportPath,
+    stepDir,
+    projectRoot: zigmaflowDir,
+    ...(signal !== undefined ? { signal } : {}),
+  });
+
+  if (!result.success) {
+    // ── Agent failure path ─────────────────────────────────────────
+
+    // Determine failure mode
+    const isCancelled = signal?.aborted === true;
+
+    if (isCancelled) {
+      // ── Agent cancelled path ──────────────────────────────────────
+      const cancelledEventId = await nextSequentialEventId(runDir, eventWriter);
+      const cancelledEvent: ZigmaFlowEvent = {
+        id: cancelledEventId,
+        type: "agent_cancelled",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: bundle.stepId,
+        attempt,
+        batch_id: batchId,
+        payload: {
+          duration_ms: result.durationMs ?? 0,
+          reason: result.error ?? "Agent execution was cancelled.",
+        },
+      };
+      await eventWriter.appendEvent(runDir, cancelledEvent);
+      onEvent?.(cancelledEvent);
+
+      // Write run_cancelled event
+      const runCancelledEventId = await nextSequentialEventId(runDir, eventWriter);
+      const runCancelledEvent: ZigmaFlowEvent = {
+        id: runCancelledEventId,
+        type: "run_cancelled",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: bundle.stepId,
+        attempt,
+        batch_id: batchId,
+        payload: { reason: result.error ?? "Agent execution was cancelled." },
+      };
+      await eventWriter.appendEvent(runDir, runCancelledEvent);
+      onEvent?.(runCancelledEvent);
+
+      await stateStore.updateState(runDir, (current) => ({
+        ...current,
+        status: "cancelled",
+        last_event_id: runCancelledEventId,
+      }));
+      return { jobId, success: false, action: "cancelled", detail: result.error ?? "cancelled" };
+    }
+
+    // Register artifacts for timeout/failure paths
+    const failStdoutArtifact = await registerStepArtifact(
+      runDir, runId, jobId, bundle.stepId, attempt,
+      result.stdoutPath, "agent_stdout", "text/plain", clock,
+    );
+    const failStderrArtifact = await registerStepArtifact(
+      runDir, runId, jobId, bundle.stepId, attempt,
+      result.stderrPath, "agent_stderr", "text/plain", clock,
+    );
+
+    const terminalEventId = await nextSequentialEventId(runDir, eventWriter);
+
+    const isTimeout = (result.error ?? "").toLowerCase().includes("timed out");
+
+    if (isTimeout) {
+      const timeoutEvent: ZigmaFlowEvent = {
+        id: terminalEventId,
+        type: "agent_timed_out",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: bundle.stepId,
+        attempt,
+        batch_id: batchId,
+        payload: {
+          duration_ms: result.durationMs ?? 0,
+          timeout_ms: backend.backendTimeoutMs ?? result.durationMs ?? 0,
+          ...(failStdoutArtifact !== undefined ? { stdout_artifact: failStdoutArtifact } : {}),
+          ...(failStderrArtifact !== undefined ? { stderr_artifact: failStderrArtifact } : {}),
+        },
+      };
+      await eventWriter.appendEvent(runDir, timeoutEvent);
+      onEvent?.(timeoutEvent);
+    } else {
+      // Register invocation artifact for failure (not available on timeout)
+      const failInvocationArtifact = await registerStepArtifact(
+        runDir, runId, jobId, bundle.stepId, attempt,
+        result.invocationPath, "agent_invocation", "application/json", clock,
+      );
+
+      const failedEvent: ZigmaFlowEvent = {
+        id: terminalEventId,
+        type: "agent_failed",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: bundle.stepId,
+        attempt,
+        batch_id: batchId,
+        payload: {
+          duration_ms: result.durationMs ?? 0,
+          exit_code: result.exitCode ?? 1,
+          reason: result.error ?? "Agent backend failed",
+          ...(failStdoutArtifact !== undefined ? { stdout_artifact: failStdoutArtifact } : {}),
+          ...(failStderrArtifact !== undefined ? { stderr_artifact: failStderrArtifact } : {}),
+        },
+      };
+      await eventWriter.appendEvent(runDir, failedEvent);
+      onEvent?.(failedEvent);
+    }
+
+    // Delegate retry/block/fail decision to recordAgentFailure.
+    // IMPORTANT: agent_cancelled with reason="fail_fast" does NOT enter
+    // recordAgentFailure. Only agent_failed goes through retry (AD-P14-005).
+    const errorType = classifyError(result);
+    const failureResult = await recordAgentFailure({
+      runDir,
+      runId,
+      jobId,
+      stepId: bundle.stepId,
+      attempt,
+      reason: result.error ?? "Agent backend failed",
+      errorType,
+      clock,
+      stateStore,
+      eventWriter,
+    });
+
+    if (failureResult.action === "retried") {
+      return { jobId, success: false, action: "retried", detail: `Retrying job (attempt ${attempt + 1})` };
+    }
+
+    const action = failureResult.action === "run_failed" ? "failed" : (failureResult.action as JobStepResult["action"]);
+    return { jobId, success: false, action, detail: result.error ?? "Agent backend failed" };
+  }
+
+  // ── Agent success path ──────────────────────────────────────────────
+
+  // Register artifacts for the successful execution
+  const successStdoutArtifact = await registerStepArtifact(
+    runDir, runId, jobId, bundle.stepId, attempt,
+    result.stdoutPath, "agent_stdout", "text/plain", clock,
+  );
+  const successStderrArtifact = await registerStepArtifact(
+    runDir, runId, jobId, bundle.stepId, attempt,
+    result.stderrPath, "agent_stderr", "text/plain", clock,
+  );
+  const successInvocationArtifact = await registerStepArtifact(
+    runDir, runId, jobId, bundle.stepId, attempt,
+    result.invocationPath, "agent_invocation", "application/json", clock,
+  );
+
+  // Emit agent_completed event
+  const completedEventId = await nextSequentialEventId(runDir, eventWriter);
+  const completedEvent: ZigmaFlowEvent = {
+    id: completedEventId,
+    type: "agent_completed",
+    run_id: runId,
+    timestamp: clock.now(),
+    producer: "engine",
+    job: jobId,
+    step: bundle.stepId,
+    attempt,
+    batch_id: batchId,
+    payload: {
+      duration_ms: result.durationMs ?? 0,
+      ...(successStdoutArtifact !== undefined ? { stdout_artifact: successStdoutArtifact } : {}),
+      ...(successStderrArtifact !== undefined ? { stderr_artifact: successStderrArtifact } : {}),
+      ...(successInvocationArtifact !== undefined ? { invocation_artifact: successInvocationArtifact } : {}),
+    },
+  };
+  await eventWriter.appendEvent(runDir, completedEvent);
+  onEvent?.(completedEvent);
+
+  // Read and process the agent report inline.
+  // runAll handles report acceptance directly rather than delegating to
+  // acceptAgentReport so that the loop can decide when to advance based
+  // on the agent's reported outputs.
+  const reportRaw = await readFile(reportPath, "utf-8");
+  const report = JSON.parse(reportRaw) as {
+    outputs?: Record<string, unknown>;
+    signals?: Array<{ type: string; reason?: string }>;
+    artifacts?: string[];
+    summary?: string;
+  };
+
+  const outputs =
+    typeof report.outputs === "object" && report.outputs !== null
+      ? (report.outputs as Record<string, unknown>)
+      : {};
+  const signals = Array.isArray(report.signals) ? report.signals : [];
+
+  // Emit agent_report_accepted event
+  const acceptedEventId = await nextSequentialEventId(runDir, eventWriter);
+  const acceptedEvent: ZigmaFlowEvent = {
+    id: acceptedEventId,
+    type: "agent_report_accepted",
+    run_id: runId,
+    timestamp: clock.now(),
+    producer: "engine",
+    job: jobId,
+    step: bundle.stepId,
+    attempt,
+    batch_id: batchId,
+    payload: {
+      job_id: jobId,
+      step_id: bundle.stepId,
+      report_artifact: relative(runDir, reportPath).replace(/\\/g, "/"),
+    },
+  };
+  await eventWriter.appendEvent(runDir, acceptedEvent);
+  onEvent?.(acceptedEvent);
+
+  // Write intermediate state snapshot with outputs stored (atomic within queue — AD-P14-003)
+  await stateStore.updateState(runDir, (current) => ({
+    ...current,
+    last_event_id: acceptedEventId,
+    jobs: {
+      ...current.jobs,
+      [jobId]: {
+        ...current.jobs[jobId]!,
+        outputs,
+      },
+    },
+  }));
+
+  // Advance the job if the agent signals completion via outputs.completed
+  if (outputs.completed === true) {
+    await advanceJob({ runDir, runId, jobId, clock });
+  }
+  // Otherwise the agent has not completed — job stays in "running" state
+  // and will be re-processed on the next loop iteration.
+
+  return { jobId, success: true, action: "completed" };
+}
+
+// ---------------------------------------------------------------------------
+// executeNonAgentStep — script/check/router step lifecycle
+// ---------------------------------------------------------------------------
+
+async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
+  const {
+    runDir, runId, zigmaflowDir, jobId, wf, state,
+    stateStore, eventWriter, clock, batchId, onEvent,
+    stepDef, stepId,
+  } = ctx;
+
+  // Ensure job is ready or running before execution
+  const currentJobState = state.jobs[jobId];
+  if (
+    currentJobState?.status !== "ready" &&
+    currentJobState?.status !== "running"
+  ) {
+    return { jobId, success: false, action: "blocked", detail: `Job status is "${currentJobState?.status}", not "ready" or "running"` };
+  }
+
+  await executeCurrentStep({
+    runDir,
+    zigmaflowDir,
+    runId,
+    jobId,
+    clock,
+  });
+
+  // Check if job needs advancing (multi-step jobs)
+  const postState = await stateStore.readSnapshot(runDir);
+  if (postState !== null) {
+    const postJobState = postState.jobs[jobId];
+    if (postJobState?.status === "running") {
+      await advanceJob({ runDir, runId, jobId, clock });
+    }
+  }
+
+  return { jobId, success: true, action: "completed" };
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +786,12 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
     onEvent,
     stateStore = new LocalStateStore(),
     eventWriter = new JsonlEventWriter(),
+    parallelism: rawParallelism,
+    failFast = false,
   } = opts;
+
+  // Clamp parallelism to at least 1
+  const parallelism = Math.max(1, rawParallelism ?? 4);
 
   // ── Validate: exactly one of task or runId ─────────────────────────────
 
@@ -235,10 +825,11 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
   const wf = await loadWorkflowFile(workflowPath);
 
-  // ── 3. Main execution loop ─────────────────────────────────────────────
+  // ── 3. Main execution loop (concurrent batch, AD-P14-004) ──────────────
 
   let iteration = 0;
-  let backendCache: { key: string; backend: AgentBackend } | undefined;
+  // Reset module-level backendCache for fresh execution/resume
+  backendCache = undefined;
 
   while (iteration < maxIterations) {
     // Check abort signal
@@ -262,25 +853,37 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       break;
     }
 
-    // Find the first running job (multi-step continuation) or ready job
-    const runningId = Object.entries(state.jobs).find(
-      ([, js]) => js.status === "running",
-    )?.[0];
-    const readyId =
-      runningId ??
-      Object.entries(state.jobs).find(
-        ([, js]) => js.status === "ready",
-      )?.[0];
+    // ── Scheduler-based batch selection ──────────────────────────────────
 
-    if (readyId === undefined) {
-      // No ready jobs — check if there are pending (waiting/inactive) jobs
-      const pendingIds = Object.entries(state.jobs)
-        .filter(
-          ([, js]) => js.status === "waiting" || js.status === "inactive",
-        )
-        .map(([id]) => id);
+    const batch = selectExecutable({
+      state,
+      workflow: wf,
+      config: { parallelism, runningWritableLimit: 1 },
+    });
 
-      if (pendingIds.length === 0) {
+    // ── Fallback: include running jobs (multi-step continuation) ─────────
+    // The scheduler only picks "ready" jobs. Jobs in "running" state (from
+    // a previous batch where the agent did not signal completion) must be
+    // re-processed for continuation.
+    const runningJobs = Object.entries(state.jobs)
+      .filter(([, js]) => js.status === "running")
+      .map(([id]) => id);
+
+    const jobsToRun: Array<{ jobId: string; mode: "read-only" | "writable" }> = [...batch.jobs];
+
+    if (jobsToRun.length === 0 && runningJobs.length > 0) {
+      for (const jid of runningJobs) {
+        jobsToRun.push({ jobId: jid, mode: getJobMode(jid, wf) });
+      }
+    }
+
+    if (jobsToRun.length === 0) {
+      // No ready or running jobs — check if there are pending (waiting/inactive) jobs
+      const hasPending = Object.values(state.jobs).some(
+        (js) => js.status === "waiting" || js.status === "inactive",
+      );
+
+      if (!hasPending) {
         // All jobs accounted for — clean exit
         break;
       }
@@ -290,445 +893,79 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       break;
     }
 
-    // Process one job per iteration
-    const jobId = readyId;
-    const jobDef = wf.jobs[jobId];
-    if (jobDef === undefined) {
-      continue;
+    // ── Create batch ID for event correlation (AD-P14-006) ───────────────
+
+    const batchId = randomUUID();
+
+    // ── Create per-job AbortControllers for fail-fast (AD-P14-005) ───────
+
+    const jobControllers = new Map<string, AbortController>();
+    for (const j of jobsToRun) {
+      // Merge external signal with per-job controller
+      const ctrl = new AbortController();
+      jobControllers.set(j.jobId, ctrl);
+
+      // Forward external abort to per-job controller
+      if (signal !== undefined) {
+        signal.addEventListener("abort", () => ctrl.abort(), { once: true });
+      }
     }
 
-    const jobState = state.jobs[jobId];
-    const stepId = jobState?.current_step ?? jobDef.steps[0]?.id;
-    if (stepId === undefined) {
-      continue;
-    }
+    // ── Execute batch concurrently via Promise.allSettled ────────────────
 
-    const stepDef = jobDef.steps.find((s) => s.id === stepId);
-    if (stepDef === undefined) {
-      continue;
-    }
-
-    if (stepDef.type === "agent") {
-      // ── Agent step path ──────────────────────────────────────────────
-
-      // Build context (read-only — no disk writes)
-      const bundle = await buildContext({
+    const jobPromises = jobsToRun.map((j) =>
+      executeJobOnce({
         runDir,
+        runId,
         zigmaflowDir,
-        workflowDef: wf,
+        jobId: j.jobId,
+        wf,
         state,
-        jobId,
-      });
-
-      if (bundle.stepType !== "agent") {
-        continue;
-      }
-
-      const attempt = state.jobs[jobId]?.attempt ?? 1;
-
-      // Build and write prompt artifact
-      const packet = buildPromptPacket(bundle);
-      const rendered = renderPromptPacket(packet, {
-        supportsSystemPrompt: true,
-      });
-      const promptText = rendered.markdown;
-
-      const { artifactRef } = await writePromptArtifact({
-        runDir,
-        runId,
-        jobId,
-        stepId: bundle.stepId,
-        attempt,
-        prompt: promptText,
-        packet,
+        backendResolver,
+        stateStore,
+        eventWriter,
         clock,
-      });
+        signal: jobControllers.get(j.jobId)?.signal,
+        batchId,
+        onEvent,
+      }),
+    );
 
-      // Emit prompt_generated event
-      const promptEventId = await nextSequentialEventId(runDir, eventWriter);
+    // ── Fail-fast: abort peer jobs on first failure (AD-P14-005) ─────────
 
-      const promptEvent: ZigmaFlowEvent = {
-        id: promptEventId,
-        type: "prompt_generated",
-        run_id: runId,
-        timestamp: clock.now(),
-        producer: "engine",
-        job: jobId,
-        step: bundle.stepId,
-        attempt,
-        payload: {
-          job_id: jobId,
-          step_id: bundle.stepId,
-          prompt_artifact: artifactRef,
-        },
-      };
-      await eventWriter.appendEvent(runDir, promptEvent);
-      onEvent?.(promptEvent);
+    if (failFast && jobsToRun.length > 1) {
+      let failFastTriggered = false;
 
-      // Transition job to running
-      const runningState: RunState = {
-        ...state,
-        last_event_id: promptEventId,
-        jobs: {
-          ...state.jobs,
-          [jobId]: {
-            ...state.jobs[jobId]!,
-            status: "running",
-            current_step: bundle.stepId,
-            attempt,
-          },
-        },
-      };
-      await stateStore.writeSnapshot(runDir, runningState);
-
-      // Resolve the agent backend (cached per job+step for retry continuity)
-      let backend: AgentBackend;
-      const cacheKey = `${jobId}::${stepDef.backend ?? ""}`;
-      if (backendCache === undefined || backendCache.key !== cacheKey) {
-        try {
-          const bk = backendResolver(stepDef.backend as string | undefined);
-          backendCache = { key: cacheKey, backend: bk };
-          backend = bk;
-        } catch (err) {
-          if (err instanceof ConfigError || err instanceof PermissionError) {
-            const errorType = err instanceof ConfigError ? "config" : "permission";
-            await recordAgentFailure({
-              runDir,
-              runId,
-              jobId,
-              stepId: bundle.stepId,
-              attempt,
-              reason: err.message,
-              errorType,
-              clock,
-              stateStore,
-              eventWriter,
-            });
+      for (const p of jobPromises) {
+        p.then((r) => {
+          if (!r.success && !failFastTriggered) {
+            failFastTriggered = true;
+            // Abort all jobs EXCEPT the failing one
+            for (const [fid, fc] of jobControllers) {
+              if (fid !== r.jobId) {
+                fc.abort();
+              }
+            }
           }
-          break;
-        }
-      } else {
-        backend = backendCache.backend;
-      }
-
-      // Compute args_hash before execution (prompt MUST NOT be included in hash)
-      const argsHashInput = [
-        backend.backendCommand ?? "",
-        ...(backend.backendArgs ?? []),
-      ].join(" ");
-      const argsHash = createHash("sha256")
-        .update(argsHashInput)
-        .digest("hex");
-
-      // Invoke agent backend
-      const stepDir = join(
-        runDir,
-        "jobs",
-        jobId,
-        "attempts",
-        String(attempt),
-        "steps",
-        bundle.stepId,
-      );
-      const reportPath = join(stepDir, "report.json");
-
-      // Emit agent_invoked event before backend.execute
-      const invokedEventId = await nextSequentialEventId(runDir, eventWriter);
-      const invokedEvent: ZigmaFlowEvent = {
-        id: invokedEventId,
-        type: "agent_invoked",
-        run_id: runId,
-        timestamp: clock.now(),
-        producer: "engine",
-        job: jobId,
-        step: bundle.stepId,
-        attempt,
-        payload: {
-          backend_name: backend.name,
-          command: backend.backendCommand ?? backend.name,
-          args_hash: argsHash,
-          timeout_ms: backend.backendTimeoutMs ?? DEFAULT_BACKEND_TIMEOUT,
-          step_artifact_dir: relative(runDir, stepDir).replace(/\\/g, "/"),
-        },
-      };
-      await eventWriter.appendEvent(runDir, invokedEvent);
-      onEvent?.(invokedEvent);
-
-      const result = await backend.execute({
-        prompt: promptText,
-        reportPath,
-        stepDir,
-        projectRoot: zigmaflowDir,
-        ...(signal !== undefined ? { signal } : {}),
-      });
-
-      if (!result.success) {
-        // ── Agent failure path ─────────────────────────────────────────
-
-        // Determine failure mode
-        const isCancelled = signal?.aborted === true;
-
-        if (isCancelled) {
-          // ── Agent cancelled path ──────────────────────────────────────
-          const cancelledEventId = await nextSequentialEventId(runDir, eventWriter);
-          const cancelledEvent: ZigmaFlowEvent = {
-            id: cancelledEventId,
-            type: "agent_cancelled",
-            run_id: runId,
-            timestamp: clock.now(),
-            producer: "engine",
-            job: jobId,
-            step: bundle.stepId,
-            attempt,
-            payload: {
-              duration_ms: result.durationMs ?? 0,
-              reason: result.error ?? "Agent execution was cancelled.",
-            },
-          };
-          await eventWriter.appendEvent(runDir, cancelledEvent);
-          onEvent?.(cancelledEvent);
-
-          // Write run_cancelled event
-          const runCancelledEventId = await nextSequentialEventId(runDir, eventWriter);
-          const runCancelledEvent: ZigmaFlowEvent = {
-            id: runCancelledEventId,
-            type: "run_cancelled",
-            run_id: runId,
-            timestamp: clock.now(),
-            producer: "engine",
-            job: jobId,
-            step: bundle.stepId,
-            attempt,
-            payload: { reason: result.error ?? "Agent execution was cancelled." },
-          };
-          await eventWriter.appendEvent(runDir, runCancelledEvent);
-          onEvent?.(runCancelledEvent);
-
-          const cancelledState: RunState = {
-            ...runningState,
-            status: "cancelled",
-            last_event_id: runCancelledEventId,
-          };
-          await stateStore.writeSnapshot(runDir, cancelledState);
-          break;
-        }
-
-        // Register artifacts for timeout/failure paths
-        const failStdoutArtifact = await registerStepArtifact(
-          runDir, runId, jobId, bundle.stepId, attempt,
-          result.stdoutPath, "agent_stdout", "text/plain", clock,
-        );
-        const failStderrArtifact = await registerStepArtifact(
-          runDir, runId, jobId, bundle.stepId, attempt,
-          result.stderrPath, "agent_stderr", "text/plain", clock,
-        );
-
-        const terminalEventId = await nextSequentialEventId(runDir, eventWriter);
-
-        const isTimeout = (result.error ?? "").toLowerCase().includes("timed out");
-
-        if (isTimeout) {
-          const timeoutEvent: ZigmaFlowEvent = {
-            id: terminalEventId,
-            type: "agent_timed_out",
-            run_id: runId,
-            timestamp: clock.now(),
-            producer: "engine",
-            job: jobId,
-            step: bundle.stepId,
-            attempt,
-            payload: {
-              duration_ms: result.durationMs ?? 0,
-              timeout_ms: backend.backendTimeoutMs ?? result.durationMs ?? 0,
-              ...(failStdoutArtifact !== undefined ? { stdout_artifact: failStdoutArtifact } : {}),
-              ...(failStderrArtifact !== undefined ? { stderr_artifact: failStderrArtifact } : {}),
-            },
-          };
-          await eventWriter.appendEvent(runDir, timeoutEvent);
-          onEvent?.(timeoutEvent);
-        } else {
-          // Register invocation artifact for failure (not available on timeout)
-          const failInvocationArtifact = await registerStepArtifact(
-            runDir, runId, jobId, bundle.stepId, attempt,
-            result.invocationPath, "agent_invocation", "application/json", clock,
-          );
-
-          const failedEvent: ZigmaFlowEvent = {
-            id: terminalEventId,
-            type: "agent_failed",
-            run_id: runId,
-            timestamp: clock.now(),
-            producer: "engine",
-            job: jobId,
-            step: bundle.stepId,
-            attempt,
-            payload: {
-              duration_ms: result.durationMs ?? 0,
-              exit_code: result.exitCode ?? 1,
-              reason: result.error ?? "Agent backend failed",
-              ...(failStdoutArtifact !== undefined ? { stdout_artifact: failStdoutArtifact } : {}),
-              ...(failStderrArtifact !== undefined ? { stderr_artifact: failStderrArtifact } : {}),
-            },
-          };
-          await eventWriter.appendEvent(runDir, failedEvent);
-          onEvent?.(failedEvent);
-        }
-
-        // Delegate retry/block/fail decision to recordAgentFailure
-        const errorType = classifyError(result);
-        const failureResult = await recordAgentFailure({
-          runDir,
-          runId,
-          jobId,
-          stepId: bundle.stepId,
-          attempt,
-          reason: result.error ?? "Agent backend failed",
-          errorType,
-          clock,
-          stateStore,
-          eventWriter,
+        }).catch(() => {
+          if (!failFastTriggered) {
+            failFastTriggered = true;
+            for (const [, fc] of jobControllers) {
+              fc.abort();
+            }
+          }
         });
-
-        if (failureResult.action === "retried") {
-          iteration++;
-          continue;
-        }
-        break;
       }
-
-      // ── Agent success path ──────────────────────────────────────────────
-
-      // Register artifacts for the successful execution
-      const successStdoutArtifact = await registerStepArtifact(
-        runDir, runId, jobId, bundle.stepId, attempt,
-        result.stdoutPath, "agent_stdout", "text/plain", clock,
-      );
-      const successStderrArtifact = await registerStepArtifact(
-        runDir, runId, jobId, bundle.stepId, attempt,
-        result.stderrPath, "agent_stderr", "text/plain", clock,
-      );
-      const successInvocationArtifact = await registerStepArtifact(
-        runDir, runId, jobId, bundle.stepId, attempt,
-        result.invocationPath, "agent_invocation", "application/json", clock,
-      );
-
-      // Emit agent_completed event
-      const completedEventId = await nextSequentialEventId(runDir, eventWriter);
-      const completedEvent: ZigmaFlowEvent = {
-        id: completedEventId,
-        type: "agent_completed",
-        run_id: runId,
-        timestamp: clock.now(),
-        producer: "engine",
-        job: jobId,
-        step: bundle.stepId,
-        attempt,
-        payload: {
-          duration_ms: result.durationMs ?? 0,
-          ...(successStdoutArtifact !== undefined ? { stdout_artifact: successStdoutArtifact } : {}),
-          ...(successStderrArtifact !== undefined ? { stderr_artifact: successStderrArtifact } : {}),
-          ...(successInvocationArtifact !== undefined ? { invocation_artifact: successInvocationArtifact } : {}),
-        },
-      };
-      await eventWriter.appendEvent(runDir, completedEvent);
-      onEvent?.(completedEvent);
-
-      // Read and process the agent report inline.
-      // runAll handles report acceptance directly rather than delegating to
-      // acceptAgentReport so that the loop can decide when to advance based
-      // on the agent's reported outputs.
-      const reportRaw = await readFile(reportPath, "utf-8");
-      const report = JSON.parse(reportRaw) as {
-        outputs?: Record<string, unknown>;
-        signals?: Array<{ type: string; reason?: string }>;
-        artifacts?: string[];
-        summary?: string;
-      };
-
-      const outputs =
-        typeof report.outputs === "object" && report.outputs !== null
-          ? (report.outputs as Record<string, unknown>)
-          : {};
-      const signals = Array.isArray(report.signals) ? report.signals : [];
-
-      // Emit agent_report_accepted event
-      const acceptedEventId = await nextSequentialEventId(runDir, eventWriter);
-      const acceptedEvent: ZigmaFlowEvent = {
-        id: acceptedEventId,
-        type: "agent_report_accepted",
-        run_id: runId,
-        timestamp: clock.now(),
-        producer: "engine",
-        job: jobId,
-        step: bundle.stepId,
-        attempt,
-        payload: {
-          job_id: jobId,
-          step_id: bundle.stepId,
-          report_artifact: relative(runDir, reportPath).replace(/\\/g, "/"),
-        },
-      };
-      await eventWriter.appendEvent(runDir, acceptedEvent);
-      onEvent?.(acceptedEvent);
-
-      // Write intermediate state snapshot with outputs stored
-      const intermediateState: RunState = {
-        ...runningState,
-        last_event_id: acceptedEventId,
-        jobs: {
-          ...runningState.jobs,
-          [jobId]: {
-            ...runningState.jobs[jobId]!,
-            outputs,
-          },
-        },
-      };
-      await stateStore.writeSnapshot(runDir, intermediateState);
-
-      // Advance the job if the agent signals completion via outputs.completed
-      if (outputs.completed === true) {
-        await advanceJob({ runDir, runId, jobId, clock });
-      }
-      // Otherwise the agent has not completed — job stays in "running" state
-      // and will be re-processed on the next loop iteration.
-    } else if (
-      stepDef.type === "script" ||
-      stepDef.type === "check" ||
-      stepDef.type === "router"
-    ) {
-      // ── Script/check/router step path ────────────────────────────────
-
-      // Ensure job is ready or running before execution
-      const currentJobState = state.jobs[jobId];
-      if (
-        currentJobState?.status !== "ready" &&
-        currentJobState?.status !== "running"
-      ) {
-        continue;
-      }
-
-      await executeCurrentStep({
-        runDir,
-        zigmaflowDir,
-        runId,
-        jobId,
-        clock,
-      });
-
-      // Check if job needs advancing (multi-step jobs)
-      const postState = await stateStore.readSnapshot(runDir);
-      if (postState !== null) {
-        const postJobState = postState.jobs[jobId];
-        if (postJobState?.status === "running") {
-          await advanceJob({ runDir, runId, jobId, clock });
-        }
-      }
-    } else {
-      // Skip unsupported step types (workflow, human — MVP-reserved)
-      continue;
     }
 
-    // Count this iteration — a job was found and processed
+    // Wait for all jobs in the batch to settle
+    const settled = await Promise.allSettled(jobPromises);
+
+    // ── Post-batch: re-read fresh state (AD-P14-004) ─────────────────────
+
+    // State is re-read at the top of the next iteration via stateStore.readSnapshot.
+    // No additional work needed here since executeJobOnce handles all state writes.
+
     iteration++;
   }
 

@@ -26,7 +26,7 @@ import { parse as parseYaml } from "yaml";
 
 import { nextEventId as formatEventId } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
-import type { Clock, RunState } from "../run/index.js";
+import type { Clock } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import { StateError, UserInputError } from "../utils/index.js";
 
@@ -179,15 +179,14 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
     delete terminalJobState.current_step;
     delete terminalJobState.retry_inputs;
 
-    const updatedState: RunState = {
-      ...state,
+    await stateStore.updateState(runDir, (current) => ({
+      ...current,
       last_event_id: terminalEventId,
       jobs: {
-        ...state.jobs,
+        ...current.jobs,
         [jobId]: terminalJobState,
       },
-    };
-    await stateStore.writeSnapshot(runDir, updatedState);
+    }));
     return;
   }
 
@@ -225,13 +224,12 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
     delete retryJobState.retry_inputs;
   }
 
-  const updatedState: RunState = {
-    ...state,
+  await stateStore.updateState(runDir, (current) => ({
+    ...current,
     last_event_id: jobRetryingId,
     jobs: {
-      ...state.jobs,
+      ...current.jobs,
       [jobId]: retryJobState,
     },
-  };
-  await stateStore.writeSnapshot(runDir, updatedState);
+  }));
 }

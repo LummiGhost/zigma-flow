@@ -2,6 +2,41 @@
 
 All notable changes to Zigma Flow are documented in this file.
 
+## [v0.2.0] — P14 Concurrent Read-Only Job Execution (2026-06-28)
+
+### Scheduler
+
+- **`selectExecutable` pure function** (`src/engine/scheduler.ts`): scheduler accepts `RunState`, `WorkflowDefinition`, and `SchedulerConfig`; returns an `ExecutableBatch` with `jobs` array and `rationale` string. No IO, no async.
+- **Scheduling rules**: read-only jobs run concurrently up to `parallelism`; writable jobs are strictly serialized (at most 1 per batch). A writable lock blocks further writable jobs until the running writable completes.
+- **Workspace mode derivation**: `workspace.mode: "read-only"` is the sole indicator for concurrency eligibility; all other values (including `undefined` and `"writable"`) are treated as writable and serialized.
+
+### AsyncQueue — Per-runDir Write Serialization
+
+- **`AsyncQueue`** (`src/run/asyncQueue.ts`): FIFO serial execution queue. `run<T>(fn: () => Promise<T>): Promise<T>` — functions execute one at a time; errors propagate but do not prevent subsequent tasks.
+- **`LocalStateStore.writeSnapshot`** now wraps writes through a per-runDir AsyncQueue, eliminating concurrent-write race conditions.
+- **`JsonlEventWriter.appendEvent`** now wraps appends through a per-runDir AsyncQueue, ensuring events are appended in call order with no line interleaving.
+
+### Concurrent Batch Loop
+
+- **`runAll` main loop refactored** (`src/engine/runAll.ts`): from sequential (one job per iteration) to scheduler-driven concurrent batch execution using `Promise.allSettled`.
+- **`--parallelism N` CLI flag** (default 4): maximum concurrent jobs in a batch.
+- **`--fail-fast` CLI flag** (default false): when enabled, a single job failure aborts all peer jobs in the same batch.
+- **`batch_id` on events**: each scheduling batch generates a UUID; all events emitted during the batch carry `batch_id` in their payload for grouping.
+- **`updateState` atomic read-modify-write**: `StateStore` now exposes `updateState(runDir, fn)` which performs atomic read-modify-write within the AsyncQueue.
+- **`parallelism` agent config**: `AgentConfig.parallelism` can be set in `.zigma-flow/config.json` under `agent.parallelism`. A `getParallelism()` helper resolves the effective value.
+
+### Documentation
+
+- `docs/architecture.md` §7.4: Concurrency Model — scheduler pure function, AsyncQueue serialization, batch loop, fail-fast, event ordering.
+- `README.md`: "并发执行" section with `--parallelism`, `--fail-fast` usage, and batch loop description.
+- `CHANGELOG.md`: this section.
+
+### Test Coverage
+
+- 8 new test files for scheduler, AsyncQueue, concurrent state store, concurrent event writer, and concurrent runAll.
+- Total test suite: ~740+ tests across 69+ test files.
+- Pre-existing 714 tests: zero regressions.
+
 ## [v0.2.0] — P13a Agent Adapter Hardening (2026-06-28)
 
 ### Engine — runAll Loop

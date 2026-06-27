@@ -31,7 +31,7 @@ import { parse as parseYaml } from "yaml";
 
 import { nextSequentialEventId } from "../events/sequence.js";
 import type { EventWriter, ZigmaFlowEvent } from "../events/index.js";
-import type { Clock, RunState } from "../run/index.js";
+import type { Clock } from "../run/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { WorkflowDefinition } from "../workflow/index.js";
@@ -176,19 +176,18 @@ export async function recordAgentFailure(
     };
     await eventWriter.appendEvent(runDir, runFailedEvent);
 
-    const failedState: RunState = {
-      ...currentState,
-      status: "failed" as const,
+    await stateStore.updateState(runDir, (current) => ({
+      ...current,
+      status: "failed",
       last_event_id: runFailedId,
       jobs: {
-        ...currentState.jobs,
+        ...current.jobs,
         [jobId]: {
-          ...currentState.jobs[jobId]!,
+          ...current.jobs[jobId]!,
           status: "failed",
         },
       },
-    };
-    await stateStore.writeSnapshot(runDir, failedState);
+    }));
 
     return { action: "run_failed", jobStatus: "failed" };
   }
@@ -209,18 +208,17 @@ export async function recordAgentFailure(
 
   if (attempt < maxAttempts) {
     // Set job status to "failed" so retryJob can validate it as retryable
-    const failedJobState: RunState = {
-      ...currentState,
+    await stateStore.updateState(runDir, (current) => ({
+      ...current,
       last_event_id: stepFailedId,
       jobs: {
-        ...currentState.jobs,
+        ...current.jobs,
         [jobId]: {
-          ...currentState.jobs[jobId]!,
+          ...current.jobs[jobId]!,
           status: "failed",
         },
       },
-    };
-    await stateStore.writeSnapshot(runDir, failedJobState);
+    }));
 
     // Delegate to retryJob which writes job_retrying event and sets job to ready
     await retryJob({
@@ -274,19 +272,18 @@ export async function recordAgentFailure(
     await eventWriter.appendEvent(runDir, jobBlockedEvent);
   }
 
-  const terminalState: RunState = {
-    ...currentState,
+  await stateStore.updateState(runDir, (current) => ({
+    ...current,
     status: onExceededStatus,
     last_event_id: terminalEventId,
     jobs: {
-      ...currentState.jobs,
+      ...current.jobs,
       [jobId]: {
-        ...currentState.jobs[jobId]!,
+        ...current.jobs[jobId]!,
         status: onExceededStatus,
       },
     },
-  };
-  await stateStore.writeSnapshot(runDir, terminalState);
+  }));
 
   return { action: onExceededStatus, jobStatus: onExceededStatus };
 }

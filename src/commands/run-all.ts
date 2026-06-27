@@ -26,6 +26,10 @@ export interface RunAllOptions {
   resume?: string;
   /** CLI override for the agent backend name. */
   backend?: string;
+  /** Maximum concurrent job count (default 4, AD-P14-007). */
+  parallelism?: number;
+  /** Enable fail-fast abort propagation (default false, AD-P14-005). */
+  failFast?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +79,8 @@ export async function runAllAction(
     onEvent: (event) => {
       console.log(`  [${event.id}] ${event.type}`);
     },
+    ...(options.parallelism !== undefined ? { parallelism: options.parallelism } : {}),
+    ...(options.failFast !== undefined ? { failFast: options.failFast } : {}),
   };
 
   const summary: RunAllSummary = await runAll(runAllOpts);

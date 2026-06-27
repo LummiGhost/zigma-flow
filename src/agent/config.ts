@@ -31,6 +31,14 @@ export interface AgentBackendConfigEntry {
 export interface AgentConfig {
   backend: string;
   backends: Record<string, AgentBackendConfigEntry>;
+  /**
+   * Maximum number of jobs to run concurrently in a batch (AD-P14-007).
+   * Read-only jobs are dispatched in parallel up to this limit.
+   * Writable jobs are always serialized (at most 1 per batch).
+   *
+   * When undefined, callers should use DEFAULT_PARALLELISM (4).
+   */
+  parallelism?: number;
 }
 
 export interface ResolvedBackend {
@@ -57,6 +65,9 @@ const DEFAULT_CLAUDE_CODE_CONFIG: AgentBackendConfigEntry = {
   args: ["-p"],
   timeout: 600_000,
 };
+
+/** Default parallelism when config.json does not specify one (AD-P14-007). */
+export const DEFAULT_PARALLELISM = 4;
 
 const DEFAULT_AGENT_CONFIG: AgentConfig = {
   backend: "claude-code",
@@ -92,6 +103,24 @@ export async function loadAgentConfig(zigmaflowDir: string): Promise<AgentConfig
   }
 
   return parsed.agent ?? DEFAULT_AGENT_CONFIG;
+}
+
+// ---------------------------------------------------------------------------
+// getParallelism
+// ---------------------------------------------------------------------------
+
+/**
+ * Return the effective parallelism value from an AgentConfig.
+ *
+ * Priority:
+ * 1. `agentConfig.parallelism` (from `.zigma-flow/config.json`)
+ * 2. `DEFAULT_PARALLELISM` (4)
+ *
+ * The returned value is guaranteed to be >= 1.
+ * This is a pure function — no IO, no side effects.
+ */
+export function getParallelism(agentConfig: AgentConfig): number {
+  return Math.max(1, agentConfig.parallelism ?? DEFAULT_PARALLELISM);
 }
 
 // ---------------------------------------------------------------------------

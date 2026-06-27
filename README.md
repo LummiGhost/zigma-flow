@@ -78,6 +78,59 @@ zigma-flow run-all code-change --resume <run-id>
 
 During execution, the Engine emits agent lifecycle events (`agent_invoked`, `agent_completed`, etc.) and registers backend stdout/stderr as artifacts for auditability. Failed agent steps are retried according to the job's `retry` configuration; configuration errors (backend not found, not logged in) skip retry and fail the run immediately.
 
+## 并发执行 (Concurrent Execution, v0.2)
+
+`run-all` dispatches read-only jobs concurrently to reduce wall-clock time. Writable jobs (where `workspace.mode` is `"writable"` or not set) are always serialized — at most one writable job runs at a time. This ensures workspace safety while maximizing throughput for independent analysis jobs.
+
+**Parallelism control:**
+```bash
+# Run with the default parallelism (4)
+zigma-flow run-all code-change --task "Add null check to parse function"
+
+# Override parallelism — at most N jobs run simultaneously
+zigma-flow run-all code-change --task "..." --parallelism 2
+
+# Disable concurrency entirely (sequential execution)
+zigma-flow run-all code-change --task "..." --parallelism 1
+```
+
+When `--parallelism` is not specified, the engine checks `.zigma-flow/config.json` for `agent.parallelism`:
+```json
+{
+  "agent": {
+    "parallelism": 4,
+    "backend": "claude-code",
+    "backends": { ... }
+  }
+}
+```
+
+If neither the CLI flag nor the config file specifies a value, the default is **4**.
+
+**Fail-fast mode:**
+```bash
+# Stop all jobs in the batch if any single job fails
+zigma-flow run-all code-change --task "..." --fail-fast
+```
+
+By default `--fail-fast` is `false`: a failed job does not abort peer jobs in the same batch. The failing job enters retry or failure; other jobs continue normally. In CI or time-sensitive scenarios, enable `--fail-fast` to abort the batch immediately on first failure.
+
+**Batch execution loop:**
+
+```text
+Loop iteration:
+  1. Scheduler (pure function) selects an executable batch:
+     - Collect ready read-only jobs, limited by parallelism
+     - If no writable is running and slots remain, add 1 writable job
+  2. Dispatch all batch jobs concurrently via Promise.allSettled
+     - Each job runs its current step independently
+     - State writes are serialized per-runDir via AsyncQueue
+  3. Post-batch: re-read state snapshot for next iteration
+  4. Repeat until terminal state or no jobs remain
+```
+
+See [docs/architecture.md §7.4](./docs/architecture.md#74-concurrency-model) for the full concurrency model.
+
 ## code-change Workflow
 
 The built-in `code-change` workflow covers the full lifecycle of a code change, from understanding the task to a final review.

@@ -664,16 +664,16 @@ WF-P13-ENGINE-RUNALL (refactor 骨架, 不改外观)
 - VARIABLES 在 RETURNS 之后：context_patches 处理必须先于 status 决策（流水线第 3 步），所以两者必须同 PR 落，不能跨 PR。
 - FLOW 在 VARIABLES 之后：`if:` 与 `goto_step` 中的表达式可能引用 variables，必须有 variables namespace 才能完成端到端测试。
 
-全部并入 **PR #89（feature/p13-agent-adapter-hardening）**，但因范围扩张允许拆分（见下）。
+全部并入 **PR #90（feature/p13-agent-adapter-hardening）**，但因范围扩张允许拆分（见下）。
 
 ### 6.1 PR 拆分指引
 
 如果实现过程中 PR diff 超过 ~2500 行或 review 困难：
 
-- **PR #89a（feature/p13-adapter-hardening）** = 初始范围：ENGINE-RUNALL + EVENTS-ARTIFACTS + RETRY + RESUME-CANCEL + BACKEND-CONFIG。
-- **PR #89b（feature/p13-agent-flow-control）** = 扩展范围：RETURNS + VARIABLES + FLOW。
+- **PR #90a（feature/p13-adapter-hardening）** = 初始范围：ENGINE-RUNALL + EVENTS-ARTIFACTS + RETRY + RESUME-CANCEL + BACKEND-CONFIG。
+- **PR #90b（feature/p13-agent-flow-control）** = 扩展范围：RETURNS + VARIABLES + FLOW。
 
-拆分后两 PR 顺序合并，#89b 依赖 #89a。仍保持单 PR 为首选；拆分需 reviewer 同意。
+拆分后两 PR 顺序合并，#90b 依赖 #90a。仍保持单 PR 为首选；拆分需 reviewer 同意。
 
 不拆 PR 的理由（仍优先）：
 
@@ -789,7 +789,7 @@ pnpm test:ci
 
 ## 12. PR 结构
 
-- **PR #89（feature/p13-agent-adapter-hardening-and-flow）**
+- **PR #90（feature/p13-agent-adapter-hardening-and-flow）**
   - branch from origin/main
   - 包含全部 8 个 WF：ENGINE-RUNALL / EVENTS-ARTIFACTS / RETRY / RESUME-CANCEL / BACKEND-CONFIG / RETURNS / VARIABLES / FLOW
   - PR 描述需附：
@@ -801,7 +801,7 @@ pnpm test:ci
     - 迁移说明：v0.1 workflows 全部向前兼容；新字段全部 optional，默认行为不变
   - 关联 GitHub Project 条目 P13。
 
-如 §6.1 拆分为 #89a / #89b，则在两 PR 描述间相互引用，并要求两 PR 顺序合并、不分开发布。
+如 §6.1 拆分为 #90a / #90b，则在两 PR 描述间相互引用，并要求两 PR 顺序合并、不分开发布。
 
 ## 13. PRD 与 MVP Contracts 同步修订（必须与代码同 PR）
 

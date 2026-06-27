@@ -41,6 +41,42 @@ The Engine owns all state transitions. Agents cannot directly modify workflow st
 | `prompt --job <id>` | Generate the agent prompt for a job's current step |
 | `step --job <id>` | Execute a script, check, or router step automatically |
 | `next --job <id>` | Accept the agent report and advance the run to the next step |
+| `run-all <workflow> --task <description>` | Automate full workflow execution (create run → loop through jobs) |
+| `run-all <workflow> --resume <run-id>` | Resume an existing run from where it left off |
+
+### `run-all` — Fully Automated Execution (v0.2)
+
+The `run-all` command drives a workflow run from creation to completion without manual prompt/next steps. The Engine loops through ready jobs, invoking the configured agent backend for agent steps and executing script/check/router steps directly.
+
+**New run:**
+```bash
+zigma-flow run-all code-change --task "Add null check to parse function"
+```
+
+**Resume an interrupted run:**
+```bash
+zigma-flow run-all code-change --resume <run-id>
+```
+
+`--resume` reads the existing run state and continues from the last incomplete step. It rejects runs that are already in a terminal state (completed/failed/blocked/cancelled). `--resume` and `--task` are mutually exclusive.
+
+**Agent backend configuration** lives in `.zigma-flow/config.json`:
+```json
+{
+  "agent": {
+    "backend": "claude-code",
+    "backends": {
+      "claude-code": {
+        "command": "claude",
+        "args": ["-p"],
+        "timeout": 600000
+      }
+    }
+  }
+}
+```
+
+During execution, the Engine emits agent lifecycle events (`agent_invoked`, `agent_completed`, etc.) and registers backend stdout/stderr as artifacts for auditability. Failed agent steps are retried according to the job's `retry` configuration; configuration errors (backend not found, not logged in) skip retry and fail the run immediately.
 
 ## code-change Workflow
 

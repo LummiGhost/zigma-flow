@@ -2,13 +2,13 @@
   "name": "zigma-flow",
   "version": "0.2.0",
   "description": "Local Agent Workflow Runtime / Workflow Harness.",
-  "private": true,
   "type": "module",
   "bin": {
     "zigma-flow": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "docs/wiki"
   ],
   "packageManager": "pnpm@10.15.0",
   "scripts": {

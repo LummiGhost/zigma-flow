@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    name: Validate, publish, and release
+    name: Validate and release
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -30,7 +30,6 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -49,11 +48,6 @@ jobs:
           node dist/cli.js --help
           test -f dist/templates/step-prompt.md
           test -f dist/templates/system-prompt.md
-
-      - name: Publish to npm
-        run: pnpm publish --no-git-checks
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         env:

@@ -8,6 +8,7 @@
  * Module boundary: must NOT directly push run state.
  */
 
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Command } from "commander";
@@ -27,6 +28,7 @@ import { showAction } from "./commands/show.js";
 import { runAllAction } from "./commands/run-all.js";
 import { approveAction } from "./commands/approve.js";
 import { rejectAction } from "./commands/reject.js";
+import { verifyRunAction } from "./commands/verify-run.js";
 import { SystemClock } from "./run/index.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -277,6 +279,18 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         ...(options.step !== undefined ? { stepId: options.step } : {}),
         clock: new SystemClock(),
       });
+    });
+
+  program
+    .command("verify-run [run-id]")
+    .description("Check run data integrity (state, events, artifacts, job attempts).")
+    .exitOverride()
+    .action(async (runId?: string) => {
+      const exitCode = await verifyRunAction({
+        runsDir: join(process.cwd(), ".zigma-flow", "runs"),
+        ...(runId !== undefined ? { runId } : {}),
+      });
+      process.exitCode = exitCode;
     });
 
   try {

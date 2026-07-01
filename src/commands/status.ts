@@ -22,7 +22,12 @@ import { loadWorkflowFile } from "../workflow/index.js";
 // ---------------------------------------------------------------------------
 
 export interface StatusOptions {
-  run?: string; // specific run_id, or undefined for "latest"
+  run?: string;      // specific run_id, or undefined for "latest"
+  verbose?: boolean; // enable verbose output (step-level details)
+}
+
+export interface StatusVerboseOpts {
+  verbose?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +96,9 @@ export async function findRun(runsDir: string, runId?: string): Promise<string> 
 export function renderRunStatus(
   state: RunState,
   workflowJobs: Record<string, { needs?: string[]; steps?: Array<{ id: string; prompt?: string; approvers?: string[]; instructions?: string }> }>,
+  opts?: StatusVerboseOpts,
 ): string {
+  const verbose = opts?.verbose === true;
   const lines: string[] = [];
 
   // --- Header (RC-S01) ---
@@ -113,6 +120,17 @@ export function renderRunStatus(
       parts.push(`  [attempt: ${job.attempt}]`);
     }
     lines.push(parts.join(""));
+
+    // Verbose: add indented step-level details after each job line.
+    // Omit attempt here — it's already shown inline on the summary line above.
+    if (verbose) {
+      if (job.current_step !== undefined) {
+        lines.push(`    current_step: ${job.current_step}`);
+      }
+      if (job.step_status !== undefined) {
+        lines.push(`    step_status: ${job.step_status}`);
+      }
+    }
   }
   lines.push("");
 
@@ -282,6 +300,10 @@ export async function statusAction(options: StatusOptions, runsDir?: string): Pr
     workflowJobs = {};
   }
 
-  const output = renderRunStatus(state, workflowJobs);
+  const output = renderRunStatus(
+    state,
+    workflowJobs,
+    options.verbose === true ? { verbose: true } : {},
+  );
   console.log(output);
 }

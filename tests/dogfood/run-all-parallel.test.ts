@@ -82,6 +82,16 @@ async function callRunAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
 // ---------------------------------------------------------------------------
 // Monotonic Counter — deterministic concurrency proof (plan §8)
+//
+// WF-V022-STABILITY audit note (RISK-STABILITY-GLOBAL-TICK):
+//   `globalTick` is a module-level mutable counter shared across every test in
+//   this file. Each test calls `resetTick()` in its arrangement phase so
+//   ordering is safe under Vitest's default file-level isolation (one file per
+//   worker). If Vitest is ever configured with in-file parallelism, this
+//   shared counter breaks — every test would race on it. Do NOT switch to
+//   in-file parallelism without first refactoring `globalTick` into a
+//   per-`describe` closure or a per-test `beforeEach` factory. See
+//   wf-v022-stability/01-cases-and-tests.md § RISK-STABILITY-GLOBAL-TICK.
 // ---------------------------------------------------------------------------
 
 let globalTick = 0;

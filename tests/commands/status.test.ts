@@ -237,6 +237,128 @@ describe("renderRunStatus", () => {
 });
 
 // ---------------------------------------------------------------------------
+// renderRunStatus — verbose mode (WF-V022-DIAGNOSTIC)
+//
+// Red-phase note: these tests exercise a NEW third parameter on
+// `renderRunStatus` — an options bag with a `verbose` flag. Step 2 must extend
+// the function to accept `renderRunStatus(state, workflowJobs, { verbose })`.
+// The default (non-verbose) call shape used by the tests above must continue
+// to work exactly as before — the flag is strictly additive.
+// ---------------------------------------------------------------------------
+
+describe("renderRunStatus — verbose mode (WF-V022-DIAGNOSTIC)", () => {
+  /** Build a JobState augmented with the step-level fields verbose mode surfaces. */
+  function makeVerboseJob(
+    status: JobState["status"],
+    options: {
+      current_step?: string;
+      step_status?: "awaiting_human";
+      attempt?: number;
+    } = {},
+  ): JobState {
+    const job: JobState = { status };
+    if (options.attempt !== undefined) {
+      job.attempt = options.attempt;
+    }
+    if (options.current_step !== undefined) {
+      job.current_step = options.current_step;
+    }
+    if (options.step_status !== undefined) {
+      job.step_status = options.step_status;
+    }
+    return job;
+  }
+
+  it("default (no options) output matches the non-verbose baseline (T-VERB-1, UC-VERB-1)", () => {
+    // Regression guard: passing `{ verbose: false }` (or omitting the flag)
+    // must produce byte-identical output to the classic two-arg call.
+    const state = makeState({
+      jobs: {
+        implement: makeVerboseJob("running", {
+          attempt: 2,
+          current_step: "code-map",
+        }),
+      },
+    });
+
+    const baseline = renderRunStatus(state, {});
+    const explicitDefault = renderRunStatus(state, {}, { verbose: false });
+
+    expect(explicitDefault).toBe(baseline);
+    // Sanity: the baseline must NOT include the verbose step-detail marker.
+    // We accept any of these as "verbose section" markers to avoid pinning
+    // the exact heading; step details lines are indented deeper than the
+    // top-level jobs table.
+    expect(baseline.toLowerCase()).not.toContain("current step:");
+    expect(baseline.toLowerCase()).not.toContain("step status:");
+  });
+
+  it("verbose mode surfaces current_step and step_status for each job (T-VERB-2, UC-VERB-2)", () => {
+    const state = makeState({
+      jobs: {
+        intake: makeVerboseJob("ready"),
+        implement: makeVerboseJob("running", {
+          attempt: 2,
+          current_step: "code-map",
+        }),
+        review: makeVerboseJob("blocked", {
+          attempt: 1,
+          current_step: "human-approval",
+          step_status: "awaiting_human",
+        }),
+      },
+    });
+
+    const out = renderRunStatus(state, {}, { verbose: true });
+
+    // Every job id still appears (verbose is additive, not replacement).
+    expect(out).toContain("intake");
+    expect(out).toContain("implement");
+    expect(out).toContain("review");
+
+    // Current step ids appear.
+    expect(out).toContain("code-map");
+    expect(out).toContain("human-approval");
+
+    // The step_status value is surfaced for the job that carries one.
+    expect(out).toContain("awaiting_human");
+  });
+
+  it("verbose mode surfaces attempt number for each job (T-VERB-3, UC-VERB-3)", () => {
+    const state = makeState({
+      jobs: {
+        implement: makeVerboseJob("running", { attempt: 3, current_step: "impl" }),
+      },
+    });
+
+    const out = renderRunStatus(state, {}, { verbose: true });
+
+    // Attempt number must be visible — either as a bare number in a
+    // step-detail block or via a labeled field. We only require the
+    // number itself to appear so the specific label is not overfit.
+    expect(out).toMatch(/\battempt\b[^\n]*3|\b3\b[^\n]*attempt/i);
+  });
+
+  it("verbose mode remains backward-compatible for jobs with no step info (T-VERB-4, UC-VERB-4)", () => {
+    // If a job has no current_step (e.g. it has not started), verbose mode
+    // must not throw and must not print a broken/undefined placeholder.
+    const state = makeState({
+      jobs: {
+        intake: makeVerboseJob("ready"),
+        waiting: makeVerboseJob("waiting"),
+      },
+    });
+
+    const out = renderRunStatus(state, {}, { verbose: true });
+
+    expect(typeof out).toBe("string");
+    expect(out.length).toBeGreaterThan(0);
+    // No literal "undefined" leaks from missing optional fields.
+    expect(out).not.toContain("undefined");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // statusAction (end-to-end against a real run directory)
 // ---------------------------------------------------------------------------
 

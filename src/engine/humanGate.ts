@@ -33,6 +33,12 @@ export interface EnterHumanGateOpts {
   clock: Clock;
   /** Workflow definition needed to read step prompt/approvers/instructions. */
   stepPrompt: string;
+  /**
+   * Informational only (AD-P15-002). MVP does NOT authenticate the caller of
+   * `zigma-flow approve` / `reject` against this list — it is written to the
+   * human_gate_waiting event and the human-gate.md artifact so operators can
+   * see who is expected to decide. Identity checks are v0.3+ scope.
+   */
   stepApprovers?: string[];
   stepInstructions?: string;
   /** Injectable state store (defaults to LocalStateStore). */

@@ -33,6 +33,8 @@ import { loadWorkflowFile } from "../workflow/index.js";
 import type { RouterAction } from "../workflow/index.js";
 import { RouterError, StateError, WorkflowError } from "../utils/index.js";
 import { applyRoutingAction } from "../engine/routing.js";
+import { resolveExpression } from "../expression/index.js";
+import type { ExpressionContext } from "../expression/index.js";
 
 // ---------------------------------------------------------------------------
 // ExecuteRouterStepOpts
@@ -155,6 +157,13 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     );
   }
 
+  // ── 2b. Resolve switch expression ────────────────────────────────────────
+  //
+  // The switch value may contain ${{ ... }} templates (e.g.
+  // "${{ steps.gate-merge.outputs.decision }}"). resolveExpression returns
+  // the template unchanged if it has no tokens, so literal switch values
+  // (e.g. "approved") continue to work as before.
+
   // ── 3. Validate switch + cases — MUST throw RouterError BEFORE any events ─
   //
   // Per FP-RTR-INVALID-ROUTE: missing/non-string switch, missing cases, or no
@@ -176,14 +185,34 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     );
   }
 
+  // Build expression context from current run state.
+  // Maps job-level accumulated outputs to both jobs.<id>.outputs and
+  // steps.<preceding-step-id>.outputs (so ${{ steps.<id>.outputs.<key> }}
+  // works for the step immediately before this router step).
+  const routerStepIdx = jobDef.steps.findIndex((s) => s.id === stepId);
+  const stepsCtx: ExpressionContext["steps"] = {};
+  for (let i = 0; i < routerStepIdx; i++) {
+    const prevStepId = jobDef.steps[i]!.id;
+    stepsCtx[prevStepId] = { outputs: jobState.outputs ?? {} };
+  }
+  const exprCtx: ExpressionContext = {
+    inputs: {},
+    run: { id: runId, workflow: state.workflow },
+    jobs: Object.fromEntries(
+      Object.entries(state.jobs).map(([jId, j]) => [jId, { outputs: j.outputs ?? {} }])
+    ),
+    steps: stepsCtx,
+  };
+  const resolvedSwitch = resolveExpression(switchValue, exprCtx);
+
   // Resolve case: exact match first, fall back to "default"
   const matchedAction: RouterAction | undefined =
-    cases[switchValue] ?? cases["default"];
+    cases[resolvedSwitch] ?? cases["default"];
 
   if (matchedAction === undefined) {
     throw new RouterError(
-      `Router step "${stepId}" in job "${jobId}": switch value "${switchValue}" did not match any case and no "default" is defined`,
-      { details: { jobId, stepId, switchValue, availableCases: Object.keys(cases) } }
+      `Router step "${stepId}" in job "${jobId}": switch value "${switchValue}" resolved to "${resolvedSwitch}" which did not match any case and no "default" is defined`,
+      { details: { jobId, stepId, switchValue, resolvedSwitch, availableCases: Object.keys(cases) } }
     );
   }
 
@@ -313,8 +342,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     await stateStore.writeSnapshot(runDir, completedState);
 
   } else if (actionStr === "fail") {
-    const caseKey = matchedAction === "fail" ? switchValue : switchValue;
-    const reason = `router decided: fail (case: ${caseKey})`;
+    const reason = `router decided: fail (case: ${resolvedSwitch})`;
 
     const stepFailedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {
@@ -344,8 +372,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     await stateStore.writeSnapshot(runDir, failedState);
 
   } else if (actionStr === "block") {
-    const caseKey = switchValue;
-    const reason = `router decided: block (case: ${caseKey})`;
+    const reason = `router decided: block (case: ${resolvedSwitch})`;
 
     const stepFailedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {

@@ -1,0 +1,3 @@
+{"id":"evt-001","run_id":"20260701-0004","type":"run_created","timestamp":"2026-07-01T00:00:00.000Z","producer":"engine","job":null,"step":null,"attempt":null,"payload":{"workflow":"code-change","task":"fix the encoding bug"}}
+{"id":"evt-002","run_id":"20260701-0004","type":"job_ready","timestamp":"2026-07-01T00:00:01.000Z","producer":"engine","job":"implement","step":null,"attempt":null,"payload":{"job_id":"implement"}}
+{"id":"evt-003","run_id":"20260701-0004","type":"step_started","timestamp":"2026-07-01T00:00:02.000Z","producer":"engine","job":"implement","step":"implement","attempt":1,"payload":{"job_id":"implement","step_id":"implement","attempt":1}}

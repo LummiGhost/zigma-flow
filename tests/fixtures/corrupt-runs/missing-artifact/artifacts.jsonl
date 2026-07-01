@@ -1,0 +1,1 @@
+{"id":"artifact://20260701-0002/jobs/implement/attempts/1/steps/implement/stdout","run_id":"20260701-0002","producer":{"job":"implement","step":"implement","attempt":1},"kind":"agent_stdout","path":"jobs/implement/attempts/1/steps/implement/stdout.txt","content_type":"text/plain","size":12,"summary":"hello world","created_at":"2026-07-01T00:00:03.000Z"}

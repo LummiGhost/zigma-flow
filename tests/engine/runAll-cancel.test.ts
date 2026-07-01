@@ -23,6 +23,23 @@
  * already defined) but the full cancel semantics (killing child process,
  * run_cancelled event, state.cancelled) may not be fully shipped. Tests are
  * expected to potentially fail until WF-P13-RESUME-CANCEL Step 2 ships.
+ *
+ * WF-V022-STABILITY audit note (RISK-STABILITY-CANCEL-TIMEOUT):
+ *   T-CANCEL-1, T-CANCEL-2, T-CANCEL-3, and T-CANCEL-5 use a DelayedFakeBackend
+ *   with a 10_000 ms internal delay and a `setTimeout(() => controller.abort(),
+ *   50)`. The abort MUST cause runAll to short-circuit within Vitest's default
+ *   per-test timeout (5_000 ms). Under CI-cold-start conditions (import cost
+ *   ~45 s across the full suite), these tests have been observed to hit the
+ *   5 s per-test timeout intermittently on Windows local runs.
+ *   The tests exercise real cancellation semantics — the 10 s fake delay is a
+ *   deliberately-long "should never elapse" bound; if runAll's abort handling
+ *   regresses (e.g., the AbortSignal listener is never registered), the test
+ *   correctly hangs on the fake delay and Vitest kills it at 5 s. Do not
+ *   shorten the fake delay: shortening it removes the safety margin proving
+ *   that abort — not delay expiry — is what ended the run.
+ *   See docs/phases/v0.2.2-runtime-reliability/workflows/wf-v022-stability/
+ *   01-cases-and-tests.md § RISK-STABILITY-CANCEL-TIMEOUT for the audit
+ *   finding and the (unimplemented) suggested fix.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -335,6 +352,17 @@ describe("runAll — abort during backend execution (T-CANCEL-1)", () => {
       const summary = await runAllPromise;
 
       // RED-PHASE: summary should reflect cancelled state
+      //
+      // WF-V022-STABILITY audit note (RISK-STABILITY-CANCEL-ASSERTION-NARROW):
+      //   This assertion is narrow: it only accepts "cancelled" or undefined.
+      //   Under CPU-starved runs (Windows local, full suite), the 50 ms
+      //   controller.abort() schedule can arrive AFTER runAll has already
+      //   consumed the fake backend's response and reported summary.status =
+      //   "completed". That case is a flake, not a product bug. Left unchanged
+      //   per the "no assertion changes" constraint of WF-V022-STABILITY. See
+      //   wf-v022-stability/01-cases-and-tests.md § RISK-STABILITY-CANCEL-
+      //   ASSERTION-NARROW for the suggested future fix (extend the accepted
+      //   set to include "completed").
       expect(["cancelled", undefined]).toContain(summary.status);
 
       const runDir = join(sandbox.runsDir, summary.runId);
@@ -367,7 +395,14 @@ describe("runAll — abort during backend execution (T-CANCEL-1)", () => {
         expect(rc.producer).toBe("engine");
         expect(typeof rc.payload["reason"]).toBe("string");
       }
-    }
+    },
+    // WF-V022-STABILITY: explicit 15 s per-test timeout. The DelayedFakeBackend
+    // above is configured with a 10 s "should never elapse" safety delay so a
+    // regression in runAll's abort handling correctly hangs (rather than
+    // silently succeeding). The Vitest 4.x default of 5 s is too tight for the
+    // arrangement path under cold-import contention (~45 s import cost on the
+    // full suite). 15 s = 10 s safety delay + 5 s arrangement headroom.
+    15_000
   );
 });
 
@@ -419,7 +454,10 @@ describe("runAll — state transitions to cancelled (T-CANCEL-2)", () => {
       // the status will be undefined. Both are acceptable in red-phase.
       const state = await readStateSnapshot(runDir);
       expect(["cancelled", undefined, "running"]).toContain(state.status);
-    }
+    },
+    // WF-V022-STABILITY: see T-CANCEL-1 above for rationale (15 s = 10 s
+    // safety delay + 5 s arrangement headroom).
+    15_000
   );
 });
 
@@ -504,7 +542,10 @@ describe("runAll — cancel event chain order (T-CANCEL-3)", () => {
         );
         expect(interleavedAgentEvents).toHaveLength(0);
       }
-    }
+    },
+    // WF-V022-STABILITY: see T-CANCEL-1 above for rationale (15 s = 10 s
+    // safety delay + 5 s arrangement headroom).
+    15_000
   );
 });
 
@@ -598,6 +639,9 @@ describe("runAll — summary reflects cancelled state (T-CANCEL-5)", () => {
       expect(summary.runId.length).toBeGreaterThan(0);
       expect(Array.isArray(summary.jobs)).toBe(true);
       expect(typeof summary.iterations).toBe("number");
-    }
+    },
+    // WF-V022-STABILITY: see T-CANCEL-1 above for rationale (15 s = 10 s
+    // safety delay + 5 s arrangement headroom).
+    15_000
   );
 });

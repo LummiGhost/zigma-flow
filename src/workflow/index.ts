@@ -120,6 +120,11 @@ const StepBaseSchema = z.object({
   // Human step fields (WF-P15-SCHEMA)
   approvers: z.array(z.string()).optional(),
   instructions: z.string().optional(),
+  // DSL field reserved for future runtime enforcement (v0.3+). At v0.2.2 the
+  // engine does NOT enforce the timeout; this entry only ensures the field
+  // passes schema validation and is available for audit/display purposes.
+  // AD-P15-002 (AD-out-of-scope for runtime enforcement until v0.3).
+  timeout_minutes: z.number().int().positive().optional(),
 });
 
 export interface StepDefinition {
@@ -164,6 +169,8 @@ export interface StepDefinition {
   // Human step fields (WF-P15-SCHEMA)
   approvers?: string[];
   instructions?: string;
+  /** DSL-reserved field. Runtime enforcement deferred to v0.3+. */
+  timeout_minutes?: number;
   [key: string]: unknown;
 }
 

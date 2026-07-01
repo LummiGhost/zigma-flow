@@ -45,7 +45,10 @@ export async function abortAction(opts: AbortActionOpts): Promise<void> {
   if (activeRunId === null) {
     throw new ConfigError(
       "No active run found. Run `zigma-flow run` first to create a run.",
-      { details: { zigmaflowDir } }
+      {
+        details: { zigmaflowDir },
+        suggestion: "Run 'zigma-flow list-runs' to see available runs, or 'zigma-flow run <workflow> --task <task>' to create a new one.",
+      }
     );
   }
 

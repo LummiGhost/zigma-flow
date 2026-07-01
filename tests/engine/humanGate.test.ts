@@ -17,12 +17,12 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { z } from "zod";
 
 import { createRun } from "../../src/engine/index.js";
 import { enterHumanGate, recordHumanDecision } from "../../src/engine/humanGate.js";
 import type { Clock, RunState } from "../../src/run/index.js";
 import { LocalStateStore, JsonlEventWriter } from "../../src/run/index.js";
+import { HumanDecisionRecordSchema } from "../../src/artifact/humanDecisionRecord.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -352,16 +352,8 @@ describe("recordHumanDecision", () => {
 // Reference: docs/phases/v0.2.2-runtime-reliability/workflows/wf-v022-humangate/01-cases-and-tests.md
 //            docs/phases/p15-human-gate/02-development-plan.md AD-P15-005
 
-// Step 2 will move this schema into `src/artifact/humanDecisionRecord.ts` and
-// re-export it so production code can consume the same definition. For now the
-// schema is inline in this test so the red phase can assert against it.
-const HumanDecisionRecordSchema = z.object({
-  decision: z.enum(["approved", "rejected"]),
-  timestamp: z.string().min(1),
-  comment: z.string().optional(),
-  decided_by: z.string().optional(),
-  outputs: z.record(z.string(), z.string()).optional(),
-});
+// Schema is now defined in `src/artifact/humanDecisionRecord.ts` and imported
+// above. Production code can consume the same definition from that module.
 
 describe("human_decision_record artifact schema", () => {
   let t: TempRun;

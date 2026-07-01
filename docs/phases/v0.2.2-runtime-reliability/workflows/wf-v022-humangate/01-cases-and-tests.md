@@ -92,8 +92,7 @@
 
 ## Test Gaps
 
-- Gap: Router **执行器** (`src/router/executor.ts`) 目前不调用 `resolveExpression`，因此把 `switch: "${{ steps.gate-merge.outputs.decision }}"` 直接喂给 `executeRouterStep` 时会拿到字面串匹配失败。本工作流 tests 通过直接调用 `resolveExpression` 锁死"outputs 可以被表达式解析"这半契约。
-  - Action: 记录为独立后续项（例如 `TD-V022-ROUTER-EXPR`）— router 执行器补 expression 展开是 v0.2.2 后续或 v0.3 范围，不在本 slice。
+- ~~Gap: Router **执行器** (`src/router/executor.ts`) 目前不调用 `resolveExpression`~~（已在 v0.2.2 Step 2 中实现；`TD-V022-ROUTER-EXPR` 已清偿）。Router executor 现在在 `switch` 值匹配 cases 之前先调用 `resolveExpression`，`${{ steps.gate-merge.outputs.decision }}` 可正确展开。`tests/router/executor-expression.test.ts` 覆盖三个 T-ROUTER-EXPR-* 用例（全部 green）。
 - Gap: `timeout_minutes` 的**运行时超时行为**（触发自动 rejected / 触发 blocked / 上报 timeout 事件等）不在 v0.2.2 scope；本工作流仅锁定 DSL 层预留。
   - Action: 该功能应立独立 workflow，前置条件是 v0.3 规划确认；本 slice 显式列为 out-of-scope 以防 Step 2 顺手实现导致 scope creep。
 - Gap: `approve` / `reject` CLI 与 status 展示层的 e2e 测试仍在 `tests/dogfood/human-gate-e2e.test.ts` 归属；本 slice 不触碰。
@@ -119,4 +118,4 @@
    并在 `StepDefinition` interface 同步添加字段；无需改动 `Human step field validation` 语义块。
 2. 新建 `src/artifact/humanDecisionRecord.ts`，从 `tests/engine/humanGate.test.ts` 中把 `HumanDecisionRecordSchema` 迁移过去并 export；测试改成 `import { HumanDecisionRecordSchema } from "../../src/artifact/humanDecisionRecord.js"`。这样 Step 2 也能在 CLI/status 层复用同一 schema 定义。
 3. 不要在 Step 2 顺手实现 `timeout_minutes` 的运行时强制（AD-out-of-scope）。若有需要，写 ADR 或 v0.3 计划另立。
-4. Router 执行器 (`src/router/executor.ts`) 补 `resolveExpression` 是独立技术债，本工作流不 in-scope，也不阻塞 Step 2 转 green。
+4. ~~Router 执行器 (`src/router/executor.ts`) 补 `resolveExpression` 是独立技术债~~（`TD-V022-ROUTER-EXPR` 在 Step 2 中已实现，见上方 Test Gaps 更新）。

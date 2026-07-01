@@ -29,6 +29,8 @@ import { runAllAction } from "./commands/run-all.js";
 import { approveAction } from "./commands/approve.js";
 import { rejectAction } from "./commands/reject.js";
 import { verifyRunAction } from "./commands/verify-run.js";
+import { eventsAction } from "./commands/events.js";
+import { artifactsAction } from "./commands/artifacts.js";
 import { SystemClock } from "./run/index.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -108,9 +110,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command("status")
     .description("Show the status of a workflow run.")
     .option("--run <run_id>", "Specific run id to show (defaults to latest).")
+    .option("-v, --verbose", "Show step-level details for each job.")
     .exitOverride()
-    .action(async (options: { run?: string }) => {
-      await statusAction(options);
+    .action(async (options: { run?: string; verbose?: boolean }) => {
+      await statusAction(options, join(process.cwd(), ".zigma-flow", "runs"));
     });
 
   program
@@ -278,6 +281,32 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         comment: options.comment,
         ...(options.step !== undefined ? { stepId: options.step } : {}),
         clock: new SystemClock(),
+      });
+    });
+
+  program
+    .command("events [run-id]")
+    .description("Show recent events for a workflow run.")
+    .option("--limit <N>", "Maximum number of events to show (default: 20).", parseInt)
+    .exitOverride()
+    .action(async (runId: string | undefined, options: { limit?: number }) => {
+      await eventsAction({
+        runsDir: join(process.cwd(), ".zigma-flow", "runs"),
+        ...(runId !== undefined ? { runId } : {}),
+        ...(options.limit !== undefined ? { limit: options.limit } : {}),
+      });
+    });
+
+  program
+    .command("artifacts [run-id]")
+    .description("List artifacts produced by a workflow run.")
+    .option("--job <id>", "Filter to artifacts produced by the specified job.")
+    .exitOverride()
+    .action(async (runId: string | undefined, options: { job?: string }) => {
+      await artifactsAction({
+        runsDir: join(process.cwd(), ".zigma-flow", "runs"),
+        ...(runId !== undefined ? { runId } : {}),
+        ...(options.job !== undefined ? { job: options.job } : {}),
       });
     });
 

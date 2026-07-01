@@ -17,6 +17,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 
 import { createRun } from "../../src/engine/index.js";
 import { enterHumanGate, recordHumanDecision } from "../../src/engine/humanGate.js";
@@ -332,5 +333,173 @@ describe("recordHumanDecision", () => {
       comment: "Looks good",
       custom_key: "custom_value",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WF-V022-HUMANGATE — human_decision_record artifact schema tests
+// ---------------------------------------------------------------------------
+//
+// Lock down the on-disk shape of `human-decision.json`. The artifact is the
+// audit anchor for a human decision (mvp-contracts §7); its schema must be
+// well-defined so downstream tooling (status commands, review scripts) can
+// depend on it.
+//
+// Required fields: `decision`, `timestamp`.
+// Optional fields: `comment`, `decided_by`, `outputs`.
+// `decision` MUST be exactly "approved" or "rejected"; no other strings.
+//
+// Reference: docs/phases/v0.2.2-runtime-reliability/workflows/wf-v022-humangate/01-cases-and-tests.md
+//            docs/phases/p15-human-gate/02-development-plan.md AD-P15-005
+
+// Step 2 will move this schema into `src/artifact/humanDecisionRecord.ts` and
+// re-export it so production code can consume the same definition. For now the
+// schema is inline in this test so the red phase can assert against it.
+const HumanDecisionRecordSchema = z.object({
+  decision: z.enum(["approved", "rejected"]),
+  timestamp: z.string().min(1),
+  comment: z.string().optional(),
+  decided_by: z.string().optional(),
+  outputs: z.record(z.string(), z.string()).optional(),
+});
+
+describe("human_decision_record artifact schema", () => {
+  let t: TempRun;
+
+  beforeEach(async () => {
+    t = await setupTempRun();
+    // Enter awaiting_human once so recordHumanDecision has a valid state.
+    const stateStore = new LocalStateStore();
+    const eventWriter = new JsonlEventWriter();
+    await enterHumanGate({
+      runDir: t.runDir,
+      runId: t.runId,
+      jobId: "gate",
+      stepId: "approve-merge",
+      clock: t.clock,
+      stepPrompt: "Review and approve the merge.",
+      stateStore,
+      eventWriter,
+    });
+  });
+
+  afterEach(async () => {
+    await cleanupTempRun(t);
+  });
+
+  it("recordHumanDecision(approved) produces a schema-conformant artifact with only required fields", async () => {
+    const stateStore = new LocalStateStore();
+    const eventWriter = new JsonlEventWriter();
+
+    await recordHumanDecision({
+      runDir: t.runDir,
+      runId: t.runId,
+      jobId: "gate",
+      stepId: "approve-merge",
+      decision: "approved",
+      clock: t.clock,
+      stateStore,
+      eventWriter,
+    });
+
+    const decisionPath = join(
+      t.runDir, "jobs", "gate", "attempts", "1", "steps", "approve-merge",
+      "human-decision.json",
+    );
+    const raw = await readFile(decisionPath, "utf-8");
+    const parsed: unknown = JSON.parse(raw);
+
+    const result = HumanDecisionRecordSchema.safeParse(parsed);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.decision).toBe("approved");
+      expect(result.data.timestamp).toBeTruthy();
+    }
+  });
+
+  it("recordHumanDecision(rejected) with comment and decided_by produces a schema-conformant artifact", async () => {
+    const stateStore = new LocalStateStore();
+    const eventWriter = new JsonlEventWriter();
+
+    await recordHumanDecision({
+      runDir: t.runDir,
+      runId: t.runId,
+      jobId: "gate",
+      stepId: "approve-merge",
+      decision: "rejected",
+      comment: "Needs more tests",
+      decidedBy: "alice",
+      clock: t.clock,
+      stateStore,
+      eventWriter,
+    });
+
+    const decisionPath = join(
+      t.runDir, "jobs", "gate", "attempts", "1", "steps", "approve-merge",
+      "human-decision.json",
+    );
+    const raw = await readFile(decisionPath, "utf-8");
+    const parsed: unknown = JSON.parse(raw);
+
+    const result = HumanDecisionRecordSchema.safeParse(parsed);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        decision: "rejected",
+        comment: "Needs more tests",
+        decided_by: "alice",
+      });
+    }
+  });
+
+  it("recordHumanDecision(approved) with custom outputs writes outputs field into artifact", async () => {
+    const stateStore = new LocalStateStore();
+    const eventWriter = new JsonlEventWriter();
+
+    await recordHumanDecision({
+      runDir: t.runDir,
+      runId: t.runId,
+      jobId: "gate",
+      stepId: "approve-merge",
+      decision: "approved",
+      outputs: { release_note: "ok" },
+      clock: t.clock,
+      stateStore,
+      eventWriter,
+    });
+
+    const decisionPath = join(
+      t.runDir, "jobs", "gate", "attempts", "1", "steps", "approve-merge",
+      "human-decision.json",
+    );
+    const raw = await readFile(decisionPath, "utf-8");
+    const parsed: unknown = JSON.parse(raw);
+
+    const result = HumanDecisionRecordSchema.safeParse(parsed);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.outputs).toEqual({ release_note: "ok" });
+    }
+  });
+
+  it("schema rejects an arbitrary decision string (only \"approved\" or \"rejected\" allowed)", () => {
+    const bad = {
+      decision: "maybe",
+      timestamp: FIXED_ISO,
+    };
+    const result = HumanDecisionRecordSchema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
+  it("schema rejects a record missing the required timestamp field", () => {
+    const bad = { decision: "approved" };
+    const result = HumanDecisionRecordSchema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
+  it("schema accepts a minimal record with only decision + timestamp", () => {
+    const minimal = { decision: "approved", timestamp: FIXED_ISO };
+    const result = HumanDecisionRecordSchema.safeParse(minimal);
+    expect(result.success).toBe(true);
   });
 });

@@ -102,6 +102,12 @@ describe("init filesystem helpers", () => {
     // signal that string concatenation is unsafe. We assert that AT LEAST the
     // canonical form matches itself; the implementation is forbidden from
     // accepting `\` segments on POSIX by relying solely on node:path.
+    //
+    // WF-V022-STABILITY audit: this is the only `process.platform` branch in
+    // the test suite. Both branches assert the same underlying contract
+    // ("node:path.resolve produces canonical output"); the branch exists only
+    // because the null hypothesis (`\` as literal) differs between win32 and
+    // POSIX. The test passes on both `win32` and `linux` CI runners.
     if (process.platform === "win32") {
       expect(c).toBe(a);
     } else {

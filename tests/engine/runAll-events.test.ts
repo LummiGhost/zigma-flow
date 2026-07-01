@@ -146,7 +146,20 @@ class FakeBackend implements AgentBackend {
   readonly backendTimeoutMs = 600_000;
   private readonly config: Required<FakeBackendConfig>;
 
-  /** Tracks the number of times execute() was called. */
+  /**
+   * Tracks the number of times execute() was called.
+   *
+   * WF-V022-STABILITY audit note (RISK-STABILITY-FAKEBACKEND-STATIC):
+   *   The three `static` fields below constitute mutable module-level state
+   *   shared across every `describe` block in this file. The FakeBackend.reset()
+   *   call in every `beforeEach` mitigates within-file contamination, but the
+   *   class is exported (via the module scope) so any test in this file that
+   *   forgets to call reset() would silently observe accumulated counts.
+   *   Vitest defaults to file-level isolation (one test file per worker), so
+   *   this is safe today; the risk becomes real only if the suite is ever
+   *   switched to in-file parallelism. See wf-v022-stability/
+   *   01-cases-and-tests.md § RISK-STABILITY-FAKEBACKEND-STATIC.
+   */
   static callCount = 0;
   /** Stores the last opts passed to execute(). */
   static lastOpts: AgentExecuteOptions | null = null;

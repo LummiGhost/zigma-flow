@@ -29,7 +29,10 @@ export async function rejectAction(opts: RejectActionOpts): Promise<void> {
   if (activeRunId === null) {
     throw new ConfigError(
       "No active run found. Run `zigma-flow run` first.",
-      { details: { zigmaflowDir } }
+      {
+        details: { zigmaflowDir },
+        suggestion: "Run 'zigma-flow list-runs' to see available runs, or 'zigma-flow run <workflow> --task <task>' to create a new one.",
+      }
     );
   }
 
@@ -39,14 +42,19 @@ export async function rejectAction(opts: RejectActionOpts): Promise<void> {
   const stateStore = new LocalStateStore();
   const state = await stateStore.readSnapshot(runDir);
   if (state === null) {
-    throw new StateError(`state.json not found for run ${activeRunId}`);
+    throw new StateError(`state.json not found for run ${activeRunId}`, {
+      suggestion: "Run 'zigma-flow verify-run' to check whether the run directory is intact, or 'zigma-flow list-runs' to pick a different run.",
+    });
   }
 
   const jobState = state.jobs[jobId];
   if (jobState === undefined) {
     throw new UserInputError(
       `Job "${jobId}" not found in run ${activeRunId}`,
-      { details: { jobId, runId: activeRunId } }
+      {
+        details: { jobId, runId: activeRunId },
+        suggestion: "Run 'zigma-flow status' to see the current jobs in this run.",
+      }
     );
   }
 
@@ -62,14 +70,20 @@ export async function rejectAction(opts: RejectActionOpts): Promise<void> {
       if (awaitingEntries.length === 0) {
         throw new UserInputError(
           "No step is currently awaiting human input. Use `zigma-flow status` to check.",
-          { details: { runId: activeRunId } }
+          {
+            details: { runId: activeRunId },
+            suggestion: "Run 'zigma-flow status --verbose' to see per-step status for each job.",
+          }
         );
       }
 
       if (awaitingEntries.length > 1) {
         throw new UserInputError(
           "Multiple steps are awaiting human input. Use --step to specify which one.",
-          { details: { awaitingSteps: awaitingEntries.map(([jid, js]) => `${jid}/${js.current_step}`) } }
+          {
+            details: { awaitingSteps: awaitingEntries.map(([jid, js]) => `${jid}/${js.current_step}`) },
+            suggestion: "Re-run with '--job <job> --step <step>' naming one of the awaiting entries above.",
+          }
         );
       }
 
@@ -80,7 +94,10 @@ export async function rejectAction(opts: RejectActionOpts): Promise<void> {
   if (resolvedStepId === undefined) {
     throw new UserInputError(
       "Could not determine which step to reject. Use --step <id>.",
-      { details: { jobId } }
+      {
+        details: { jobId },
+        suggestion: "Run 'zigma-flow status --verbose' to list the steps of this job and pick the awaiting one.",
+      }
     );
   }
 
@@ -88,10 +105,16 @@ export async function rejectAction(opts: RejectActionOpts): Promise<void> {
   if (jobState.step_status !== "awaiting_human") {
     throw new StateError(
       `Step "${resolvedStepId}" in job "${jobId}" is not awaiting human input.`,
-      { details: { jobId, stepId: resolvedStepId, stepStatus: jobState.step_status } }
+      {
+        details: { jobId, stepId: resolvedStepId, stepStatus: jobState.step_status },
+        suggestion: "Run 'zigma-flow status --verbose' to see which step is currently awaiting a decision.",
+      }
     );
   }
 
+  // AD-P15-002: `approvers` on the step is informational only in MVP —
+  // we do not check `decidedBy` against it. Filesystem/OS permissions on
+  // the run directory are the enforcement boundary in v0.2.x.
   const decidedBy = process.env["USER"] ?? process.env["USERNAME"] ?? undefined;
 
   await recordHumanDecision({

@@ -1,0 +1,8 @@
+{"id":"evt-001","run_id":"20260701-0007","type":"run_created","timestamp":"2026-07-01T00:00:00.000Z","producer":"engine","job":null,"step":null,"attempt":null,"payload":{"workflow":"code-change","task":"diagnostic fixture"}}
+{"id":"evt-002","run_id":"20260701-0007","type":"job_ready","timestamp":"2026-07-01T00:00:01.000Z","producer":"engine","job":"intake","step":null,"attempt":null,"payload":{"job_id":"intake"}}
+{"id":"evt-003","run_id":"20260701-0007","type":"step_started","timestamp":"2026-07-01T00:00:02.000Z","producer":"engine","job":"intake","step":"intake","attempt":1,"payload":{"job_id":"intake","step_id":"intake","attempt":1}}
+{"id":"evt-004","run_id":"20260701-0007","type":"step_completed","timestamp":"2026-07-01T00:00:03.000Z","producer":"engine","job":"intake","step":"intake","attempt":1,"payload":{"job_id":"intake","step_id":"intake","attempt":1}}
+{"id":"evt-005","run_id":"20260701-0007","type":"job_completed","timestamp":"2026-07-01T00:00:04.000Z","producer":"engine","job":"intake","step":null,"attempt":null,"payload":{"job_id":"intake"}}
+{"id":"evt-006","run_id":"20260701-0007","type":"job_ready","timestamp":"2026-07-01T00:00:05.000Z","producer":"engine","job":"implement","step":null,"attempt":null,"payload":{"job_id":"implement"}}
+{"id":"evt-007","run_id":"20260701-0007","type":"step_started","timestamp":"2026-07-01T00:00:06.000Z","producer":"engine","job":"implement","step":"impl-step","attempt":1,"payload":{"job_id":"implement","step_id":"impl-step","attempt":1}}
+{"id":"evt-008","run_id":"20260701-0007","type":"step_started","timestamp":"2026-07-01T00:00:07.000Z","producer":"engine","job":"implement","step":"impl-step","attempt":2,"payload":{"job_id":"implement","step_id":"impl-step","attempt":2}}

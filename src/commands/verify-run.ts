@@ -213,7 +213,7 @@ async function checkEventSequence(
   } else if (stateLastId !== logTailId) {
     results.push({
       level: "FAIL",
-      message: `events.jsonl: state.last_event_id="${stateLastId ?? ""}" does not match log tail="${logTailId ?? ""}" (expected evt-099, got evt-003 or similar — state claims ${stateLastId ?? ""}, log ends at ${logTailId ?? "(empty)"})`,
+      message: `events.jsonl: state.last_event_id="${stateLastId ?? ""}" does not match log tail="${logTailId ?? "(empty)"}"`,
     });
   } else {
     results.push({ level: "PASS", message: "events.jsonl: last_event_id matches log tail" });

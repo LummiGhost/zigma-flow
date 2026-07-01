@@ -122,15 +122,13 @@ export function renderRunStatus(
     lines.push(parts.join(""));
 
     // Verbose: add indented step-level details after each job line.
+    // Omit attempt here — it's already shown inline on the summary line above.
     if (verbose) {
       if (job.current_step !== undefined) {
         lines.push(`    current_step: ${job.current_step}`);
       }
       if (job.step_status !== undefined) {
         lines.push(`    step_status: ${job.step_status}`);
-      }
-      if (job.attempt !== undefined) {
-        lines.push(`    attempt: ${job.attempt}`);
       }
     }
   }

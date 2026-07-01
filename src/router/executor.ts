@@ -342,8 +342,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     await stateStore.writeSnapshot(runDir, completedState);
 
   } else if (actionStr === "fail") {
-    const caseKey = matchedAction === "fail" ? switchValue : switchValue;
-    const reason = `router decided: fail (case: ${caseKey})`;
+    const reason = `router decided: fail (case: ${resolvedSwitch})`;
 
     const stepFailedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {
@@ -373,8 +372,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     await stateStore.writeSnapshot(runDir, failedState);
 
   } else if (actionStr === "block") {
-    const caseKey = switchValue;
-    const reason = `router decided: block (case: ${caseKey})`;
+    const reason = `router decided: block (case: ${resolvedSwitch})`;
 
     const stepFailedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {

@@ -164,12 +164,32 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 ### Allowed Signals
 
 (none)
-
 ### Artifact Rules
 
 - Write the Agent report to the canonical report path only.
 - Use artifact references for large logs, diffs, test results, and generated files.
 - Do not place full large artifact contents in the prompt or report JSON.
+
+### Artifact Reference Schema
+
+Artifacts are referenced in the \`"artifacts"\` array of report.json using two kinds:
+
+1. **Agent-Created Artifacts** (\`path\` kind): Files the Agent creates during this step.
+   - Must be written to the step's artifact directory.
+   - Referenced by relative path from the run directory.
+   - Example: \`jobs/implement/attempts/1/steps/implement/summary.md\`
+
+2. **Existing Evidence Artifacts** (\`ref\` kind): Artifacts from upstream steps that are evidence for the current step.
+   - Already exist at a known path from a prior step in the same run.
+   - Referenced by their artifact ID or path.
+   - Example: \`artifact://20260623-0001/jobs/<upstreamJob>/attempts/<attempt>/steps/<step>/stdout\`
+
+The canonical artifact directory for this step is:
+
+  \`jobs/implement/attempts/1/steps/implement\`
+
+All agent-created artifacts must be placed within this directory.
+
 
 ### Report Schema
 
@@ -282,6 +302,8 @@ This task prompt is stable for the run. Do not let the step prompt replace or di
 
 ## Workflow Step Prompt
 
+**[DEBUG MODE]** Generic fallback active — no primary prompt was resolved.
+
 Current workflow scope: job "unknown", step "unknown", attempt 1.
 
 No primary Skill Pack prompt was resolved for this step. Use the task prompt, context blocks, and output contract to complete only the current step.
@@ -317,12 +339,32 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 ### Allowed Signals
 
 (none)
-
 ### Artifact Rules
 
 - Write the Agent report to the canonical report path only.
 - Use artifact references for large logs, diffs, test results, and generated files.
 - Do not place full large artifact contents in the prompt or report JSON.
+
+### Artifact Reference Schema
+
+Artifacts are referenced in the \`"artifacts"\` array of report.json using two kinds:
+
+1. **Agent-Created Artifacts** (\`path\` kind): Files the Agent creates during this step.
+   - Must be written to the step's artifact directory.
+   - Referenced by relative path from the run directory.
+   - Example: \`jobs/unknown/attempts/1/steps/unknown/summary.md\`
+
+2. **Existing Evidence Artifacts** (\`ref\` kind): Artifacts from upstream steps that are evidence for the current step.
+   - Already exist at a known path from a prior step in the same run.
+   - Referenced by their artifact ID or path.
+   - Example: \`artifact://20260622-0001/jobs/<upstreamJob>/attempts/<attempt>/steps/<step>/stdout\`
+
+The canonical artifact directory for this step is:
+
+  \`jobs/unknown/attempts/1/steps/unknown\`
+
+All agent-created artifacts must be placed within this directory.
+
 
 ### Report Schema
 
@@ -506,12 +548,32 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 ### Allowed Signals
 
 - \`needs_architecture_design\`
-
 ### Artifact Rules
 
 - Write the Agent report to the canonical report path only.
 - Use artifact references for large logs, diffs, test results, and generated files.
 - Do not place full large artifact contents in the prompt or report JSON.
+
+### Artifact Reference Schema
+
+Artifacts are referenced in the \`"artifacts"\` array of report.json using two kinds:
+
+1. **Agent-Created Artifacts** (\`path\` kind): Files the Agent creates during this step.
+   - Must be written to the step's artifact directory.
+   - Referenced by relative path from the run directory.
+   - Example: \`jobs/plan/attempts/1/steps/plan/summary.md\`
+
+2. **Existing Evidence Artifacts** (\`ref\` kind): Artifacts from upstream steps that are evidence for the current step.
+   - Already exist at a known path from a prior step in the same run.
+   - Referenced by their artifact ID or path.
+   - Example: \`artifact://20260622-0001/jobs/<upstreamJob>/attempts/<attempt>/steps/<step>/stdout\`
+
+The canonical artifact directory for this step is:
+
+  \`jobs/plan/attempts/1/steps/plan\`
+
+All agent-created artifacts must be placed within this directory.
+
 
 ### Report Schema
 
@@ -757,12 +819,32 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 
 - \`review_rejected\`
 - \`needs_architecture_design\`
-
 ### Artifact Rules
 
 - Write the Agent report to the canonical report path only.
 - Use artifact references for large logs, diffs, test results, and generated files.
 - Do not place full large artifact contents in the prompt or report JSON.
+
+### Artifact Reference Schema
+
+Artifacts are referenced in the \`"artifacts"\` array of report.json using two kinds:
+
+1. **Agent-Created Artifacts** (\`path\` kind): Files the Agent creates during this step.
+   - Must be written to the step's artifact directory.
+   - Referenced by relative path from the run directory.
+   - Example: \`jobs/review/attempts/1/steps/review/summary.md\`
+
+2. **Existing Evidence Artifacts** (\`ref\` kind): Artifacts from upstream steps that are evidence for the current step.
+   - Already exist at a known path from a prior step in the same run.
+   - Referenced by their artifact ID or path.
+   - Example: \`artifact://20260622-0001/jobs/<upstreamJob>/attempts/<attempt>/steps/<step>/stdout\`
+
+The canonical artifact directory for this step is:
+
+  \`jobs/review/attempts/1/steps/review\`
+
+All agent-created artifacts must be placed within this directory.
+
 
 ### Report Schema
 
@@ -924,7 +1006,6 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 ### Allowed Signals
 
 - \`needs_review\`
-
 ### Artifact Rules
 
 - Write the Agent report to the canonical report path only.
@@ -952,6 +1033,27 @@ Allowed:
 
 Required Evidence:
 - \`test-results.json\`
+
+### Artifact Reference Schema
+
+Artifacts are referenced in the \`"artifacts"\` array of report.json using two kinds:
+
+1. **Agent-Created Artifacts** (\`path\` kind): Files the Agent creates during this step.
+   - Must be written to the step's artifact directory.
+   - Referenced by relative path from the run directory.
+   - Example: \`jobs/implement/attempts/1/steps/implement/summary.md\`
+
+2. **Existing Evidence Artifacts** (\`ref\` kind): Artifacts from upstream steps that are evidence for the current step.
+   - Already exist at a known path from a prior step in the same run.
+   - Referenced by their artifact ID or path.
+   - Example: \`artifact://20260701-0001/jobs/<upstreamJob>/attempts/<attempt>/steps/<step>/stdout\`
+
+The canonical artifact directory for this step is:
+
+  \`jobs/implement/attempts/1/steps/implement\`
+
+All agent-created artifacts must be placed within this directory.
+
 
 ### Report Schema
 
@@ -1149,12 +1251,32 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 ### Allowed Signals
 
 (none)
-
 ### Artifact Rules
 
 - Write the Agent report to the canonical report path only.
 - Use artifact references for large logs, diffs, test results, and generated files.
 - Do not place full large artifact contents in the prompt or report JSON.
+
+### Artifact Reference Schema
+
+Artifacts are referenced in the \`"artifacts"\` array of report.json using two kinds:
+
+1. **Agent-Created Artifacts** (\`path\` kind): Files the Agent creates during this step.
+   - Must be written to the step's artifact directory.
+   - Referenced by relative path from the run directory.
+   - Example: \`jobs/implement/attempts/1/steps/implement/summary.md\`
+
+2. **Existing Evidence Artifacts** (\`ref\` kind): Artifacts from upstream steps that are evidence for the current step.
+   - Already exist at a known path from a prior step in the same run.
+   - Referenced by their artifact ID or path.
+   - Example: \`artifact://20260622-0001/jobs/<upstreamJob>/attempts/<attempt>/steps/<step>/stdout\`
+
+The canonical artifact directory for this step is:
+
+  \`jobs/implement/attempts/1/steps/implement\`
+
+All agent-created artifacts must be placed within this directory.
+
 
 ### Report Schema
 

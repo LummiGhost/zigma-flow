@@ -17,6 +17,7 @@ jobs:
     steps:
       - id: analyze
         type: agent
+        allow_generic_prompt: true
         with:
           goal: "\${{ inputs.task }}"
 `;

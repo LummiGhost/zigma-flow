@@ -144,6 +144,7 @@ jobs:
     steps:
       - id: analyze
         type: agent
+        allow_generic_prompt: true
         uses: zigma/analyze-skill
 `;
 
@@ -156,11 +157,13 @@ jobs:
     steps:
       - id: step1
         type: agent
+        allow_generic_prompt: true
         uses: zigma/first-skill
   second:
     steps:
       - id: step2
         type: agent
+        allow_generic_prompt: true
         uses: zigma/second-skill
 `;
 

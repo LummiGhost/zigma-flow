@@ -135,6 +135,8 @@ const StepBaseSchema = z.object({
     allowed: z.array(z.string()).optional(),
     required_evidence: z.array(z.string()).optional(),
   }).optional(),
+  // Issue #106: Allow generic prompt fallback when no primary prompt is found
+  allow_generic_prompt: z.boolean().optional(),
 });
 
 export interface StepDefinition {
@@ -185,6 +187,8 @@ export interface StepDefinition {
   outputs_schema?: Record<string, { type: string }>;
   artifact_policy?: { required?: string[]; forbidden?: string[] };
   signal_policy?: { allowed?: string[]; required_evidence?: string[] };
+  // Issue #106: Allow generic prompt fallback when no primary prompt is found
+  allow_generic_prompt?: boolean;
   [key: string]: unknown;
 }
 

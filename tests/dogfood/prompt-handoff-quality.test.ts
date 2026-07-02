@@ -35,6 +35,7 @@ function dogfoodBundle(): ContextBundle {
     artifacts: [],
     signals: [],
     permissions: { contents: "read", commands: "none", workflow_state: "none" },
+    allowGenericPrompt: true,
   };
 }
 

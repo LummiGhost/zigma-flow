@@ -37,6 +37,8 @@ import {
   type QualityGateResult,
 } from "./qualityGate.js";
 
+import { PromptBuildError } from "../utils/index.js";
+
 export interface PromptHandoffIssue {
   code: string;
   message: string;
@@ -112,12 +114,18 @@ export interface ContextBlock {
 export interface OutputContract {
   block: PromptBlock;
   reportPath: string;
+  runId: string;
+  jobId: string;
+  stepId: string;
+  attempt: number;
   reportSchema: {
     requiredTopLevelFields: ["outputs", "artifacts", "signals", "summary"];
   };
   requiredOutputs: string[];
   requiredArtifacts?: string[];
   allowedSignals: string[];
+  // Issue #105: Full signal specs for the signal semantics table
+  signalSpecs: SignalSpec[];
   artifactRules: string[];
   stopRequirement: string;
   // Step-specific output schemas (Issue #100)
@@ -216,7 +224,7 @@ const TEMPLATE_PLACEHOLDERS: Record<TemplateName, readonly string[]> = {
   "step-prompt": ["jobId", "stepId", "attempt", "promptSource", "promptId", "promptPath", "promptContent"],
   "step-prompt-fallback": ["jobId", "stepId", "attempt"],
   "output-contract": ["reportPath", "requiredOutputs", "requiredArtifacts", "allowedSignals", "stopRequirement"],
-  "output-contract-lines": ["reportPath", "requiredOutputsLines", "requiredArtifactsLines", "allowedSignalsLines", "artifactRulesLines", "stopRequirement", "outputsSchemaSection", "artifactPolicySection", "signalPolicySection"],
+  "output-contract-lines": ["reportPath", "requiredOutputsLines", "requiredArtifactsLines", "allowedSignalsLines", "artifactRulesLines", "stopRequirement", "outputsSchemaSection", "artifactPolicySection", "signalPolicySection", "signalTableSection", "artifactReferenceSchemaSection"],
   "context-block": ["id", "type", "source", "priority", "freshness", "extraLines", "summary"],
   "permission-boundary": ["modePermissionLine", "contentReadLine", "commandsLine"],
   "allowed-actions-matrix": ["allowedActionsMatrixRows"],
@@ -224,6 +232,8 @@ const TEMPLATE_PLACEHOLDERS: Record<TemplateName, readonly string[]> = {
   "stop-conditions": [],
   "context-use-policy": ["contextMandatorySection", "contextExternalSection", "contextEvidenceSection", "contextOptionalSection"],
   "verification-evidence": ["evidenceTableRows", "reviewClaimsNote"],
+  "signal-table": ["signalTableRows"],
+  "artifact-reference-schema": ["artifactPathExample", "evidenceRefExample", "stepArtifactDir"],
 };
 
 export function renderTemplate(template: string, vars: Record<string, string>, templateName: string): string {
@@ -276,6 +286,8 @@ const TEMPLATE_NAMES = [
   "stop-conditions",
   "context-use-policy",
   "verification-evidence",
+  "signal-table",
+  "artifact-reference-schema",
 ] as const;
 
 type TemplateName = (typeof TEMPLATE_NAMES)[number];
@@ -642,11 +654,24 @@ function buildWorkflowStepPrompt(bundle: ContextBundle): WorkflowStepPrompt {
     };
   }
 
-  const content = renderTemplate(TEMPLATES["step-prompt-fallback"], {
+  // Issue #106: Fail fast when no primary prompt and allow_generic_prompt is not enabled
+  if (bundle.allowGenericPrompt !== true) {
+    throw new PromptBuildError(
+      `Failed to build prompt for job "${bundle.jobId}" step "${bundle.stepId}":` +
+      ` no primary prompt and allow_generic_prompt is not enabled.` +
+      ` Add step.prompt, prompt_ref, or set allow_generic_prompt: true explicitly.`,
+      { details: { jobId: bundle.jobId, stepId: bundle.stepId } },
+    );
+  }
+
+  // Fallback: use generated step context (only when allowGenericPrompt === true)
+  const fallbackContent = renderTemplate(TEMPLATES["step-prompt-fallback"], {
     jobId: bundle.jobId,
     stepId: bundle.stepId,
     attempt: String(bundle.attempt),
   }, "step-prompt-fallback");
+
+  const content = `**[DEBUG MODE]** Generic fallback active — no primary prompt was resolved.\n\n${fallbackContent}`;
 
   return {
     block: {
@@ -822,12 +847,17 @@ function buildOutputContract(bundle: ContextBundle, reportPath: string): OutputC
       content,
     },
     reportPath,
+    runId: bundle.runId,
+    jobId: bundle.jobId,
+    stepId: bundle.stepId,
+    attempt: bundle.attempt,
     reportSchema: {
       requiredTopLevelFields: ["outputs", "artifacts", "signals", "summary"],
     },
     requiredOutputs,
     ...(requiredArtifacts !== undefined ? { requiredArtifacts } : {}),
     allowedSignals,
+    signalSpecs: bundle.signals,
     artifactRules,
     stopRequirement,
     ...(bundle.outputsSchema !== undefined ? { outputsSchema: bundle.outputsSchema } : {}),
@@ -962,6 +992,12 @@ function renderOutputContractLines(output: OutputContract): string[] {
     }
   }
 
+  // Issue #105: Signal semantics table
+  const signalTableSection = renderSignalTableSection(output);
+
+  // Issue #108: Artifact reference schema
+  const artifactReferenceSchemaSection = renderArtifactReferenceSchema(output);
+
   const rendered = renderTemplate(TEMPLATES["output-contract-lines"], {
     reportPath: output.reportPath,
     requiredOutputsLines,
@@ -972,8 +1008,50 @@ function renderOutputContractLines(output: OutputContract): string[] {
     outputsSchemaSection,
     artifactPolicySection,
     signalPolicySection,
+    signalTableSection,
+    artifactReferenceSchemaSection,
   }, "output-contract-lines");
   return [...rendered.split("\n"), ""];
+}
+
+function renderSignalTableSection(output: OutputContract): string {
+  if (output.signalSpecs.length === 0) {
+    return "";
+  }
+
+  // Check if any signal has the extended fields (when_to_emit, required_evidence, engine_effect)
+  const hasExtendedFields = output.signalSpecs.some(
+    (s) => s.when_to_emit !== undefined || s.required_evidence !== undefined || s.engine_effect !== undefined,
+  );
+
+  if (!hasExtendedFields) {
+    // Fallback: no extended fields available, don't render the detailed table
+    return "";
+  }
+
+  const rows = output.signalSpecs.map((signal) => {
+    const id = `\`${signal.id}\``;
+    const whenToEmit = signal.when_to_emit ?? "(not specified)";
+    const requiredEvidence = signal.required_evidence ?? "(not specified)";
+    const engineEffect = signal.engine_effect ?? "(not specified)";
+    // Escape pipe characters in table cells
+    return `| ${id} | ${whenToEmit.replace(/\|/g, "\\|")} | ${requiredEvidence.replace(/\|/g, "\\|")} | ${engineEffect.replace(/\|/g, "\\|")} |`;
+  });
+  const signalTableRows = rows.join("\n");
+
+  return "\n" + renderTemplate(TEMPLATES["signal-table"], { signalTableRows }, "signal-table") + "\n";
+}
+
+function renderArtifactReferenceSchema(output: OutputContract): string {
+  const stepDir = `jobs/${output.jobId}/attempts/${output.attempt}/steps/${output.stepId}`;
+  const artifactPathExample = `${stepDir}/summary.md`;
+  const evidenceRefExample = `artifact://${output.runId}/jobs/<upstreamJob>/attempts/<attempt>/steps/<step>/stdout`;
+
+  return "\n" + renderTemplate(TEMPLATES["artifact-reference-schema"], {
+    artifactPathExample,
+    evidenceRefExample,
+    stepArtifactDir: stepDir,
+  }, "artifact-reference-schema") + "\n";
 }
 
 function normalizeEmbeddedMarkdownHeadings(markdown: string): string {
@@ -1326,7 +1404,7 @@ function bundleToQualityGateContext(bundle: ContextBundle): QualityGateContext {
     stepId: bundle.stepId,
     attempt: bundle.attempt,
     hasPrimaryPrompt: bundle.primaryPrompt !== undefined,
-    allowGenericPrompt: false,
+    allowGenericPrompt: bundle.allowGenericPrompt === true,
     isReadOnly: workspaceMode === "read-only" || !canModifyRepositoryFiles(permissions, workspaceMode),
     hasEditPermissions: permissions["edits"] === "write",
     validArtifactPaths: bundle.artifacts.map((a) => a.path),

@@ -188,6 +188,7 @@ jobs:
     steps:
       - id: analyze
         type: agent
+        allow_generic_prompt: true
         uses: zigma/analyze-skill
 `;
 
@@ -213,12 +214,14 @@ jobs:
     steps:
       - id: lint-step
         type: agent
+        allow_generic_prompt: true
         uses: zigma/lint-skill
   deploy:
     activation: manual
     steps:
       - id: deploy-step
         type: agent
+        allow_generic_prompt: true
         uses: zigma/deploy-skill
 `;
 
@@ -231,6 +234,7 @@ jobs:
     steps:
       - id: plan
         type: agent
+        allow_generic_prompt: true
         uses: zigma/plan-skill
       - id: build
         type: script

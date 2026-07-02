@@ -124,6 +124,8 @@ function checkMissingStepInstructions(
       (line) =>
         line.includes(FALLBACK_PROMPT_TEXT) ||
         line.includes("Current workflow scope") ||
+        line.includes("[DEBUG MODE]") ||
+        line.includes("Generic fallback active") ||
         line.trim().length === 0,
     );
     if (boilerplateLines.length === trimmed.split("\n").length) {
@@ -224,11 +226,7 @@ function checkNoPrimaryPrompt(
   promptText: string,
   context: QualityGateContext,
 ): QualityGateIssue | undefined {
-  if (context.allowGenericPrompt) {
-    return undefined;
-  }
-
-  if (context.hasPrimaryPrompt) {
+  if (context.hasPrimaryPrompt || context.allowGenericPrompt) {
     return undefined;
   }
 

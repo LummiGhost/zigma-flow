@@ -297,6 +297,7 @@ jobs:
     steps:
       - id: analyze
         type: agent
+        allow_generic_prompt: true
   code-map:
     workspace:
       mode: read-only
@@ -305,6 +306,7 @@ jobs:
     steps:
       - id: map
         type: agent
+        allow_generic_prompt: true
   risk-scan:
     workspace:
       mode: read-only
@@ -313,6 +315,7 @@ jobs:
     steps:
       - id: scan
         type: agent
+        allow_generic_prompt: true
   plan:
     needs:
       - code-map
@@ -320,6 +323,7 @@ jobs:
     steps:
       - id: plan
         type: agent
+        allow_generic_prompt: true
   architecture-design:
     activation: manual
     needs:
@@ -327,6 +331,7 @@ jobs:
     steps:
       - id: design
         type: agent
+        allow_generic_prompt: true
   implement:
     needs:
       - plan
@@ -335,6 +340,7 @@ jobs:
     steps:
       - id: implement
         type: agent
+        allow_generic_prompt: true
     retry:
       max_attempts: 3
   static-check:
@@ -345,6 +351,7 @@ jobs:
     steps:
       - id: check
         type: agent
+        allow_generic_prompt: true
   unit-test:
     workspace:
       mode: read-only
@@ -353,6 +360,7 @@ jobs:
     steps:
       - id: test
         type: agent
+        allow_generic_prompt: true
   review:
     needs:
       - static-check
@@ -360,12 +368,14 @@ jobs:
     steps:
       - id: review
         type: agent
+        allow_generic_prompt: true
   summarize:
     needs:
       - review
     steps:
       - id: summarize
         type: agent
+        allow_generic_prompt: true
 `;
 
 // ---------------------------------------------------------------------------

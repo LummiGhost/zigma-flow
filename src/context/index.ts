@@ -95,6 +95,10 @@ export interface SignalSpec {
   description?: string;
   allowed_from: string[];
   schema?: Record<string, unknown>;
+  // Issue #105: Signal Semantics Table — extended fields for structured signal table
+  when_to_emit?: string;
+  required_evidence?: string;
+  engine_effect?: string;
   [key: string]: unknown;
 }
 
@@ -129,6 +133,8 @@ export interface ContextBundle {
   outputsSchema?: Record<string, { type: string }>;
   artifactPolicy?: { required?: string[]; forbidden?: string[] };
   signalPolicy?: { allowed?: string[]; required_evidence?: string[] };
+  // Issue #106: Allow generic prompt fallback when no primary prompt is found
+  allowGenericPrompt?: boolean;
 }
 
 export interface BuildContextOpts {
@@ -798,5 +804,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     repositoryWorkspace,
     ...(bundleVariables !== undefined ? { variables: bundleVariables } : {}),
     ...(bundleContextBlocks !== undefined ? { contextBlocks: bundleContextBlocks } : {}),
+    // Issue #106: Pass allow_generic_prompt from step definition
+    ...(step.allow_generic_prompt !== undefined ? { allowGenericPrompt: step.allow_generic_prompt } : {}),
   };
 }

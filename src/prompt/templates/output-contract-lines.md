@@ -15,12 +15,11 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 
 ### Allowed Signals
 
-{{allowedSignalsLines}}
-
+{{allowedSignalsLines}}{{signalTableSection}}
 ### Artifact Rules
 
 {{artifactRulesLines}}
-{{outputsSchemaSection}}{{artifactPolicySection}}{{signalPolicySection}}
+{{outputsSchemaSection}}{{artifactPolicySection}}{{signalPolicySection}}{{artifactReferenceSchemaSection}}
 ### Report Schema
 
 The file must be valid JSON with exactly these required top-level fields:

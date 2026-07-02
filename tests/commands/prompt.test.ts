@@ -53,6 +53,7 @@ jobs:
     steps:
       - id: draft
         type: agent
+        allow_generic_prompt: true
         with:
           goal: "\${{ inputs.task }}"
 `;

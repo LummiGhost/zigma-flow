@@ -696,6 +696,101 @@ describe("buildAgentPrompt — section rendering", () => {
     expect(out).not.toContain("edits: write");
     expect(out).not.toContain("**edits**");
   });
+
+  // ---------------------------------------------------------------------------
+  // Wave 2: Prompt Engineering Hardening — 4 new sections
+  // ---------------------------------------------------------------------------
+
+  it("renders Allowed Actions Matrix with permission data (#101)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+    expect(out).toContain("Allowed Actions Matrix");
+    expect(out).toMatch(/Action Category.*Permission.*Scope\/Details/);
+    expect(out).toContain("Repository Access");
+    expect(out).toContain("Commands");
+    expect(out).toContain("Signals");
+    expect(out).toContain("State Files");
+    expect(out).toContain("None — Engine owned");
+  });
+
+  it("renders Allowed Actions Matrix with read-only permissions when workspace is read-only (#101)", () => {
+    const out = buildAgentPrompt(
+      makeContextBundle({
+        permissions: { contents: "read", edits: "none", workflow_state: "none", commands: "none" },
+        repositoryWorkspace: { mode: "read-only" },
+      }),
+    );
+    expect(out).toContain("Read-only");
+    expect(out).toContain("Not granted");
+  });
+
+  it("renders Instruction Priority section with 6-level hierarchy (#102)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+    expect(out).toContain("Instruction Priority");
+    expect(out).toContain("Workflow Engine Rules");
+    expect(out).toContain("Stop Conditions");
+    expect(out).toContain("Output Contract");
+    expect(out).toContain("Step Instructions");
+    expect(out).toContain("Context Blocks");
+    expect(out).toContain("Task Prompt");
+  });
+
+  it("renders Stop Conditions section with 4 rules (#102)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+    expect(out).toContain("Stop Conditions");
+    expect(out).toContain("Step Complete");
+    expect(out).toContain("Ambiguous Instructions");
+    expect(out).toContain("Permission Violation");
+    expect(out).toContain("Missing Evidence");
+  });
+
+  it("renders Context Use Policy section with knowledge classification (#103)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+    expect(out).toContain("Context Use Policy");
+    expect(out).toContain("Mandatory -- Read Before Acting");
+    expect(out).toContain("Mandatory -- Reference Externally");
+    expect(out).toContain("Evidence Only");
+    expect(out).toContain("Optional Context");
+    // Required knowledge (readPolicy: "required") appears in Mandatory section
+    expect(out).toContain("code.rules");
+    // Optional knowledge appears in Optional Context section
+    expect(out).toContain("code.layout");
+  });
+
+  it("renders Verification Evidence table when upstream evidence artifacts exist (#104)", () => {
+    const bundle = makeContextBundle({
+      jobId: "review",
+      stepId: "review",
+      artifacts: [
+        {
+          id: "artifact://test/check",
+          kind: "check_result",
+          path: "jobs/check/attempts/1/steps/check/result.json",
+          summary: "All checks passed",
+          size: 100,
+          content_type: "application/json",
+        },
+        {
+          id: "artifact://test/diff",
+          kind: "script_stdout",
+          path: "jobs/implement/attempts/1/steps/diff/stdout.txt",
+          summary: "git diff of changes",
+          size: 200,
+          content_type: "text/plain",
+        },
+      ],
+    });
+    const out = buildAgentPrompt(bundle);
+    expect(out).toContain("Verification Evidence");
+    expect(out).toContain("check_result");
+    expect(out).toContain("script_stdout");
+    // Claims note for review step
+    expect(out).toContain("Claims must reference specific evidence below");
+  });
+
+  it("does not render Verification Evidence section when no upstream evidence artifacts exist (#104)", () => {
+    const out = buildAgentPrompt(makeContextBundle()); // artifacts: []
+    expect(out).not.toContain("Verification Evidence");
+  });
 });
 
 describe("buildAgentPrompt — confinement", () => {
@@ -798,10 +893,57 @@ describe("validatePromptHandoff — quality gate", () => {
 
     const result = validatePromptHandoff(out, bundle);
 
-    expect(result.errors).toEqual([]);
+    // The quality gate (Wave 1) also flags this as an error
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "read_only_write_conflict" }),
+      ]),
+    );
     expect(result.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "read_only_edits_write" }),
+      ]),
+    );
+  });
+
+  // Quality gate integration tests (Wave 1, Issue #107)
+  it("quality gate detects unresolved template markers via validatePromptHandoff", () => {
+    const bundle = makeContextBundle();
+    const out = `${buildAgentPrompt(bundle)}\n\n{{unresolved_var}}`;
+
+    const result = validatePromptHandoff(out, bundle);
+
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "unresolved_template_markers" }),
+      ]),
+    );
+  });
+
+  it("quality gate detects missing step instructions with fallback text", () => {
+    const bundle = makeContextBundle();
+    delete (bundle as unknown as Record<string, unknown>).primaryPrompt;
+    const out = buildAgentPrompt(bundle);
+
+    const result = validatePromptHandoff(out, bundle);
+
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "missing_step_instructions" }),
+      ]),
+    );
+  });
+
+  it("quality gate warns about no-primary-prompt", () => {
+    const bundle = makeContextBundle();
+    delete (bundle as unknown as Record<string, unknown>).primaryPrompt;
+    const out = buildAgentPrompt(bundle);
+
+    const result = validatePromptHandoff(out, bundle);
+
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "no_primary_prompt" }),
       ]),
     );
   });
@@ -1589,7 +1731,9 @@ describe("Template loading and rendering", () => {
 
   it("reports friendly error when template file is missing (Issue #71)", () => {
     for (const name of ["system-prompt", "task-prompt", "step-prompt", "step-prompt-fallback",
-                         "output-contract", "output-contract-lines", "context-block", "permission-boundary"]) {
+                         "output-contract", "output-contract-lines", "context-block", "permission-boundary",
+                         "allowed-actions-matrix", "instruction-priority", "stop-conditions",
+                         "context-use-policy", "verification-evidence"]) {
       const filePath = join(__dirname, "../../src/prompt/templates", `${name}.md`);
       expect(existsSync(filePath), `Missing template: ${name}.md`).toBe(true);
     }
@@ -1826,6 +1970,50 @@ describe("Golden prompt snapshots", () => {
       permissions: { contents: "read", edits: "write", workflow_state: "none" },
       artifacts: [],
       inputs: { task: "Implement inline prompt feature" },
+    });
+    const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
+    expect(prompt).toMatchSnapshot();
+  });
+
+  // Issue #100: Step-specific output schemas
+  it("step with outputs_schema, artifact_policy, and signal_policy (T-SCHEMA-SNAPSHOT-1)", () => {
+    const bundle = makeContextBundle({
+      runId: "20260701-0001",
+      jobId: "implement",
+      stepId: "implement",
+      attempt: 1,
+      runTask: "Implement a feature requiring structured outputs",
+      primaryPrompt: {
+        skill: "code",
+        id: "implement",
+        path: "prompts/implement.md",
+        content: "# Implement Step\n\nImplement the change according to the plan and output structured data.",
+        source: "step.prompt",
+      },
+      capabilities: {
+        skills: [{ alias: "code", skillId: "zigma.code-change", version: "1.0.0" }],
+        knowledge: [],
+        prompts: [{ skill: "code", id: "implement", path: "prompts/implement.md" }],
+        functions: [],
+        tools: [],
+      },
+      signals: [{ id: "needs_review", description: "Request review", allowed_from: ["implement"] }],
+      permissions: { contents: "read", edits: "write", workflow_state: "none" },
+      artifacts: [],
+      inputs: { task: "Implement structured output feature" },
+      // Step-specific output schemas (Issue #100)
+      outputsSchema: {
+        plan: { type: "string" },
+        summary: { type: "artifact" },
+      },
+      artifactPolicy: {
+        required: ["summary.md", "diff.patch"],
+        forbidden: ["large/*"],
+      },
+      signalPolicy: {
+        allowed: ["needs_review"],
+        required_evidence: ["test-results.json"],
+      },
     });
     const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
     expect(prompt).toMatchSnapshot();

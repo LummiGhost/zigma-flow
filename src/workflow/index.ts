@@ -125,6 +125,16 @@ const StepBaseSchema = z.object({
   // passes schema validation and is available for audit/display purposes.
   // AD-P15-002 (AD-out-of-scope for runtime enforcement until v0.3).
   timeout_minutes: z.number().int().positive().optional(),
+  // Step-specific output schemas (Issue #100)
+  outputs_schema: z.record(z.string(), z.object({ type: z.string() })).optional(),
+  artifact_policy: z.object({
+    required: z.array(z.string()).optional(),
+    forbidden: z.array(z.string()).optional(),
+  }).optional(),
+  signal_policy: z.object({
+    allowed: z.array(z.string()).optional(),
+    required_evidence: z.array(z.string()).optional(),
+  }).optional(),
 });
 
 export interface StepDefinition {
@@ -171,6 +181,10 @@ export interface StepDefinition {
   instructions?: string;
   /** DSL-reserved field. Runtime enforcement deferred to v0.3+. */
   timeout_minutes?: number;
+  // Step-specific output schemas (Issue #100)
+  outputs_schema?: Record<string, { type: string }>;
+  artifact_policy?: { required?: string[]; forbidden?: string[] };
+  signal_policy?: { allowed?: string[]; required_evidence?: string[] };
   [key: string]: unknown;
 }
 

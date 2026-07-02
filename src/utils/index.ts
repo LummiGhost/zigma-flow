@@ -13,6 +13,7 @@ export {
   CheckError,
   RouterError,
   PermissionError,
+  PromptBuildError,
   type ZigmaFlowErrorKind,
   type ZigmaFlowErrorOptions
 } from "./errors.js";

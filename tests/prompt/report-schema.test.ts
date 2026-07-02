@@ -209,3 +209,100 @@ describe("buildAgentPrompt — Report Schema with empty signals", () => {
     ).toBeGreaterThanOrEqual(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Step-specific output schemas (Issue #100)
+// ---------------------------------------------------------------------------
+
+describe("buildAgentPrompt — Step-specific output schemas", () => {
+  it("renders Outputs Schema section when outputsSchema is provided", () => {
+    const out = buildAgentPrompt(makeContextBundle({
+      outputsSchema: { plan: { type: "string" }, summary: { type: "artifact" } },
+    }));
+
+    expect(out).toContain("### Outputs Schema");
+    expect(out).toContain("`plan`: `{ type: \"string\" }`");
+    expect(out).toContain("`summary`: `{ type: \"artifact\" }`");
+  });
+
+  it("renders Artifact Policy section when artifactPolicy is provided", () => {
+    const out = buildAgentPrompt(makeContextBundle({
+      artifactPolicy: { required: ["summary.md", "diff.patch"], forbidden: ["large/*"] },
+    }));
+
+    expect(out).toContain("### Artifact Policy");
+    expect(out).toContain("`summary.md`");
+    expect(out).toContain("`diff.patch`");
+    expect(out).toContain("`large/*`");
+    expect(out).toContain("Required:");
+    expect(out).toContain("Forbidden:");
+  });
+
+  it("renders Signal Policy section when signalPolicy is provided", () => {
+    const out = buildAgentPrompt(makeContextBundle({
+      signalPolicy: { allowed: ["needs_review"], required_evidence: ["test-results.json"] },
+    }));
+
+    expect(out).toContain("### Signal Policy");
+    expect(out).toContain("`needs_review`");
+    expect(out).toContain("`test-results.json`");
+    expect(out).toContain("Allowed:");
+    expect(out).toContain("Required Evidence:");
+  });
+
+  it("renders all three new sections together in the output contract", () => {
+    const out = buildAgentPrompt(makeContextBundle({
+      outputsSchema: { result: { type: "string" } },
+      artifactPolicy: { required: ["output.json"] },
+      signalPolicy: { allowed: ["complete"], required_evidence: ["log.txt"] },
+    }));
+
+    // All three headings present
+    expect(out).toContain("### Outputs Schema");
+    expect(out).toContain("### Artifact Policy");
+    expect(out).toContain("### Signal Policy");
+
+    // Content rendered
+    expect(out).toContain("`result`: `{ type: \"string\" }`");
+    expect(out).toContain("`output.json`");
+    expect(out).toContain("`complete`");
+    expect(out).toContain("`log.txt`");
+  });
+
+  it("does not render Outputs Schema when outputsSchema is undefined (backward compat)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+    expect(out).not.toContain("### Outputs Schema");
+  });
+
+  it("does not render Artifact Policy when artifactPolicy is undefined (backward compat)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+    expect(out).not.toContain("### Artifact Policy");
+  });
+
+  it("does not render Signal Policy when signalPolicy is undefined (backward compat)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+    expect(out).not.toContain("### Signal Policy");
+  });
+
+  it("renders only Required in Artifact Policy when forbidden is omitted", () => {
+    const out = buildAgentPrompt(makeContextBundle({
+      artifactPolicy: { required: ["summary.md"] },
+    }));
+
+    expect(out).toContain("### Artifact Policy");
+    expect(out).toContain("Required:");
+    expect(out).toContain("`summary.md`");
+    expect(out).not.toContain("Forbidden:");
+  });
+
+  it("renders only Forbidden in Artifact Policy when required is omitted", () => {
+    const out = buildAgentPrompt(makeContextBundle({
+      artifactPolicy: { forbidden: ["large/*"] },
+    }));
+
+    expect(out).toContain("### Artifact Policy");
+    expect(out).toContain("Forbidden:");
+    expect(out).toContain("`large/*`");
+    expect(out).not.toContain("Required:");
+  });
+});

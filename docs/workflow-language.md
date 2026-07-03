@@ -356,7 +356,7 @@ Each entry under `jobs` is a map with the following fields.
 
 | Attribute | Value |
 |-----------|-------|
-| Type | `string` \| `string[]` |
+| Type | `string[]` |
 | Stability | `stable` |
 | Required | No |
 
@@ -377,7 +377,7 @@ needs:
 
 | Attribute | Value |
 |-----------|-------|
-| Type | `string` \| `string[]` |
+| Type | `string[]` |
 | Stability | `stable` |
 | Required | No |
 
@@ -537,7 +537,7 @@ Every step, regardless of type, supports the following fields.
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | `failed` \| `blocked` | The step/job status after failure. |
-| `fail` | `true` | Shorthand: equivalent to `status: failed`. |
+| `fail` | `"fail"` | Shorthand: equivalent to `status: failed`. |
 
 **Example (common fields):**
 ```yaml
@@ -590,14 +590,13 @@ An Agent Step is the only step type that involves an LLM. The Engine generates a
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `continue` | `true` | Advance to the next step. |
-| `retry_job` | `string` | Retry the named job. |
-| `retry_with` | `map` | Additional inputs for the retried job. |
+| `continue` | `"continue"` | Advance to the next step. |
+| `retry_job` | `string` | Retry the named job. Optionally paired with `retry_with: map` to pass additional context. |
 | `activate_job` | `string` | Activate the named optional job. |
 | `goto_job` | `string` | Jump to the named job. |
-| `goto_step` | `string` | Jump to the named step within the current job. |
-| `fail` | `true` | Mark the step as failed. |
-| `block` | `true` | Block the run. |
+| `goto_step` | `string` | Jump to the named step within the current job. Optionally paired with `goto_with: map` to pass additional context. |
+| `fail` | `"fail"` | Mark the step as failed. |
+| `block` | `"block"` | Block the run. |
 
 #### Execution semantics
 
@@ -642,10 +641,8 @@ An Agent Step is the only step type that involves an LLM. The Engine generates a
       values: [ready, blocked, needs_clarification]
       required: true
   on_return:
-    ready:
-      continue: true
-    blocked:
-      block: true
+    ready: continue
+    blocked: block
     needs_clarification:
       goto_step: gather-context
   outputs:
@@ -670,8 +667,8 @@ A Script Step executes a deterministic shell command or a Skill Pack script. It 
 | `timeout` | `string` | `stable` | No | Duration string (e.g. `300s`, `5m`). |
 | `cwd` | `string` | `stable` | No | Working directory for the command. |
 | `env` | `map<string, string>` | `stable` | No | Environment variables. |
-| `capture.stdout` | `boolean` | `stable` | No | Capture stdout as artifact. Default `true`. |
-| `capture.stderr` | `boolean` | `stable` | No | Capture stderr as artifact. Default `true`. |
+| `capture.stdout` | `boolean` | `planned` | No | Capture stdout as artifact. Not yet in schema or executor. |
+| `capture.stderr` | `boolean` | `planned` | No | Capture stderr as artifact. Not yet in schema or executor. |
 
 **Constraints:**
 - Exactly one of `run` or `uses` must be specified.
@@ -728,8 +725,8 @@ A Check Step evaluates a deterministic condition. It does not invoke an LLM. Che
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `continue` | `true` | Advance to the next step. |
-| `fail` | `true` | Mark the step as failed. |
+| `continue` | `"continue"` | Advance to the next step. |
+| `fail` | `"fail"` | Mark the step as failed. |
 | `retry_job` | `string` | Retry the named job. |
 | `status` | `failed` \| `blocked` | Set the step/job status. |
 
@@ -768,8 +765,7 @@ A Check Step evaluates a deterministic condition. It does not invoke an LLM. Che
   uses: code.checks.forbidden-paths
   with:
     changed_files: "${{ steps.collect-diff.outputs.changed_files }}"
-  on_pass:
-    continue: true
+  on_pass: continue
   on_fail:
     status: failed
 ```
@@ -792,14 +788,13 @@ A Router Step evaluates a value and branches to a flow-control action. It does n
 
 | Action | Type | Description | Stability |
 |--------|------|-------------|-----------|
-| `continue` | `true` | Advance to the next step. | `stable` |
-| `fail` | `true` | Mark the step as failed. | `stable` |
-| `block` | `true` | Block the run. | `stable` |
-| `retry_job` | `string` | Retry the named job. | `stable` |
-| `retry_with` | `map` | Additional inputs to pass to the retried job. | `stable` |
+| `continue` | `"continue"` | Advance to the next step. | `stable` |
+| `fail` | `"fail"` | Mark the step as failed. | `stable` |
+| `block` | `"block"` | Block the run. | `stable` |
+| `retry_job` | `string` | Retry the named job. Optionally paired with `retry_with: map` to pass additional context. | `stable` |
 | `activate_job` | `string` | Activate the named optional job. | `stable` |
 | `goto_job` | `string` | Jump to the named job. | `stable` |
-| `goto_step` | `string` | v0.2: Jump to the named step within the current job. | `experimental` |
+| `goto_step` | `string` | v0.2: Jump to the named step within the current job. Optionally paired with `goto_with: map` to pass additional context. | `experimental` |
 | `status` | `failed` \| `blocked` | Set the job/run status. | `stable` |
 
 #### Execution semantics
@@ -827,8 +822,7 @@ A Router Step evaluates a value and branches to a flow-control action. It does n
   type: router
   switch: "${{ steps.review.outputs.decision }}"
   cases:
-    approved:
-      continue: true
+    approved: continue
     rejected:
       retry_job: implement
       retry_with:
@@ -850,11 +844,12 @@ A Human Gate Step pauses the workflow and waits for explicit human input (approv
 
 | Field | Type | Stability | Required | Description |
 |-------|------|-----------|----------|-------------|
-| `prompt` | `string` | `experimental` | No | Description of what the human needs to decide. |
-| `timeout` | `string` | `experimental` | No | Maximum wait time before the gate auto-resolves. |
-| `on_approve` | `RouterAction` | `experimental` | No | Action on human approval. |
-| `on_reject` | `RouterAction` | `experimental` | No | Action on human rejection. |
-| `on_timeout` | `RouterAction` | `experimental` | No | Action when the timeout expires. |
+| `prompt` | `string` | `experimental` | Yes | Description of what the human needs to decide. |
+| `approvers` | `string[]` | `experimental` | Yes | List of user/role identifiers authorised to respond. |
+| `instructions` | `string` | `experimental` | No | Additional instructions for the approver. |
+| `timeout_minutes` | `number` | `experimental` | No | Maximum wait time in minutes before the gate auto-resolves. |
+
+The following fields are **planned** for a future release and are not yet in the schema or executor: `timeout`, `on_approve`, `on_reject`, `on_timeout`.
 
 #### Execution semantics (planned)
 
@@ -874,11 +869,10 @@ A Human Gate Step pauses the workflow and waits for explicit human input (approv
 - id: approve-deploy
   type: human
   prompt: "Review the implementation summary. Approve to proceed with the change?"
-  timeout: 24h
-  on_approve:
-    continue: true
-  on_reject:
-    status: blocked
+  approvers:
+    - lead-reviewer
+  instructions: "Check that all tests pass and the diff is reasonable."
+  timeout_minutes: 1440
 ```
 
 ### 5.7 Workflow Step (reserved)
@@ -919,22 +913,23 @@ The following reference namespaces are available in `${{ }}` expressions.
 |-----------|--------|-------------|-----------|---------|
 | Inputs | `${{ inputs.<name> }}` | User-provided trigger input. | `stable` | v0.1 |
 | Run | `${{ run.id }}` | The current run identifier. | `stable` | v0.1 |
+| Run | `${{ run.workflow }}` | The workflow name from the workflow definition. | `stable` | v0.1 |
 | Job outputs | `${{ jobs.<id>.outputs.<key> }}` | Output from a completed job. | `stable` | v0.1 |
 | Step outputs | `${{ steps.<id>.outputs.<key> }}` | Output from a step in the same job. | `stable` | v0.2 |
 | Retry inputs | `${{ retry.inputs.<key> }}` | Additional inputs passed during retry. | `stable` | v0.1 |
-| Signals | `${{ signals.<name> }}` | Current signal state (boolean). | `stable` | v0.1 |
-| Signal detail | `${{ signals.<name>.reason }}` | Reason string from a signal. | `stable` | v0.1 |
+| Signals | `${{ signals.<name> }}` | Current signal state (boolean). Not yet implemented in the expression resolver. | `reserved` | v0.1 |
+| Signal detail | `${{ signals.<name>.reason }}` | Reason string from a signal. Not yet implemented in the expression resolver. | `reserved` | v0.1 |
 | Variables | `${{ variables.<name> }}` | Current value of a workflow variable. | `experimental` | v0.2 |
-| Context blocks | `${{ context.<block>.<key> }}` | Current value or metadata from a context block. | `experimental` | v0.2 |
+| Context blocks | `${{ context.<block>.<key> }}` | Context block content is injected into agent prompts via Context Builder, not via `${{ }}` expression substitution. | `reserved` | v0.2 |
 
 ### 6.2 Context block references
 
-The `context` namespace exposes limited metadata and content for context blocks:
+The `context` namespace is **reserved** for future use. Context block content is injected into agent prompts via the Context Builder, not via `${{ }}` expression substitution. The following references are recognised by the parser but not yet resolved at runtime:
 
-| Syntax | Description |
-|--------|-------------|
-| `${{ context.<block>.version }}` | Current version number. |
-| `${{ context.<block>.artifact }}` | Artifact URI of the current version. |
+| Syntax | Description | Status |
+|--------|-------------|--------|
+| `${{ context.<block>.version }}` | Current version number. | `reserved` |
+| `${{ context.<block>.artifact }}` | Artifact URI of the current version. | `reserved` |
 
 Access to context block content is gated by `step.permissions.context_blocks.read`. The Context Builder injects the content into the agent prompt rather than making it available as an inline expression value.
 
@@ -959,7 +954,7 @@ The `if:` field on steps and switch expressions in routers support a restricted 
 ```yaml
 if: "${{ variables.plan_status == 'ready' }}"
 if: "${{ steps.review.outputs.decision == 'approved' && variables.iteration_count != 3 }}"
-if: "${{ !signals.needs_architecture_design }}"
+if: "${{ variables.plan_status == 'blocked' }}"
 ```
 
 ### 6.4 Forbidden constructs

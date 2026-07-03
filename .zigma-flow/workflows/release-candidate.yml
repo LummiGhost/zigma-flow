@@ -1,0 +1,113 @@
+---
+name: release-candidate
+version: 0.3.0
+
+on:
+  manual:
+    inputs:
+      version:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  edits: none
+  commands: none
+  workflow_state: none
+
+jobs:
+  scope-freeze:
+    workspace:
+      mode: read-only
+    steps:
+      - id: document-scope
+        type: agent
+        with:
+          task: "Document the scope of release candidate ${{ inputs.version }}. List all included changes, excluded items, and known risks based on git log and CHANGELOG.md."
+        outputs:
+          scope_summary: {}
+          known_risks: {}
+
+  build:
+    needs:
+      - scope-freeze
+    steps:
+      - id: build
+        type: script
+        run: "pnpm build"
+        on_failure: fail
+
+  typecheck:
+    needs:
+      - build
+    workspace:
+      mode: read-only
+    steps:
+      - id: typecheck
+        type: script
+        run: "pnpm typecheck"
+        on_failure: fail
+
+  unit:
+    needs:
+      - build
+    workspace:
+      mode: read-only
+    steps:
+      - id: unit-tests
+        type: script
+        run: "pnpm test:ci"
+        on_failure: fail
+
+  integration:
+    needs:
+      - unit
+      - typecheck
+    workspace:
+      mode: read-only
+    steps:
+      - id: integration-tests
+        type: script
+        run: "pnpm test:ci --reporter verbose"
+        on_failure: fail
+
+  smoke:
+    needs:
+      - integration
+    workspace:
+      mode: read-only
+    steps:
+      - id: smoke-cli
+        type: check
+        uses: zigma/file-exists
+        with:
+          file: "dist/cli.js"
+        on_fail: fail
+
+  release-notes:
+    needs:
+      - smoke
+    workspace:
+      mode: read-only
+    steps:
+      - id: generate-notes
+        type: agent
+        with:
+          task: "Generate release notes for version ${{ inputs.version }}. List new features, bug fixes, and breaking changes. Every item must reference a commit or PR number."
+        outputs:
+          release_notes: {}
+          verification_log: {}
+
+  tag-readiness-gate:
+    needs:
+      - release-notes
+    workspace:
+      mode: read-only
+    steps:
+      - id: approve-release
+        type: human
+        prompt: "Review release candidate ${{ inputs.version }}. Confirm: (1) all CI stages passed, (2) release notes are complete, (3) no blocking risks. Approve to proceed with tagging."
+        approvers:
+          - LummiGhost
+        instructions: "Review the scope, test results, and release notes before approving. Check for any unresolved risks."
+        timeout_minutes: 1440

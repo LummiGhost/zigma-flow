@@ -1,0 +1,138 @@
+name: design-review
+version: 0.3.0
+
+on:
+  manual:
+    inputs:
+      design_doc:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  edits: none
+  commands: none
+  workflow_state: none
+
+context_blocks:
+  design_context:
+    initial_artifact: null
+    allowed_writers: [context-map.capture-context]
+  alternatives:
+    initial_artifact: null
+    allowed_writers: [alternatives.document-alternatives]
+  risk_assessment:
+    initial_artifact: null
+    allowed_writers: [risk-review.assess-risks]
+
+jobs:
+  intake:
+    workspace:
+      mode: read-only
+    steps:
+      - id: capture
+        type: agent
+        with:
+          task: "${{ inputs.design_doc }}"
+        outputs:
+          design_summary: {}
+
+  context-map:
+    needs:
+      - intake
+    workspace:
+      mode: read-only
+    steps:
+      - id: capture-context
+        type: agent
+        with:
+          task: "Map the design context for: ${{ inputs.design_doc }}. Identify scope, dependencies, and constraints. Write findings to the design_context context block."
+        permissions:
+          context_edit: write
+          context_blocks:
+            write: [design_context]
+
+  alternatives:
+    needs:
+      - context-map
+    workspace:
+      mode: read-only
+    steps:
+      - id: document-alternatives
+        type: agent
+        with:
+          task: "Document alternative approaches for: ${{ inputs.design_doc }}. For each alternative, describe the approach, trade-offs, and feasibility. Write findings to the alternatives context block."
+        permissions:
+          context_edit: write
+          context_blocks:
+            write: [alternatives]
+
+  risk-review:
+    needs:
+      - alternatives
+    workspace:
+      mode: read-only
+    steps:
+      - id: assess-risks
+        type: agent
+        with:
+          task: "Assess risks for: ${{ inputs.design_doc }}. Evaluate technical, operational, and migration risks. Write findings to the risk_assessment context block."
+        permissions:
+          context_edit: write
+          context_blocks:
+            write: [risk_assessment]
+
+  human-gate:
+    needs:
+      - risk-review
+    steps:
+      - id: decide
+        type: human
+        prompt: |
+          Review the design proposal: ${{ inputs.design_doc }}
+
+          Context blocks are available for review:
+          - design_context: project scope, dependencies, and constraints
+          - alternatives: alternative approaches with trade-offs
+          - risk_assessment: technical, operational, and migration risks
+
+          Make your decision on the proposal.
+        approvers:
+          - LummiGhost
+        instructions: |
+          Choose one of the following decisions:
+
+          - approve: The design is sound. Proceed to decision summary.
+          - reject: The design has fundamental issues that cannot be resolved through revision. The workflow will be blocked.
+          - request_changes: The design needs revision. The workflow will return to the alternatives stage for rework.
+        timeout_minutes: 1440
+
+  decision-summary:
+    needs:
+      - human-gate
+    steps:
+      - id: route
+        type: router
+        switch: "${{ jobs.human-gate.outputs.decision }}"
+        cases:
+          approved: continue
+          rejected:
+            status: blocked
+          changes_requested:
+            goto_job: alternatives
+          default:
+            status: blocked
+      - id: summarize
+        type: agent
+        with:
+          task: |
+            Produce a decision summary for the design review of: ${{ inputs.design_doc }}
+
+            Cite the following context blocks in your report:
+            - design_context: scope, dependencies, and constraints
+            - alternatives: approaches considered and their trade-offs
+            - risk_assessment: identified risks and mitigations
+
+            Document the final decision, supporting rationale, and any conditions or follow-up actions.
+        outputs:
+          final_summary: {}

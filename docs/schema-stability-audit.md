@@ -45,7 +45,7 @@ Generated 2026-07-03 against `origin/main` (77a4fe1). Each stable field is liste
 | `jobs.<id>.optional_needs` | `JobSchema` (index.ts ~216) | `code-change.yml` L121 | DAG validation tests | — |
 | `jobs.<id>.activation` | `JobSchema` (index.ts ~218) | `code-change.yml` L103 | `engine/runAll.test.ts` (activation behaviour) | — |
 | `jobs.<id>.retry` | `JobSchema` (index.ts ~220) | `code-change.yml` L123-126 | `engine/retry.test.ts`; `engine/retryJob.test.ts` | — |
-| `jobs.<id>.permissions` | `JobSchema` (index.ts ~222) | not exercised in fixture | no dedicated job-level permissions test | **Gap**: no fixture or test exercises job-level `permissions` override |
+| `jobs.<id>.permissions` | `JobSchema` (index.ts ~222) | not exercised in fixture | T-CTX-PERM-1 through T-CTX-PERM-4 (context.test.ts:1071-1125) | **Gap**: no YAML fixture exercises job-level permissions override. Recommendation: add one in a future task. |
 
 ### Step-level (common)
 
@@ -69,8 +69,8 @@ Generated 2026-07-03 against `origin/main` (77a4fe1). Each stable field is liste
 | `step.run` | `StepBaseSchema` (index.ts ~97) | `code-change.yml` L139 | `script/executor.test.ts`; `script/runner.test.ts` | — |
 | `step.shell` | `StepBaseSchema` (index.ts ~99) | not in main fixture | `script/executor.test.ts` likely covers | — |
 | `step.timeout` | `StepBaseSchema` (index.ts ~100) | not in main fixture | `script/runner.test.ts` likely covers | — |
-| `step.cwd` | `StepBaseSchema` (index.ts ~101) | not in main fixture | no direct cwd test found | **Gap**: no test validates `cwd` field behaviour |
-| `step.env` | `StepBaseSchema` (index.ts ~102) | not in main fixture | no direct env test found | **Gap**: no test validates `env` field behaviour |
+| `step.cwd` | `StepBaseSchema` (index.ts ~101) | not in main fixture | T-RUNNER-4 (runner.test.ts:124) | — |
+| `step.env` | `StepBaseSchema` (index.ts ~102) | not in main fixture | T-RUNNER-5 (runner.test.ts:139) | — |
 
 ### Step-level (check)
 
@@ -104,9 +104,9 @@ The following stable fields have **no fixture coverage** or **no dedicated test*
 
 | # | Field | Status | Recommendation |
 |---|-------|--------|----------------|
-| 1 | `jobs.<id>.permissions` (job-level override) | No fixture, no test | Add a job-level permissions override to a YAML fixture and a schema test that validates the override is parsed correctly |
-| 2 | `step.cwd` (script step) | No direct test | Add a script executor test that validates `cwd` is honoured |
-| 3 | `step.env` (script step) | No direct test | Add a script executor test that validates `env` variables are passed to the subprocess |
+| 1 | `jobs.<id>.permissions` (job-level override) | Tests exist in `tests/context/context.test.ts` (T-CTX-PERM-1 through T-CTX-PERM-4 at lines 1071-1125) but no YAML fixture in `.zigma-flow/workflows/` exercises job-level permissions override. | Add a job-level permissions override to a YAML fixture in a future task. |
+| 2 | `step.cwd` (script step) | Has test — T-RUNNER-4 in `tests/script/runner.test.ts:124` | None — gap was a false positive. |
+| 3 | `step.env` (script step) | Has test — T-RUNNER-5 in `tests/script/runner.test.ts:139` | None — gap was a false positive. |
 | 4 | `step.expose.knowledge` | Not exercise by a dedicated test | Covered indirectly; low risk — same Zod shape as `skills` |
 
 ### Pre-existing test issue (not a gap)

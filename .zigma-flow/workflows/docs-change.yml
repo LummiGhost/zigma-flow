@@ -1,0 +1,113 @@
+name: docs-change
+version: 0.3.0
+
+on:
+  manual:
+    inputs:
+      task:
+        type: string
+        required: true
+
+skills:
+  code:
+    uses: skill://zigma.code-change@1
+
+permissions:
+  contents: read
+  edits: write
+  commands: none
+  workflow_state: none
+
+jobs:
+  scope:
+    workspace:
+      mode: read-only
+    steps:
+      - id: scope
+        type: agent
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          scope: {}
+        expose:
+          skills:
+            - code
+
+  source-map:
+    needs:
+      - scope
+    workspace:
+      mode: read-only
+    steps:
+      - id: map
+        type: agent
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          sources: {}
+        expose:
+          skills:
+            - code
+
+  draft:
+    needs:
+      - source-map
+    workspace:
+      mode: read-only
+    steps:
+      - id: draft
+        type: agent
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          draft: {}
+        expose:
+          skills:
+            - code
+
+  consistency-check:
+    needs:
+      - draft
+    workspace:
+      mode: read-only
+    steps:
+      - id: check
+        type: check
+        uses: zigma/file-exists
+        with:
+          file: "."
+        on_fail: fail
+
+  review:
+    needs:
+      - consistency-check
+    workspace:
+      mode: read-only
+    steps:
+      - id: review
+        type: agent
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          verdict: {}
+          issues: {}
+        expose:
+          skills:
+            - code
+
+  summarize:
+    needs:
+      - review
+    workspace:
+      mode: read-only
+    steps:
+      - id: summarize
+        type: agent
+        prompt: "Summarize the documentation change. Cite evidence from the scope artifact and draft artifact for each key claim."
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          final_summary: {}
+        expose:
+          skills:
+            - code

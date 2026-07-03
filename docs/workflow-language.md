@@ -531,6 +531,7 @@ Every step, regardless of type, supports the following fields.
 | `max_visits` | `integer` | `experimental` | No | v0.2: Maximum number of times this step can be entered (via `goto_step`). Default `3`. |
 | `on_failure` | `map` | `stable` | No | Action when the step fails. |
 | `outputs` | `map<string, string>` | `stable` | No | Mapping from output keys to report/result paths. |
+| `prompt` | `string` | `stable` | No | The primary prompt (Markdown). Used as the step-level instruction for agent and human steps. |
 
 **`on_failure` fields:**
 

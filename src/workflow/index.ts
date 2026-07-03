@@ -351,6 +351,140 @@ export interface WorkflowDefinition {
 }
 
 // ---------------------------------------------------------------------------
+// Expression validation (§6.4 — forbidden constructs: arithmetic, function calls,
+// array/object literals, ternary, template literals, depth > 3)
+// ---------------------------------------------------------------------------
+
+const EXPR_RE = /\$\{\{\s*([\s\S]*?)\s*\}\}/g;
+
+/**
+ * Scan a single string for `${{ }}` expressions and reject forbidden patterns.
+ */
+function checkForbiddenExpressions(value: string, fieldPath: string): void {
+  let match: RegExpExecArray | null;
+  // Reset regex state (global flag carries lastIndex between calls).
+  EXPR_RE.lastIndex = 0;
+  while ((match = EXPR_RE.exec(value)) !== null) {
+    const inner = match[1]!.trim();
+    if (inner.length === 0) continue;
+
+    // Arithmetic operators: +, *, / anywhere; - only when used as operator
+    // (with surrounding whitespace or adjacent to a digit), not inside
+    // hyphenated identifiers like `code-map`.
+    if (/[+*/%]/.test(inner) || /(?:\s-\s|-\d|\d-)/.test(inner)) {
+      throw new ValidationError(
+        `Arithmetic expressions are not supported: ${inner}`,
+        { details: { field: fieldPath, expression: inner } },
+      );
+    }
+
+    // Function call syntax: identifier followed by (
+    if (/\b\w+\s*\(/.test(inner)) {
+      throw new ValidationError(
+        `Function calls are not supported: ${inner}`,
+        { details: { field: fieldPath, expression: inner } },
+      );
+    }
+
+    // Array/object literals: [ or { in expression
+    if (/[\[\{]/.test(inner)) {
+      throw new ValidationError(
+        `Array/object literals are not supported: ${inner}`,
+        { details: { field: fieldPath, expression: inner } },
+      );
+    }
+
+    // Ternary operator: ? followed by a word character
+    if (/\?\s*\w/.test(inner)) {
+      throw new ValidationError(
+        `Ternary expressions are not supported: ${inner}`,
+        { details: { field: fieldPath, expression: inner } },
+      );
+    }
+
+    // Template literals: backtick or ${ interpolation
+    if (/`|\$\{/.test(inner)) {
+      throw new ValidationError(
+        `Template literals are not supported: ${inner}`,
+        { details: { field: fieldPath, expression: inner } },
+      );
+    }
+
+    // Property chain depth: at most 3 dots (4 parts).
+    // "jobs.foo.outputs.bar" = 4 parts = depth 3 → OK.
+    // "inputs.a.b.c.d" = 5 parts = depth 4 → rejected.
+    const parts = inner.split(".");
+    if (parts.length > 4) {
+      throw new ValidationError(
+        `Expression depth exceeds limit of 3: ${inner}`,
+        { details: { field: fieldPath, expression: inner, depth: parts.length - 1 } },
+      );
+    }
+  }
+}
+
+/**
+ * Recursively scan `step.with` values for forbidden expressions.
+ */
+function scanWithValues(
+  value: unknown,
+  path: string,
+): void {
+  if (typeof value === "string") {
+    checkForbiddenExpressions(value, path);
+  } else if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      scanWithValues(value[i], `${path}[${i}]`);
+    }
+  } else if (typeof value === "object" && value !== null) {
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      scanWithValues(val, `${path}.${key}`);
+    }
+  }
+}
+
+/**
+ * Scan all expression-eligible fields in the workflow for forbidden
+ * constructs (§6.4): arithmetic, function calls, depth > 3.
+ */
+function validateExpressions(workflow: WorkflowDefinition): void {
+  // Workflow input defaults (on.manual.inputs.<name>.default)
+  const onManual = workflow.on as { manual?: { inputs?: Record<string, { default?: unknown }> } } | undefined;
+  if (onManual?.manual?.inputs) {
+    for (const [inputName, inputDef] of Object.entries(onManual.manual.inputs)) {
+      if (inputDef.default !== undefined) {
+        scanWithValues(
+          inputDef.default,
+          `on.manual.inputs.${inputName}.default`,
+        );
+      }
+    }
+  }
+
+  // Job steps
+  for (const [jobName, job] of Object.entries(workflow.jobs)) {
+    for (const step of job.steps) {
+      const base = `jobs.${jobName}.steps.${step.id}`;
+
+      if (step.with) {
+        scanWithValues(step.with, `${base}.with`);
+      }
+      if (step.run) {
+        checkForbiddenExpressions(step.run, `${base}.run`);
+      }
+      if (step.if) {
+        checkForbiddenExpressions(step.if, `${base}.if`);
+      }
+      if (step.env) {
+        for (const [envKey, envVal] of Object.entries(step.env)) {
+          checkForbiddenExpressions(envVal, `${base}.env.${envKey}`);
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -576,7 +710,10 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
     }
   }
 
-  // 10. Human step field validation (WF-P15-SCHEMA, AD-P15-002)
+  // 10. Expression validation (§6.4 — forbidden constructs)
+  validateExpressions(wf);
+
+  // 11. Human step field validation (WF-P15-SCHEMA, AD-P15-002)
   for (const [jobName, job] of Object.entries(wf.jobs)) {
     for (const step of job.steps) {
       if (step.type !== "human") continue;

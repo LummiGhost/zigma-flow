@@ -22,7 +22,7 @@ Capability and permission boundaries:
 - Repository contents may be read for this step.
 - Writing report.json to the canonical runtime artifact path is allowed and required.
 
-### Allowed Actions Matrix
+##### Allowed Actions Matrix
 
 | Action Category | Permission | Scope/Details |
 |---|---|---|
@@ -32,7 +32,7 @@ Capability and permission boundaries:
 | State Files | None — Engine owned | State files cannot be modified by the agent |
 
 
-### Instruction Priority
+##### Instruction Priority
 
 Follow this priority hierarchy when executing. Higher-priority instructions override lower ones:
 
@@ -44,7 +44,7 @@ Follow this priority hierarchy when executing. Higher-priority instructions over
 6. **Task Prompt** — The overall run task (in the Task Prompt section). Most general; lower priority than step-specific instructions.
 
 
-### Stop Conditions
+##### Stop Conditions
 
 The following conditions must stop execution immediately:
 
@@ -54,24 +54,24 @@ The following conditions must stop execution immediately:
 4. **Missing Evidence**: If asked to verify or review but no evidence is provided, note the missing evidence and STOP.
 
 
-### Context Use Policy
+##### Context Use Policy
 
 Context items are classified into the following categories:
 
-#### Mandatory -- Read Before Acting
+###### Mandatory -- Read Before Acting
 
 - Primary prompt \`(inline)\`: rendered inline in the Workflow Step Prompt section (read before acting)
 - Knowledge \`code.coding-guidelines\`: read before starting this step [read from: \`knowledge/coding-guidelines.md\`]
 
-#### Mandatory -- Reference Externally
+###### Mandatory -- Reference Externally
 
 (none)
 
-#### Evidence Only
+###### Evidence Only
 
 (none)
 
-#### Optional Context
+###### Optional Context
 
 (none)
 
@@ -236,7 +236,7 @@ Capability and permission boundaries:
 - Repository contents may be read for this step.
 - Writing report.json to the canonical runtime artifact path is allowed and required.
 
-### Allowed Actions Matrix
+##### Allowed Actions Matrix
 
 | Action Category | Permission | Scope/Details |
 |---|---|---|
@@ -246,7 +246,7 @@ Capability and permission boundaries:
 | State Files | None — Engine owned | State files cannot be modified by the agent |
 
 
-### Instruction Priority
+##### Instruction Priority
 
 Follow this priority hierarchy when executing. Higher-priority instructions override lower ones:
 
@@ -258,7 +258,7 @@ Follow this priority hierarchy when executing. Higher-priority instructions over
 6. **Task Prompt** — The overall run task (in the Task Prompt section). Most general; lower priority than step-specific instructions.
 
 
-### Stop Conditions
+##### Stop Conditions
 
 The following conditions must stop execution immediately:
 
@@ -268,23 +268,23 @@ The following conditions must stop execution immediately:
 4. **Missing Evidence**: If asked to verify or review but no evidence is provided, note the missing evidence and STOP.
 
 
-### Context Use Policy
+##### Context Use Policy
 
 Context items are classified into the following categories:
 
-#### Mandatory -- Read Before Acting
+###### Mandatory -- Read Before Acting
 
 (none)
 
-#### Mandatory -- Reference Externally
+###### Mandatory -- Reference Externally
 
 (none)
 
-#### Evidence Only
+###### Evidence Only
 
 (none)
 
-#### Optional Context
+###### Optional Context
 
 (none)
 
@@ -411,7 +411,7 @@ Capability and permission boundaries:
 - Repository contents may be read for this step.
 - Writing report.json to the canonical runtime artifact path is allowed and required.
 
-### Allowed Actions Matrix
+##### Allowed Actions Matrix
 
 | Action Category | Permission | Scope/Details |
 |---|---|---|
@@ -421,7 +421,7 @@ Capability and permission boundaries:
 | State Files | None — Engine owned | State files cannot be modified by the agent |
 
 
-### Instruction Priority
+##### Instruction Priority
 
 Follow this priority hierarchy when executing. Higher-priority instructions override lower ones:
 
@@ -433,7 +433,7 @@ Follow this priority hierarchy when executing. Higher-priority instructions over
 6. **Task Prompt** — The overall run task (in the Task Prompt section). Most general; lower priority than step-specific instructions.
 
 
-### Stop Conditions
+##### Stop Conditions
 
 The following conditions must stop execution immediately:
 
@@ -443,25 +443,25 @@ The following conditions must stop execution immediately:
 4. **Missing Evidence**: If asked to verify or review but no evidence is provided, note the missing evidence and STOP.
 
 
-### Context Use Policy
+##### Context Use Policy
 
 Context items are classified into the following categories:
 
-#### Mandatory -- Read Before Acting
+###### Mandatory -- Read Before Acting
 
 - Primary prompt \`plan\`: rendered inline in the Workflow Step Prompt section (read before acting)
 - Knowledge \`code.coding-guidelines\`: read before starting this step [read from: \`knowledge/coding-guidelines.md\`]
 - Knowledge \`code.workflow-guide\`: report schema and workflow DAG reference [read from: \`knowledge/workflow-guide.md\`]
 
-#### Mandatory -- Reference Externally
+###### Mandatory -- Reference Externally
 
 (none)
 
-#### Evidence Only
+###### Evidence Only
 
 (none)
 
-#### Optional Context
+###### Optional Context
 
 (none)
 
@@ -621,7 +621,7 @@ Capability and permission boundaries:
 - Commands are not granted for this step.
 - Writing report.json to the canonical runtime artifact path is allowed and required.
 
-### Allowed Actions Matrix
+##### Allowed Actions Matrix
 
 | Action Category | Permission | Scope/Details |
 |---|---|---|
@@ -631,7 +631,7 @@ Capability and permission boundaries:
 | State Files | None — Engine owned | State files cannot be modified by the agent |
 
 
-### Instruction Priority
+##### Instruction Priority
 
 Follow this priority hierarchy when executing. Higher-priority instructions override lower ones:
 
@@ -643,7 +643,7 @@ Follow this priority hierarchy when executing. Higher-priority instructions over
 6. **Task Prompt** — The overall run task (in the Task Prompt section). Most general; lower priority than step-specific instructions.
 
 
-### Stop Conditions
+##### Stop Conditions
 
 The following conditions must stop execution immediately:
 
@@ -653,31 +653,31 @@ The following conditions must stop execution immediately:
 4. **Missing Evidence**: If asked to verify or review but no evidence is provided, note the missing evidence and STOP.
 
 
-### Context Use Policy
+##### Context Use Policy
 
 Context items are classified into the following categories:
 
-#### Mandatory -- Read Before Acting
+###### Mandatory -- Read Before Acting
 
 - Primary prompt \`review\`: rendered inline in the Workflow Step Prompt section (read before acting)
 - Knowledge \`code.coding-guidelines\`: read before starting this step [read from: \`knowledge/coding-guidelines.md\`]
 
-#### Mandatory -- Reference Externally
+###### Mandatory -- Reference Externally
 
 (none)
 
-#### Evidence Only
+###### Evidence Only
 
 - \`script_stdout\` from \`jobs/static-check/attempts/1/steps/check/stdout.txt\`: Typecheck output
 - \`script_stdout\` from \`jobs/unit-test/attempts/1/steps/test/stdout.txt\`: Test run output: 423 tests passed
 - \`script_stdout\` from \`jobs/implement/attempts/1/steps/collect-diff/stdout.txt\`: Git diff of changes
 
-#### Optional Context
+###### Optional Context
 
 (none)
 
 
-### Verification Evidence
+##### Verification Evidence
 
 | Artifact Kind | Source | Summary | Status |
 |---|---|---|---|
@@ -891,7 +891,7 @@ Capability and permission boundaries:
 - Repository contents may be read for this step.
 - Writing report.json to the canonical runtime artifact path is allowed and required.
 
-### Allowed Actions Matrix
+##### Allowed Actions Matrix
 
 | Action Category | Permission | Scope/Details |
 |---|---|---|
@@ -901,7 +901,7 @@ Capability and permission boundaries:
 | State Files | None — Engine owned | State files cannot be modified by the agent |
 
 
-### Instruction Priority
+##### Instruction Priority
 
 Follow this priority hierarchy when executing. Higher-priority instructions override lower ones:
 
@@ -913,7 +913,7 @@ Follow this priority hierarchy when executing. Higher-priority instructions over
 6. **Task Prompt** — The overall run task (in the Task Prompt section). Most general; lower priority than step-specific instructions.
 
 
-### Stop Conditions
+##### Stop Conditions
 
 The following conditions must stop execution immediately:
 
@@ -923,23 +923,23 @@ The following conditions must stop execution immediately:
 4. **Missing Evidence**: If asked to verify or review but no evidence is provided, note the missing evidence and STOP.
 
 
-### Context Use Policy
+##### Context Use Policy
 
 Context items are classified into the following categories:
 
-#### Mandatory -- Read Before Acting
+###### Mandatory -- Read Before Acting
 
 - Primary prompt \`implement\`: rendered inline in the Workflow Step Prompt section (read before acting)
 
-#### Mandatory -- Reference Externally
+###### Mandatory -- Reference Externally
 
 (none)
 
-#### Evidence Only
+###### Evidence Only
 
 (none)
 
-#### Optional Context
+###### Optional Context
 
 (none)
 
@@ -1101,7 +1101,7 @@ Capability and permission boundaries:
 - Commands are not granted for this step.
 - Writing report.json to the canonical runtime artifact path is allowed and required.
 
-### Allowed Actions Matrix
+##### Allowed Actions Matrix
 
 | Action Category | Permission | Scope/Details |
 |---|---|---|
@@ -1111,7 +1111,7 @@ Capability and permission boundaries:
 | State Files | None — Engine owned | State files cannot be modified by the agent |
 
 
-### Instruction Priority
+##### Instruction Priority
 
 Follow this priority hierarchy when executing. Higher-priority instructions override lower ones:
 
@@ -1123,7 +1123,7 @@ Follow this priority hierarchy when executing. Higher-priority instructions over
 6. **Task Prompt** — The overall run task (in the Task Prompt section). Most general; lower priority than step-specific instructions.
 
 
-### Stop Conditions
+##### Stop Conditions
 
 The following conditions must stop execution immediately:
 
@@ -1133,28 +1133,28 @@ The following conditions must stop execution immediately:
 4. **Missing Evidence**: If asked to verify or review but no evidence is provided, note the missing evidence and STOP.
 
 
-### Context Use Policy
+##### Context Use Policy
 
 Context items are classified into the following categories:
 
-#### Mandatory -- Read Before Acting
+###### Mandatory -- Read Before Acting
 
 - Primary prompt \`implement\`: rendered inline in the Workflow Step Prompt section (read before acting)
 
-#### Mandatory -- Reference Externally
+###### Mandatory -- Reference Externally
 
 (none)
 
-#### Evidence Only
+###### Evidence Only
 
 - \`script_stdout\` from \`jobs/implement/attempts/1/steps/collect-diff/stdout.txt\`: git diff output
 
-#### Optional Context
+###### Optional Context
 
 - Function \`code.implement-by-plan\`: Implement code by plan
 
 
-### Verification Evidence
+##### Verification Evidence
 
 | Artifact Kind | Source | Summary | Status |
 |---|---|---|---|

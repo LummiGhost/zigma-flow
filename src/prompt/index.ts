@@ -1056,6 +1056,7 @@ function renderArtifactReferenceSchema(output: OutputContract): string {
 
 function normalizeEmbeddedMarkdownHeadings(markdown: string): string {
   return markdown
+    .replace(/\r\n/g, "\n")
     .split("\n")
     .map((line) => {
       const match = /^(#{1,6})(\s+.+)$/.exec(line);

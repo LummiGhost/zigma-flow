@@ -2,12 +2,11 @@
 
 ## Stability Levels
 
-Zigma Flow classifies every field in the Workflow Language Specification (`docs/workflow-language.md`) with one of four stability labels:
+Zigma Flow classifies every field in the Workflow Language Specification (`docs/workflow-language.md`) with one of three stability labels:
 
 - **stable**: Fields won't be removed without a major version bump and deprecation period. Stable fields are fully supported, tested, and covered by the backward compatibility guarantee.
 - **experimental**: Fields may change with a minor version bump; no deprecation period is guaranteed. Experimental fields are functional but their schema, semantics, or both may evolve.
 - **reserved**: Recognised by the parser but not yet executable. Reserved fields and step types pass schema validation but produce a warning at runtime. They may be assigned any semantics in future versions without a breaking-change process.
-- **deprecated**: Will be removed in the next major version. Deprecated fields remain functional during the deprecation window but emit a warning.
 
 These labels appear on every field in `docs/workflow-language.md` and are reflected in `@stability` annotations in the Zod schema (`src/workflow/index.ts`).
 
@@ -17,9 +16,11 @@ When a stable field requires a breaking change, the following process must be fo
 
 1. Announce the breaking change in `CHANGELOG.md` with the planned removal version.
 2. Add `@deprecated` annotation to the Zod schema field in `src/workflow/index.ts`.
-3. Mark the field as `deprecated` in `docs/workflow-language.md`, noting the removal version.
+3. Mark the field as deprecated in `docs/workflow-language.md`, noting the removal version.
 4. Keep the field functional for at least one minor version after deprecation.
 5. Remove in the next major version.
+
+"Deprecated" is a transitional process state, not a formal stability level in the language spec. The three published stability levels remain stable, experimental, and reserved. A deprecated field retains its original stability label until removal; the deprecation annotation signals the intent to remove without adding a fourth label.
 
 This process ensures workflow authors have time to migrate before stable fields are removed.
 
@@ -40,6 +41,8 @@ This guarantee applies to **stable** fields. Experimental fields may change in m
 ## v0.2 Compatibility Verification
 
 The v0.2 canonical workflow (`code-change.yml`) was validated against the v0.3 schema on 2026-07-03. Every field in the workflow is defined and accepted by the v0.3 Zod schema in `src/workflow/index.ts`. The workflow test suite (`tests/workflow/workflow.test.ts`, T-WF-1) confirms that the canonical workflow passes validation without errors.
+
+Representative check using the canonical v0.2 workflow (`code-change.yml`). All workflows following the v0.2 DSL are expected to be compatible.
 
 | Validation step | Result |
 |-----------------|--------|

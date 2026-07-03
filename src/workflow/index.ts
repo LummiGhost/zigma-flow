@@ -17,13 +17,19 @@ import { FilesystemError, ValidationError, WorkflowError } from "../utils/index.
 // RouterAction schema
 // ---------------------------------------------------------------------------
 
+/** @stability stable — "continue", "fail", "block" literal actions */
 const RouterActionLiteralSchema = z.enum(["continue", "fail", "block"]);
 
 const RouterActionObjectSchema = z.union([
+  /** @stability stable */
   z.object({ retry_job: z.string(), retry_with: z.record(z.string(), z.string()).optional() }),
+  /** @stability stable */
   z.object({ activate_job: z.string() }),
+  /** @stability stable */
   z.object({ goto_job: z.string() }),
+  /** @stability stable */
   z.object({ status: z.enum(["blocked", "failed"]) }),
+  /** @stability experimental */
   z.object({ goto_step: z.string(), goto_with: z.record(z.string(), z.string()).optional() }),
 ]);
 
@@ -44,9 +50,13 @@ export type RouterAction =
 // ---------------------------------------------------------------------------
 
 const SignalDeclarationSchema = z.object({
+  /** @stability stable */
   severity: z.string().optional(),
+  /** @stability stable */
   priority: z.number().optional(),
+  /** @stability stable */
   allowed_from: z.array(z.string()).optional(),
+  /** @stability stable */
   action: RouterActionSchema.optional(),
 }).passthrough();
 
@@ -63,79 +73,137 @@ export interface SignalDeclaration {
 // ---------------------------------------------------------------------------
 
 const StepBaseSchema = z.object({
+  /** @stability stable */
   id: z.string(),
+  /**
+   * @stability stable — `agent`, `script`, `check`, `router`, `human`
+   * @stability reserved — `workflow` (recognised but not executed by the current runtime)
+   */
   type: z.enum(["agent", "script", "check", "router", "workflow", "human"]),
+  /** @stability stable */
   uses: z.string().optional(),
+  /** @stability stable */
   prompt: z.string().optional(),
+  /** @stability stable */
   expose: z
     .object({
+      /** @stability stable */
       skills: z.array(z.string()).optional(),
+      /** @stability stable */
       knowledge: z.array(z.string()).optional(),
     })
     .passthrough()
     .optional(),
+  /** @stability stable */
   with: z.record(z.string(), z.unknown()).optional(),
+  /** @stability stable */
   outputs: z.record(z.string(), z.unknown()).optional(),
+  /** @stability stable */
   switch: z.string().optional(),
+  /** @stability stable */
   cases: z.record(z.string(), RouterActionSchema).optional(),
   // Script step fields (D2 — WF-P6-SCRIPT)
+  /** @stability stable */
   run: z.string().optional(),
+  /** @stability stable */
   shell: z.string().optional(),
+  /** @stability stable */
   timeout: z.string().optional(),
+  /** @stability stable */
   cwd: z.string().optional(),
+  /** @stability stable */
   env: z.record(z.string(), z.string()).optional(),
+  /** @stability stable */
   on_failure: RouterActionSchema.optional(),
   // Check step fields (D2 — WF-P7-CHECK)
+  /** @stability stable */
   on_pass: RouterActionSchema.optional(),
+  /** @stability stable */
   on_fail: RouterActionSchema.optional(),
   // Artifact policy
+  /** @stability experimental — not yet in published language spec */
   required_artifacts: z.array(z.string()).optional(),
   // Step Structured Return Status (WF-P13-RETURNS)
+  /** @stability experimental */
   returns: z.object({
     status: z.object({
+      /** @stability experimental */
       values: z.array(z.string()).min(1),
+      /** @stability experimental */
       required: z.boolean().optional(),
     }),
   }).optional(),
+  /** @stability experimental */
   on_return: z.record(z.string(), RouterActionSchema).optional(),
   // Flow control (WF-P13-FLOW)
+  /** @stability experimental */
   if: z.string().min(1).optional(),
+  /** @stability experimental */
   max_visits: z.number().int().positive().optional(),
   // Permissions (WF-P13-VARIABLES)
+  /**
+   * @stability stable — top-level permissions (contents, edits, commands, workflow_state)
+   * @stability experimental — sub-fields: variables, context_edit, context_blocks
+   */
   permissions: z.object({
+    /** @stability stable */
     contents: z.string().optional(),
+    /** @stability stable */
     edits: z.string().optional(),
+    /** @stability stable */
     commands: z.string().optional(),
+    /** @stability stable */
     workflow_state: z.string().optional(),
+    /** @stability experimental */
     variables: z.object({
+      /** @stability experimental */
       read: z.array(z.string()).optional(),
+      /** @stability experimental */
       write: z.array(z.string()).optional(),
     }).optional(),
+    /** @stability experimental */
     context_edit: z.enum(["none", "read", "write"]).optional(),
+    /** @stability experimental */
     context_blocks: z.object({
+      /** @stability experimental */
       read: z.array(z.string()).optional(),
+      /** @stability experimental */
       write: z.array(z.string()).optional(),
     }).optional(),
   }).passthrough().optional(),
   // Human step fields (WF-P15-SCHEMA)
+  /** @stability experimental */
   approvers: z.array(z.string()).optional(),
+  /** @stability experimental */
   instructions: z.string().optional(),
-  // DSL field reserved for future runtime enforcement (v0.3+). At v0.2.2 the
-  // engine does NOT enforce the timeout; this entry only ensures the field
-  // passes schema validation and is available for audit/display purposes.
-  // AD-P15-002 (AD-out-of-scope for runtime enforcement until v0.3).
+  /**
+   * @stability experimental
+   *
+   * DSL field reserved for future runtime enforcement (v0.3+). At v0.2.2 the
+   * engine does NOT enforce the timeout; this entry only ensures the field
+   * passes schema validation and is available for audit/display purposes.
+   * AD-P15-002 (AD-out-of-scope for runtime enforcement until v0.3).
+   */
   timeout_minutes: z.number().int().positive().optional(),
   // Step-specific output schemas (Issue #100)
+  /** @stability experimental — not yet in published language spec */
   outputs_schema: z.record(z.string(), z.object({ type: z.string() })).optional(),
+  /** @stability experimental — not yet in published language spec */
   artifact_policy: z.object({
+    /** @stability experimental */
     required: z.array(z.string()).optional(),
+    /** @stability experimental */
     forbidden: z.array(z.string()).optional(),
   }).optional(),
+  /** @stability experimental — not yet in published language spec */
   signal_policy: z.object({
+    /** @stability experimental */
     allowed: z.array(z.string()).optional(),
+    /** @stability experimental */
     required_evidence: z.array(z.string()).optional(),
   }).optional(),
   // Issue #106: Allow generic prompt fallback when no primary prompt is found
+  /** @stability experimental — not yet in published language spec */
   allow_generic_prompt: z.boolean().optional(),
 });
 
@@ -197,12 +265,19 @@ export interface StepDefinition {
 // ---------------------------------------------------------------------------
 
 const JobSchema = z.object({
+  /** @stability stable */
   steps: z.array(StepBaseSchema),
+  /** @stability stable */
   workspace: z.record(z.string(), z.unknown()).optional(),
+  /** @stability stable */
   needs: z.array(z.string()).optional(),
+  /** @stability stable */
   optional_needs: z.array(z.string()).optional(),
+  /** @stability stable */
   activation: z.string().optional(),
+  /** @stability stable */
   retry: z.record(z.string(), z.unknown()).optional(),
+  /** @stability stable */
   permissions: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -221,22 +296,37 @@ export interface JobDefinition {
 // ---------------------------------------------------------------------------
 
 const WorkflowSchema = z.object({
+  /** @stability stable */
   name: z.string(),
+  /** @stability stable */
   version: z.string(),
+  /** @stability stable */
   on: z.record(z.string(), z.unknown()).optional(),
+  /** @stability stable */
   skills: z.record(z.string(), z.unknown()).optional(),
+  /** @stability stable */
   permissions: z.record(z.string(), z.unknown()).optional(),
+  /** @stability stable */
   signals: z.record(z.string(), SignalDeclarationSchema).optional(),
+  /** @stability experimental */
   variables: z.record(z.string(), z.object({
+    /** @stability experimental */
     type: z.enum(["string", "number", "boolean", "array", "object"]),
+    /** @stability experimental */
     initial: z.unknown().optional(),
+    /** @stability experimental */
     enum: z.array(z.string()).optional(),
+    /** @stability experimental */
     allowed_writers: z.array(z.string()),
   })).optional(),
+  /** @stability experimental */
   context_blocks: z.record(z.string(), z.object({
+    /** @stability experimental */
     initial_artifact: z.string().nullable().optional(),
+    /** @stability experimental */
     allowed_writers: z.array(z.string()),
   })).optional(),
+  /** @stability stable */
   jobs: z.record(z.string(), JobSchema),
 });
 

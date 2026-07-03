@@ -1,0 +1,176 @@
+name: bugfix
+version: 0.3.0
+
+on:
+  manual:
+    inputs:
+      bug_report:
+        type: string
+        required: true
+      affected_component:
+        type: string
+        required: false
+
+skills:
+  code:
+    uses: skill://zigma.code-change@1
+
+permissions:
+  contents: read
+  edits: write
+  commands: none
+  workflow_state: none
+
+signals:
+  review_rejected:
+    severity: high
+    priority: 100
+    allowed_from:
+      - review
+    action:
+      retry_job: implement
+
+jobs:
+  intake:
+    workspace:
+      mode: read-only
+    steps:
+      - id: analyze
+        type: agent
+        with:
+          task: "${{ inputs.bug_report }}"
+        outputs:
+          bug_summary: {}
+          affected_files: {}
+        expose:
+          skills:
+            - code
+
+  reproduce:
+    needs:
+      - intake
+    workspace:
+      mode: read-only
+    steps:
+      - id: reproduce
+        type: agent
+        with:
+          task: "Reproduce the bug described in: ${{ inputs.bug_report }}. Document the exact steps and conditions that trigger the bug."
+        outputs:
+          reproduce_artifact: {}
+          is_reproducible: {}
+        expose:
+          skills:
+            - code
+
+  diagnose:
+    needs:
+      - reproduce
+    workspace:
+      mode: read-only
+    steps:
+      - id: diagnose
+        type: agent
+        with:
+          task: "Diagnose the root cause of the bug. For EACH statement in your analysis, classify it as: OBSERVED EVIDENCE (directly verified), INFERENCE (logically derived from evidence), or UNVERIFIED ASSUMPTION (not yet confirmed). Bug: ${{ inputs.bug_report }}"
+        outputs:
+          root_cause: {}
+          evidence_map: {}
+        expose:
+          skills:
+            - code
+
+  plan:
+    needs:
+      - diagnose
+    workspace:
+      mode: read-only
+    steps:
+      - id: plan
+        type: agent
+        with:
+          task: "${{ inputs.bug_report }}"
+        outputs:
+          fix_plan: {}
+          risk_assessment: {}
+        expose:
+          skills:
+            - code
+
+  implement:
+    needs:
+      - plan
+    retry:
+      max_attempts: 3
+      on_exceeded:
+        status: failed
+    steps:
+      - id: implement
+        type: agent
+        with:
+          task: "${{ inputs.bug_report }}"
+        outputs:
+          summary: {}
+          files_changed: {}
+        expose:
+          skills:
+            - code
+      - id: collect-diff
+        type: script
+        run: "git diff HEAD"
+        on_failure: fail
+
+  regression-test:
+    needs:
+      - implement
+    workspace:
+      mode: read-only
+    steps:
+      - id: run-tests
+        type: script
+        run: "pnpm test:ci"
+        on_failure: fail
+      - id: verify-fix
+        type: agent
+        with:
+          task: "Verify that the bug is fixed and write a regression test verification report. The test output is in the previous script step artifact."
+        outputs:
+          regression_test_artifact: {}
+          fix_verified: {}
+        expose:
+          skills:
+            - code
+
+  review:
+    needs:
+      - regression-test
+    workspace:
+      mode: read-only
+    steps:
+      - id: review
+        type: agent
+        with:
+          task: "${{ inputs.bug_report }}"
+        outputs:
+          verdict: {}
+          issues: {}
+        expose:
+          skills:
+            - code
+
+  summarize:
+    needs:
+      - review
+    workspace:
+      mode: read-only
+    steps:
+      - id: summarize
+        type: agent
+        with:
+          task: "Summarize the bug fix. Cite evidence from the reproduce_artifact and regression_test_artifact. Every factual claim must reference its source artifact."
+        outputs:
+          final_summary: {}
+          remaining_risks: {}
+        expose:
+          skills:
+            - code

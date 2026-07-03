@@ -113,13 +113,15 @@ jobs:
     steps:
       - id: route
         type: router
-        switch: "${{ human-gate.decide.decision }}"
+        switch: "${{ jobs.human-gate.outputs.decision }}"
         cases:
           approved: continue
           rejected:
             status: blocked
           changes_requested:
             goto_job: alternatives
+          default:
+            status: blocked
       - id: summarize
         type: agent
         with:

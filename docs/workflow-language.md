@@ -26,6 +26,8 @@ Each field carries one of three stability labels:
 | `experimental` | Supported but the schema, semantics, or both may change in a future minor release. |
 | `reserved` | Recognised by the parser but not executed by the current runtime. Using a reserved field or type produces a validation warning; its content must not affect run behaviour. |
 
+> **Note on experimental fields:** Fields marked as `experimental` may change or be removed in any minor version release without a deprecation period. Avoid depending on experimental field behavior in production workflows.
+
 ---
 
 ## 2. Table of Contents
@@ -204,11 +206,11 @@ Default permissions for all steps in the workflow. Individual jobs and steps can
 | `edits` | `write` \| `none` | `stable` | Repository file write access. |
 | `commands` | `limited` \| `none` | `stable` | Shell command execution. |
 | `workflow_state` | `none` | `stable` | Always `none` at workflow level; agents must never modify `state.json`. |
-| `variables.read` | `string[]` | `experimental` | v0.2: whitelist of variable names this step may read. |
-| `variables.write` | `string[]` | `experimental` | v0.2: whitelist of variable names this step may write via `context_patches`. |
-| `context_edit` | `none` \| `read` \| `write` | `experimental` | v0.2: whether `context_patches` in the agent report are accepted. |
-| `context_blocks.read` | `string[]` | `experimental` | v0.2: whitelist of context block IDs this step may read. |
-| `context_blocks.write` | `string[]` | `experimental` | v0.2: whitelist of context block IDs this step may write via `context_patches`. |
+| `variables.read` | `string[]` | `experimental ⚠` | v0.2: whitelist of variable names this step may read. |
+| `variables.write` | `string[]` | `experimental ⚠` | v0.2: whitelist of variable names this step may write via `context_patches`. |
+| `context_edit` | `none` \| `read` \| `write` | `experimental ⚠` | v0.2: whether `context_patches` in the agent report are accepted. |
+| `context_blocks.read` | `string[]` | `experimental ⚠` | v0.2: whitelist of context block IDs this step may read. |
+| `context_blocks.write` | `string[]` | `experimental ⚠` | v0.2: whitelist of context block IDs this step may write via `context_patches`. |
 
 **Constraints:**
 - `variables.write` entries must each appear in the corresponding `variables.<name>.allowed_writers`.
@@ -223,6 +225,8 @@ permissions:
   commands: none
   workflow_state: none
 ```
+
+> ⚠ Experimental fields may change in any minor version release.
 
 ### 3.6 `signals`
 
@@ -279,7 +283,7 @@ signals:
 | Attribute | Value |
 |-----------|-------|
 | Type | `map<string, VariableDef>` |
-| Stability | `experimental` |
+| Stability | `experimental ⚠` |
 | Required | No |
 
 v0.2: Workflow-scoped variables that serve as a data layer separate from the state machine. Variables can be read by steps (via `${{ variables.<name> }}`) and written by agents (via `report.context_patches`), but only through Engine-validated entries.
@@ -288,10 +292,10 @@ v0.2: Workflow-scoped variables that serve as a data layer separate from the sta
 
 | Field | Type | Stability | Required | Description |
 |-------|------|-----------|----------|-------------|
-| `type` | `string` \| `number` \| `boolean` \| `array` \| `object` | `experimental` | Yes | The variable's type. |
-| `initial` | `any` | `experimental` | Yes | Initial value set at run creation. |
-| `enum` | `string[]` | `experimental` | No | Allowed values (only for `type: string`). |
-| `allowed_writers` | `string[]` | `experimental` | Yes | Job-step references (`<job>.<step>` or `<job>.*`) permitted to write this variable. |
+| `type` | `string` \| `number` \| `boolean` \| `array` \| `object` | `experimental ⚠` | Yes | The variable's type. |
+| `initial` | `any` | `experimental ⚠` | Yes | Initial value set at run creation. |
+| `enum` | `string[]` | `experimental ⚠` | No | Allowed values (only for `type: string`). |
+| `allowed_writers` | `string[]` | `experimental ⚠` | Yes | Job-step references (`<job>.<step>` or `<job>.*`) permitted to write this variable. |
 
 **Example:**
 ```yaml
@@ -310,12 +314,14 @@ variables:
       - implement.*
 ```
 
+> ⚠ Experimental fields may change in any minor version release.
+
 ### 3.8 `context_blocks`
 
 | Attribute | Value |
 |-----------|-------|
 | Type | `map<string, ContextBlockDef>` |
-| Stability | `experimental` |
+| Stability | `experimental ⚠` |
 | Required | No |
 
 v0.2: Named, versioned text blocks that agents can read and write through Engine-validated patches. Each block is stored as a versioned artifact under `runs/<runId>/context-blocks/<id>/v<N>.md`.
@@ -324,8 +330,8 @@ v0.2: Named, versioned text blocks that agents can read and write through Engine
 
 | Field | Type | Stability | Required | Description |
 |-------|------|-----------|----------|-------------|
-| `initial_artifact` | `string` \| `null` | `experimental` | No | Path to an initial artifact; `null` means empty at creation. |
-| `allowed_writers` | `string[]` | `experimental` | Yes | Job-step references permitted to write this block. |
+| `initial_artifact` | `string` \| `null` | `experimental ⚠` | No | Path to an initial artifact; `null` means empty at creation. |
+| `allowed_writers` | `string[]` | `experimental ⚠` | Yes | Job-step references permitted to write this block. |
 
 **Example:**
 ```yaml
@@ -337,6 +343,8 @@ context_blocks:
     initial_artifact: null
     allowed_writers: [review.review]
 ```
+
+> ⚠ Experimental fields may change in any minor version release.
 
 ### 3.9 `jobs`
 
@@ -496,7 +504,7 @@ Controls the filesystem access mode for this job.
 | Field | Type | Stability | Required | Description |
 |-------|------|-----------|----------|-------------|
 | `mode` | `read-only` \| `writable` | `stable` | Yes | Filesystem access mode. |
-| `branch` | `string` | `experimental` | No | Git branch name pattern for isolated writable work (future). |
+| `branch` | `string` | `experimental ⚠` | No | Git branch name pattern for isolated writable work (future). |
 
 **Constraints:**
 - `read-only` jobs must not modify the working directory. The Workspace Guard detects and rejects modifications.
@@ -508,6 +516,8 @@ Controls the filesystem access mode for this job.
 workspace:
   mode: read-only
 ```
+
+> ⚠ Experimental fields may change in any minor version release.
 
 ### 4.7 `steps`
 
@@ -536,8 +546,8 @@ Every step, regardless of type, supports the following fields.
 |-------|------|-----------|----------|-------------|
 | `id` | `string` | `stable` | Yes | Unique identifier within the job. |
 | `type` | `agent` \| `script` \| `check` \| `router` \| `human` \| `workflow` | `stable` | Yes | The step type. |
-| `if` | `string` | `experimental` | No | v0.2: A conditional expression. When it evaluates to `false`, the step is skipped (`step_skipped` event). |
-| `max_visits` | `integer` | `experimental` | No | v0.2: Maximum number of times this step can be entered (via `goto_step`). Default `3`. |
+| `if` | `string` | `experimental ⚠` | No | v0.2: A conditional expression. When it evaluates to `false`, the step is skipped (`step_skipped` event). |
+| `max_visits` | `integer` | `experimental ⚠` | No | v0.2: Maximum number of times this step can be entered (via `goto_step`). Default `3`. |
 | `on_failure` | `map` | `stable` | No | Action when the step fails. |
 | `outputs` | `map<string, string>` | `stable` | No | Mapping from output keys to report/result paths. |
 | `prompt` | `string` | `stable` | No | The primary prompt (Markdown). Used as the step-level instruction for agent and human steps. |
@@ -562,6 +572,8 @@ Every step, regardless of type, supports the following fields.
     log: result.stdout
 ```
 
+> ⚠ Experimental fields may change in any minor version release.
+
 ### 5.2 Agent Step
 
 **Type:** `agent`
@@ -576,8 +588,8 @@ An Agent Step is the only step type that involves an LLM. The Engine generates a
 | `uses` | `string` | `stable` | No | Agent backend URI (e.g. `agent://planner`). |
 | `with` | `map<string, string>` | `stable` | No | Input values for the agent, typically `${{ }}` expressions. |
 | `expose` | `ExposeDef` | `stable` | No | Controls which Skill Pack capabilities are visible to the agent. |
-| `returns` | `ReturnsDef` | `experimental` | No | v0.2: Declares a structured status return with allowed values and corresponding actions. |
-| `on_return` | `map<string, OnReturnAction>` | `experimental` | No | v0.2: Maps each allowed `returns.status.values` entry to an Engine action. |
+| `returns` | `ReturnsDef` | `experimental ⚠` | No | v0.2: Declares a structured status return with allowed values and corresponding actions. |
+| `on_return` | `map<string, OnReturnAction>` | `experimental ⚠` | No | v0.2: Maps each allowed `returns.status.values` entry to an Engine action. |
 
 **ExposeDef fields:**
 
@@ -659,6 +671,8 @@ An Agent Step is the only step type that involves an LLM. The Engine generates a
     plan: report.plan
     test_plan: report.test_plan
 ```
+
+> ⚠ Experimental fields may change in any minor version release.
 
 ### 5.3 Script Step
 
@@ -804,7 +818,7 @@ A Router Step evaluates a value and branches to a flow-control action. It does n
 | `retry_job` | `string` | Retry the named job. Optionally paired with `retry_with: map` to pass additional context. | `stable` |
 | `activate_job` | `string` | Activate the named optional job. | `stable` |
 | `goto_job` | `string` | Jump to the named job. | `stable` |
-| `goto_step` | `string` | v0.2: Jump to the named step within the current job. Optionally paired with `goto_with: map` to pass additional context. | `experimental` |
+| `goto_step` | `string` | v0.2: Jump to the named step within the current job. Optionally paired with `goto_with: map` to pass additional context. | `experimental ⚠` |
 | `status` | `failed` \| `blocked` | Set the job/run status. | `stable` |
 
 #### Execution semantics
@@ -843,10 +857,12 @@ A Router Step evaluates a value and branches to a flow-control action. It does n
       status: failed
 ```
 
+> ⚠ Experimental fields may change in any minor version release.
+
 ### 5.6 Human Gate Step
 
 **Type:** `human`
-**Stability:** `experimental`
+**Stability:** `experimental ⚠`
 
 A Human Gate Step pauses the workflow and waits for explicit human input (approve, reject, or provide additional information). The current runtime recognises this step type but the full human-gate interaction loop is planned for a future release.
 
@@ -854,10 +870,10 @@ A Human Gate Step pauses the workflow and waits for explicit human input (approv
 
 | Field | Type | Stability | Required | Description |
 |-------|------|-----------|----------|-------------|
-| `prompt` | `string` | `experimental` | Yes | Description of what the human needs to decide. |
-| `approvers` | `string[]` | `experimental` | Yes | List of user/role identifiers authorised to respond. |
-| `instructions` | `string` | `experimental` | No | Additional instructions for the approver. |
-| `timeout_minutes` | `number` | `experimental` | No | Maximum wait time in minutes before the gate auto-resolves. |
+| `prompt` | `string` | `experimental ⚠` | Yes | Description of what the human needs to decide. |
+| `approvers` | `string[]` | `experimental ⚠` | Yes | List of user/role identifiers authorised to respond. |
+| `instructions` | `string` | `experimental ⚠` | No | Additional instructions for the approver. |
+| `timeout_minutes` | `number` | `experimental ⚠` | No | Maximum wait time in minutes before the gate auto-resolves. |
 
 The following fields are **planned** for a future release and are not yet in the schema or executor: `timeout`, `on_approve`, `on_reject`, `on_timeout`.
 
@@ -884,6 +900,8 @@ The following fields are **planned** for a future release and are not yet in the
   instructions: "Check that all tests pass and the diff is reasonable."
   timeout_minutes: 1440
 ```
+
+> ⚠ Experimental fields may change in any minor version release.
 
 ### 5.7 Workflow Step (reserved)
 
@@ -929,8 +947,10 @@ The following reference namespaces are available in `${{ }}` expressions.
 | Retry inputs | `${{ retry.inputs.<key> }}` | Additional inputs passed during retry. | `stable` | v0.1 |
 | Signals | `${{ signals.<name> }}` | Current signal state (boolean). Not yet implemented in the expression resolver. | `reserved` | v0.1 |
 | Signal detail | `${{ signals.<name>.reason }}` | Reason string from a signal. Not yet implemented in the expression resolver. | `reserved` | v0.1 |
-| Variables | `${{ variables.<name> }}` | Current value of a workflow variable. | `experimental` | v0.2 |
+| Variables | `${{ variables.<name> }}` | Current value of a workflow variable. | `experimental ⚠` | v0.2 |
 | Context blocks | `${{ context.<block>.<key> }}` | Context block content is injected into agent prompts via Context Builder, not via `${{ }}` expression substitution. | `reserved` | v0.2 |
+
+> ⚠ Experimental fields may change in any minor version release.
 
 ### 6.2 Context block references
 

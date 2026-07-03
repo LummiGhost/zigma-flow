@@ -29,7 +29,7 @@ const RouterActionObjectSchema = z.union([
   z.object({ goto_job: z.string() }),
   /** @stability stable */
   z.object({ status: z.enum(["blocked", "failed"]) }),
-  /** @stability experimental */
+  /** @stability experimental — may change in any minor version release without deprecation */
   z.object({ goto_step: z.string(), goto_with: z.record(z.string(), z.string()).optional() }),
 ]);
 
@@ -121,29 +121,29 @@ const StepBaseSchema = z.object({
   /** @stability stable */
   on_fail: RouterActionSchema.optional(),
   // Artifact policy
-  /** @stability experimental — not yet in published language spec */
+  /** @stability experimental — may change in any minor version release without deprecation — not yet in published language spec */
   required_artifacts: z.array(z.string()).optional(),
   // Step Structured Return Status (WF-P13-RETURNS)
-  /** @stability experimental */
+  /** @stability experimental — may change in any minor version release without deprecation */
   returns: z.object({
     status: z.object({
-      /** @stability experimental */
+      /** @stability experimental — may change in any minor version release without deprecation */
       values: z.array(z.string()).min(1),
-      /** @stability experimental */
+      /** @stability experimental — may change in any minor version release without deprecation */
       required: z.boolean().optional(),
     }),
   }).optional(),
-  /** @stability experimental */
+  /** @stability experimental — may change in any minor version release without deprecation */
   on_return: z.record(z.string(), RouterActionSchema).optional(),
   // Flow control (WF-P13-FLOW)
-  /** @stability experimental */
+  /** @stability experimental — may change in any minor version release without deprecation */
   if: z.string().min(1).optional(),
-  /** @stability experimental */
+  /** @stability experimental — may change in any minor version release without deprecation */
   max_visits: z.number().int().positive().optional(),
   // Permissions (WF-P13-VARIABLES)
   /**
    * @stability stable — top-level permissions (contents, edits, commands, workflow_state)
-   * @stability experimental — sub-fields: variables, context_edit, context_blocks
+   * @stability experimental — may change in any minor version release without deprecation — sub-fields: variables, context_edit, context_blocks
    */
   permissions: z.object({
     /** @stability stable */
@@ -154,30 +154,30 @@ const StepBaseSchema = z.object({
     commands: z.string().optional(),
     /** @stability stable */
     workflow_state: z.string().optional(),
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     variables: z.object({
-      /** @stability experimental */
+      /** @stability experimental — may change in any minor version release without deprecation */
       read: z.array(z.string()).optional(),
-      /** @stability experimental */
+      /** @stability experimental — may change in any minor version release without deprecation */
       write: z.array(z.string()).optional(),
     }).optional(),
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     context_edit: z.enum(["none", "read", "write"]).optional(),
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     context_blocks: z.object({
-      /** @stability experimental */
+      /** @stability experimental — may change in any minor version release without deprecation */
       read: z.array(z.string()).optional(),
-      /** @stability experimental */
+      /** @stability experimental — may change in any minor version release without deprecation */
       write: z.array(z.string()).optional(),
     }).optional(),
   }).passthrough().optional(),
   // Human step fields (WF-P15-SCHEMA)
-  /** @stability experimental */
+  /** @stability experimental — may change in any minor version release without deprecation */
   approvers: z.array(z.string()).optional(),
-  /** @stability experimental */
+  /** @stability experimental — may change in any minor version release without deprecation */
   instructions: z.string().optional(),
   /**
-   * @stability experimental
+   * @stability experimental — may change in any minor version release without deprecation
    *
    * DSL field reserved for future runtime enforcement (v0.3+). At v0.2.2 the
    * engine does NOT enforce the timeout; this entry only ensures the field
@@ -186,24 +186,24 @@ const StepBaseSchema = z.object({
    */
   timeout_minutes: z.number().int().positive().optional(),
   // Step-specific output schemas (Issue #100)
-  /** @stability experimental — not yet in published language spec */
+  /** @stability experimental — may change in any minor version release without deprecation — not yet in published language spec */
   outputs_schema: z.record(z.string(), z.object({ type: z.string() })).optional(),
-  /** @stability experimental — not yet in published language spec */
+  /** @stability experimental — may change in any minor version release without deprecation — not yet in published language spec */
   artifact_policy: z.object({
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     required: z.array(z.string()).optional(),
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     forbidden: z.array(z.string()).optional(),
   }).optional(),
-  /** @stability experimental — not yet in published language spec */
+  /** @stability experimental — may change in any minor version release without deprecation — not yet in published language spec */
   signal_policy: z.object({
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     allowed: z.array(z.string()).optional(),
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     required_evidence: z.array(z.string()).optional(),
   }).optional(),
   // Issue #106: Allow generic prompt fallback when no primary prompt is found
-  /** @stability experimental — not yet in published language spec */
+  /** @stability experimental — may change in any minor version release without deprecation — not yet in published language spec */
   allow_generic_prompt: z.boolean().optional(),
 });
 
@@ -308,22 +308,22 @@ const WorkflowSchema = z.object({
   permissions: z.record(z.string(), z.unknown()).optional(),
   /** @stability stable */
   signals: z.record(z.string(), SignalDeclarationSchema).optional(),
-  /** @stability experimental */
+  /** @stability experimental — may change in any minor version release without deprecation */
   variables: z.record(z.string(), z.object({
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     type: z.enum(["string", "number", "boolean", "array", "object"]),
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     initial: z.unknown().optional(),
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     enum: z.array(z.string()).optional(),
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     allowed_writers: z.array(z.string()),
   })).optional(),
-  /** @stability experimental */
+  /** @stability experimental — may change in any minor version release without deprecation */
   context_blocks: z.record(z.string(), z.object({
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     initial_artifact: z.string().nullable().optional(),
-    /** @stability experimental */
+    /** @stability experimental — may change in any minor version release without deprecation */
     allowed_writers: z.array(z.string()),
   })).optional(),
   /** @stability stable */

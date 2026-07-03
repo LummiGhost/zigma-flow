@@ -65,7 +65,16 @@ Each field carries one of three stability labels:
    - [Forbidden constructs](#64-forbidden-constructs)
 7. [What the Workflow DSL Is NOT](#7-what-the-workflow-dsl-is-not)
 8. [Validation Rules](#8-validation-rules)
-9. [Appendix: Full Example](#9-appendix-full-example)
+9. [Abstract Data Layer](#9-abstract-data-layer)
+   - [9.1 Variables (§3.7)](#91-variables-37)
+   - [9.2 Context Blocks (§3.8)](#92-context-blocks-38)
+10. [Agent Report: context_patches](#10-agent-report-context_patches)
+   - [10.1 Patch schema](#101-patch-schema)
+   - [10.2 Permissions model](#102-permissions-model)
+   - [10.3 Batch atomicity](#103-batch-atomicity)
+   - [10.4 Reserved fields](#104-reserved-fields)
+   - [10.5 Rollback semantics](#105-rollback-semantics)
+11. [Appendix: Full Example](#11-appendix-full-example)
 
 ---
 
@@ -1079,7 +1088,109 @@ The following rules are enforced by the workflow validator. Any violation produc
 
 ---
 
-## 9. Appendix: Full Example
+## 9. Abstract Data Layer
+
+Zigma Flow separates persistent state into two categories: the **State Machine** (owned by the Engine) and the **Abstract Data Layer** (workflow-scoped data that steps may read and write through Engine-validated patches). The Abstract Data Layer is composed of two subsystems: variables (§3.7) and context blocks (§3.8).
+
+### 9.1 Variables (§3.7)
+
+Variables are typed, enumerated, permission-gated values declared at the workflow level. Each variable has a declared type (`string`, `number`, `boolean`, `array`, `object`), an initial value, optional enum constraints, and an `allowed_writers` list of job-step references (`<job>.<step>` or `<job>.*`).
+
+Steps read variables through `${{ variables.<name> }}` expressions. Steps write variables through `report.context_patches` (see [§10](#10-agent-report-context_patches)). The Engine validates every write against type, enum, permission, and reserved-field rules before applying any change.
+
+### 9.2 Context Blocks (§3.8)
+
+Context blocks are named, versioned text blocks stored as artifacts under `runs/<runId>/context-blocks/<id>/v<N>.md`. Each block has an `allowed_writers` list and an optional `initial_artifact`. Context block content is injected into agent prompts via the Context Builder, not via `${{ }}` expression substitution.
+
+---
+
+## 10. Agent Report: context_patches
+
+When an Agent step completes, it may submit a `context_patches` array in its `report.json`. Each patch updates the workflow's Abstract Data Layer (variables or context blocks). The Engine processes the batch atomically: all patches are validated before any are applied. If any patch fails validation, the entire batch is rejected and no state changes are written.
+
+### 10.1 Patch schema
+
+`context_patches` is an array where each item conforms to:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `kind` | `variable_set` \| `variable_delete` \| `context_block_set` \| `context_block_append` \| `context_block_delete` | Yes | The patch operation. |
+| `name` | `string` | Yes | Variable name (for `variable_*`) or context block ID (for `context_block_*`). |
+| `value` | `any` | Conditional | Required for `variable_set`, `context_block_set`, and `context_block_append`. Must match the variable's declared type for `variable_set`. |
+
+**Patch kind semantics:**
+
+| Kind | Behaviour |
+|------|-----------|
+| `variable_set` | Set `state.variables.<name>` to `value`. Validates type, enum, and permissions. |
+| `variable_delete` | Remove `state.variables.<name>`. Validates permissions. |
+| `context_block_set` | Replace a context block's content with `value`. Creates a new versioned artifact. |
+| `context_block_append` | Append `value` to a context block's existing content. Creates a new versioned artifact. |
+| `context_block_delete` | Remove a context block from state. Does not delete historical artifacts. |
+
+**Example:**
+```json
+{
+  "context_patches": [
+    { "kind": "variable_set", "name": "plan_status", "value": "approved" },
+    { "kind": "context_block_append", "name": "reviewer-notes", "value": "\n\nLGTM — ship it." }
+  ]
+}
+```
+
+### 10.2 Permissions model
+
+A step may only write a variable or context block if **all** of the following conditions are met:
+
+1. **Write permission:** `step.permissions.variables.write` (or `context_blocks.write`) includes the name.
+2. **Allowed writers:** The variable or context block declaration's `allowed_writers` includes the step reference (`<job>.<step>`) or a job-level wildcard (`<job>.*`).
+3. **Context edit gate:** `step.permissions.context_edit` is not `"none"`. When `context_edit` is `"none"`, all `context_patches` are rejected regardless of individual write entries.
+
+These checks are performed per patch during the validation phase. A patch whose name is not declared in the workflow's `variables` or `context_blocks` map is rejected with a `ValidationError`.
+
+### 10.3 Batch atomicity
+
+All patches in the `context_patches` array are **validated before** any writes are performed. The sequence is:
+
+1. Read the current state snapshot.
+2. Load the workflow definition.
+3. Validate every patch against permissions, declarations, types, enums, and reserved fields.
+4. **If all pass:** apply all patches in-memory, write artifacts, append events, and write the updated state snapshot.
+5. **If any fail:** no artifacts are written, no events are emitted, and `state.json` is not modified. The error is thrown to the caller.
+
+This guarantees that a partially valid batch never leaves the data layer in an inconsistent state.
+
+### 10.4 Reserved fields
+
+To prevent accidental or malicious overwriting of Engine-owned state, the following field names **must not** be used as variable names in `context_patches`:
+
+| Reserved field | Rationale |
+|----------------|-----------|
+| `status` | Run status; owned by Engine state machine transitions. |
+| `last_event_id` | Event log cursor; owned by Engine sequential event numbering. |
+| `jobs` | Job state map; owned by Engine `advanceJob` and scheduler. |
+| `signals` | Signal state array; owned by Engine `handleSignals`. |
+| `run_id` | Run identifier; immutable after run creation. |
+| `workflow` | Workflow reference; immutable after run creation. |
+| `task` | Task description; immutable after run creation. |
+| `created_at` | Creation timestamp; immutable after run creation. |
+| `step_visits` | Step visit counters; owned by Engine `goto_step` visit tracking. |
+
+Attempting to patch a reserved field via `variable_set` or `variable_delete` throws a `ValidationError` and rejects the entire batch, even if other patches in the batch are valid.
+
+### 10.5 Rollback semantics
+
+On validation failure:
+- No artifacts are written to disk.
+- No events are appended to `events.jsonl`.
+- `state.json` is not modified — the snapshot at the start of the call remains on disk.
+- A `ValidationError` (or `StateError` for structural failures) is thrown with diagnostic details including the offending patch and the reason for rejection.
+
+The caller (typically `acceptAgentReport`) should catch this error and treat it as a step failure. The run may then enter a retry, block, or fail state depending on the step's `on_failure` configuration.
+
+---
+
+## 11. Appendix: Full Example
 
 The following is a complete, validated workflow definition demonstrating most stable fields.
 
@@ -1290,3 +1401,4 @@ jobs:
 | Date | Version | Changes |
 |------|---------|---------|
 | 2026-07-03 | 0.3.0 | Initial published language specification. Covers all top-level fields, all 5 step types, reserved `workflow` type, expression syntax, forbidden constructs, and validation rules. |
+| 2026-07-03 | 0.3.1 | Added §9 Abstract Data Layer and §10 Agent Report: context_patches. Documents patch schema, permissions model, batch atomicity, reserved fields, and rollback semantics. |

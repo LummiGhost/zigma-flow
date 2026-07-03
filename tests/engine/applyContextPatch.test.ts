@@ -16,6 +16,7 @@
  *
  * Covers:
  *   - FR-PATCH-001 through FR-PATCH-014
+ *   - FR-PATCH-RESERVED-ALL: one test per reserved field, batch-rejection, unknown-kind
  *
  * Reference:
  *   - docs/phases/p13-agent-adapter-hardening/workflows/wf-p13-variables/01-cases-and-tests.md
@@ -1303,6 +1304,157 @@ describe("applyContextPatch — null/empty patches (FR-PATCH-014)", () => {
 
       const eventsAfter = await readEventsBytes(runDir);
       expect(eventsAfter).toBe(eventsBefore);
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// FR-PATCH-RESERVED-ALL: contract tests for every reserved field
+// ---------------------------------------------------------------------------
+
+describe("applyContextPatch — reserved field contract (FR-PATCH-RESERVED-ALL)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  const RESERVED_FIELDS = [
+    "status",
+    "last_event_id",
+    "jobs",
+    "signals",
+    "run_id",
+    "workflow",
+    "task",
+    "created_at",
+    "step_visits",
+  ];
+
+  for (const field of RESERVED_FIELDS) {
+    it(
+      `rejects variable_set patch for reserved field "${field}" and leaves state.json unchanged`,
+      async () => {
+        const { runId, runDir } = await bootstrapRun(
+          sandbox,
+          WORKFLOW_WITH_VARS_YAML,
+          "vars-test"
+        );
+
+        await setJobState(runDir, "plan", {
+          status: "running",
+          current_step: "draft",
+          attempt: 1,
+        });
+
+        const stateBefore = await readStateBytes(runDir);
+
+        await expect(
+          callApplyContextPatch({
+            runDir,
+            runId,
+            jobId: "plan",
+            stepId: "draft",
+            attempt: 1,
+            patches: [
+              { kind: "variable_set", name: field, value: "malicious" },
+            ],
+            clock: new FakeClock(),
+          })
+        ).rejects.toThrow(ValidationError);
+
+        // Verify state.json is unchanged
+        const stateAfter = await readStateBytes(runDir);
+        expect(stateAfter).toBe(stateBefore);
+      }
+    );
+  }
+
+  it(
+    "batch with reserved field + valid patch rejects entire batch",
+    async () => {
+      const { runId, runDir } = await bootstrapRun(
+        sandbox,
+        WORKFLOW_WITH_VARS_YAML,
+        "vars-test"
+      );
+
+      await setJobState(runDir, "plan", {
+        status: "running",
+        current_step: "draft",
+        attempt: 1,
+      });
+
+      const stateBefore = await readStateBytes(runDir);
+
+      // Patch #1 is valid (sets plan_status to approved),
+      // Patch #2 tries to set a reserved field.
+      await expect(
+        callApplyContextPatch({
+          runDir,
+          runId,
+          jobId: "plan",
+          stepId: "draft",
+          attempt: 1,
+          patches: [
+            { kind: "variable_set", name: "plan_status", value: "approved" },
+            { kind: "variable_set", name: "status", value: "hacked" },
+          ],
+          clock: new FakeClock(),
+        })
+      ).rejects.toThrow(ValidationError);
+
+      // Entire batch must be rejected — valid patch's change is NOT in state.json
+      const stateAfter = await readStateBytes(runDir);
+      expect(stateAfter).toBe(stateBefore);
+
+      // Explicitly confirm plan_status was NOT written (still has initial value)
+      const snap = await readStateSnapshot(runDir);
+      const vars = (snap as unknown as Record<string, unknown>)[
+        "variables"
+      ] as Record<string, unknown> | undefined;
+      expect(vars?.["plan_status"]).toBe("pending");
+    }
+  );
+
+  it(
+    "unknown patch kind rejects with ValidationError",
+    async () => {
+      const { runId, runDir } = await bootstrapRun(
+        sandbox,
+        WORKFLOW_WITH_VARS_YAML,
+        "vars-test"
+      );
+
+      await setJobState(runDir, "plan", {
+        status: "running",
+        current_step: "draft",
+        attempt: 1,
+      });
+
+      const stateBefore = await readStateBytes(runDir);
+
+      await expect(
+        callApplyContextPatch({
+          runDir,
+          runId,
+          jobId: "plan",
+          stepId: "draft",
+          attempt: 1,
+          patches: [
+            { kind: "unknown_kind" as any, name: "plan_status", value: "approved" },
+          ],
+          clock: new FakeClock(),
+        })
+      ).rejects.toThrow(ValidationError);
+
+      // Verify state.json is unchanged
+      const stateAfter = await readStateBytes(runDir);
+      expect(stateAfter).toBe(stateBefore);
     }
   );
 });

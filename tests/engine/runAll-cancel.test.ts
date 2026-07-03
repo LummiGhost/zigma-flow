@@ -209,6 +209,7 @@ jobs:
     steps:
       - id: analyze
         type: agent
+        allow_generic_prompt: true
         uses: zigma/analyze-skill
 `;
 

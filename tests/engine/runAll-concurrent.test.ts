@@ -267,18 +267,21 @@ jobs:
     steps:
       - id: step-1
         type: agent
+        allow_generic_prompt: true
   ro-2:
     workspace:
       mode: read-only
     steps:
       - id: step-1
         type: agent
+        allow_generic_prompt: true
   ro-3:
     workspace:
       mode: read-only
     steps:
       - id: step-1
         type: agent
+        allow_generic_prompt: true
   w-1:
     workspace:
       mode: writable
@@ -287,6 +290,7 @@ jobs:
     steps:
       - id: step-1
         type: agent
+        allow_generic_prompt: true
 `;
 
 /** 3 read-only jobs — all can run concurrently. */
@@ -300,18 +304,21 @@ jobs:
     steps:
       - id: map
         type: agent
+        allow_generic_prompt: true
   risk-scan:
     workspace:
       mode: read-only
     steps:
       - id: scan
         type: agent
+        allow_generic_prompt: true
   static-check:
     workspace:
       mode: read-only
     steps:
       - id: check
         type: agent
+        allow_generic_prompt: true
 `;
 
 /** 6 read-only jobs — used for multi-batch tests (parallelism=2). */
@@ -325,36 +332,42 @@ jobs:
     steps:
       - id: step-1
         type: agent
+        allow_generic_prompt: true
   a-2:
     workspace:
       mode: read-only
     steps:
       - id: step-1
         type: agent
+        allow_generic_prompt: true
   a-3:
     workspace:
       mode: read-only
     steps:
       - id: step-1
         type: agent
+        allow_generic_prompt: true
   a-4:
     workspace:
       mode: read-only
     steps:
       - id: step-1
         type: agent
+        allow_generic_prompt: true
   a-5:
     workspace:
       mode: read-only
     steps:
       - id: step-1
         type: agent
+        allow_generic_prompt: true
   a-6:
     workspace:
       mode: read-only
     steps:
       - id: step-1
         type: agent
+        allow_generic_prompt: true
 `;
 
 /** 2 script jobs — verify non-agent steps go through concurrent batches. */
@@ -385,6 +398,7 @@ jobs:
     steps:
       - id: step-1
         type: agent
+        allow_generic_prompt: true
 `;
 
 // ---------------------------------------------------------------------------

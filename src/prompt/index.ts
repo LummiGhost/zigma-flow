@@ -30,6 +30,15 @@ import {
   type ArtifactMetadata,
 } from "../artifact/index.js";
 
+import {
+  runQualityGate,
+  type QualityGateContext,
+  type QualityGateIssue,
+  type QualityGateResult,
+} from "./qualityGate.js";
+
+import { PromptBuildError } from "../utils/index.js";
+
 export interface PromptHandoffIssue {
   code: string;
   message: string;
@@ -39,6 +48,10 @@ export interface PromptHandoffQualityResult {
   errors: PromptHandoffIssue[];
   warnings: PromptHandoffIssue[];
 }
+
+// Re-export quality gate types and function
+export type { QualityGateContext, QualityGateIssue, QualityGateResult };
+export { runQualityGate };
 
 // ---------------------------------------------------------------------------
 // Prompt Packet contract
@@ -101,14 +114,24 @@ export interface ContextBlock {
 export interface OutputContract {
   block: PromptBlock;
   reportPath: string;
+  runId: string;
+  jobId: string;
+  stepId: string;
+  attempt: number;
   reportSchema: {
     requiredTopLevelFields: ["outputs", "artifacts", "signals", "summary"];
   };
   requiredOutputs: string[];
   requiredArtifacts?: string[];
   allowedSignals: string[];
+  // Issue #105: Full signal specs for the signal semantics table
+  signalSpecs: SignalSpec[];
   artifactRules: string[];
   stopRequirement: string;
+  // Step-specific output schemas (Issue #100)
+  outputsSchema?: Record<string, { type: string }>;
+  artifactPolicy?: { required?: string[]; forbidden?: string[] };
+  signalPolicy?: { allowed?: string[]; required_evidence?: string[] };
 }
 
 export interface PromptPacket {
@@ -196,14 +219,21 @@ const PROMPT_PACKET_BLOCK_ORDER: readonly PromptBlockType[] = [
 // ---------------------------------------------------------------------------
 
 const TEMPLATE_PLACEHOLDERS: Record<TemplateName, readonly string[]> = {
-  "system-prompt": ["identity", "invariantsLines", "boundariesLines"],
+  "system-prompt": ["identity", "invariantsLines", "boundariesLines", "allowedActionsMatrixSection", "instructionPrioritySection", "stopConditionsSection", "contextUsePolicySection", "verificationEvidenceSection"],
   "task-prompt": ["task"],
   "step-prompt": ["jobId", "stepId", "attempt", "promptSource", "promptId", "promptPath", "promptContent"],
   "step-prompt-fallback": ["jobId", "stepId", "attempt"],
   "output-contract": ["reportPath", "requiredOutputs", "requiredArtifacts", "allowedSignals", "stopRequirement"],
-  "output-contract-lines": ["reportPath", "requiredOutputsLines", "requiredArtifactsLines", "allowedSignalsLines", "artifactRulesLines", "stopRequirement"],
+  "output-contract-lines": ["reportPath", "requiredOutputsLines", "requiredArtifactsLines", "allowedSignalsLines", "artifactRulesLines", "stopRequirement", "outputsSchemaSection", "artifactPolicySection", "signalPolicySection", "signalTableSection", "artifactReferenceSchemaSection"],
   "context-block": ["id", "type", "source", "priority", "freshness", "extraLines", "summary"],
   "permission-boundary": ["modePermissionLine", "contentReadLine", "commandsLine"],
+  "allowed-actions-matrix": ["allowedActionsMatrixRows"],
+  "instruction-priority": [],
+  "stop-conditions": [],
+  "context-use-policy": ["contextMandatorySection", "contextExternalSection", "contextEvidenceSection", "contextOptionalSection"],
+  "verification-evidence": ["evidenceTableRows", "reviewClaimsNote"],
+  "signal-table": ["signalTableRows"],
+  "artifact-reference-schema": ["artifactPathExample", "evidenceRefExample", "stepArtifactDir"],
 };
 
 export function renderTemplate(template: string, vars: Record<string, string>, templateName: string): string {
@@ -251,6 +281,13 @@ const TEMPLATE_NAMES = [
   "output-contract-lines",
   "context-block",
   "permission-boundary",
+  "allowed-actions-matrix",
+  "instruction-priority",
+  "stop-conditions",
+  "context-use-policy",
+  "verification-evidence",
+  "signal-table",
+  "artifact-reference-schema",
 ] as const;
 
 type TemplateName = (typeof TEMPLATE_NAMES)[number];
@@ -345,7 +382,22 @@ export function validatePromptHandoff(
   source: ContextBundle | PromptPacket,
 ): PromptHandoffQualityResult {
   const packet = isPromptPacket(source) ? source : buildPromptPacket(source);
-  return validatePromptPacket(packet, promptText);
+  const result = validatePromptPacket(packet, promptText);
+
+  // Quality gate: run on the ContextBundle for full defect detection (Wave 1, Issue #107)
+  if (!isPromptPacket(source)) {
+    const qgCtx = bundleToQualityGateContext(source);
+    const qgResult = runQualityGate(promptText, qgCtx);
+    for (const issue of qgResult.issues) {
+      if (issue.severity === "error") {
+        result.errors.push({ code: issue.code, message: issue.message });
+      } else {
+        result.warnings.push({ code: issue.code, message: issue.message });
+      }
+    }
+  }
+
+  return result;
 }
 
 export function validatePromptPacket(
@@ -507,10 +559,29 @@ function buildAgentSystemPrompt(bundle: ContextBundle): AgentSystemPrompt {
   ];
   const invariantsLines = invariants.map((line) => `- ${line}`).join("\n");
   const boundariesLines = boundaries.map((line) => `- ${line}`).join("\n");
+
+  // Issue #101: Allowed Actions Matrix
+  const allowedActionsMatrixSection = renderAllowedActionsMatrix(bundle);
+
+  // Issue #102: Instruction Priority + Stop Conditions (fixed text sections)
+  const instructionPrioritySection = renderTemplate(TEMPLATES["instruction-priority"], {}, "instruction-priority");
+  const stopConditionsSection = renderTemplate(TEMPLATES["stop-conditions"], {}, "stop-conditions");
+
+  // Issue #103: Context Use Policy
+  const contextUsePolicySection = renderContextUsePolicy(bundle);
+
+  // Issue #104: Verification Evidence (only renders when upstream artifacts exist)
+  const verificationEvidenceSection = renderVerificationEvidence(bundle);
+
   const content = renderTemplate(TEMPLATES["system-prompt"], {
     identity,
     invariantsLines,
     boundariesLines,
+    allowedActionsMatrixSection,
+    instructionPrioritySection,
+    stopConditionsSection,
+    contextUsePolicySection,
+    verificationEvidenceSection,
   }, "system-prompt");
 
   return {
@@ -583,11 +654,24 @@ function buildWorkflowStepPrompt(bundle: ContextBundle): WorkflowStepPrompt {
     };
   }
 
-  const content = renderTemplate(TEMPLATES["step-prompt-fallback"], {
+  // Issue #106: Fail fast when no primary prompt and allow_generic_prompt is not enabled
+  if (bundle.allowGenericPrompt !== true) {
+    throw new PromptBuildError(
+      `Failed to build prompt for job "${bundle.jobId}" step "${bundle.stepId}":` +
+      ` no primary prompt and allow_generic_prompt is not enabled.` +
+      ` Add step.prompt, prompt_ref, or set allow_generic_prompt: true explicitly.`,
+      { details: { jobId: bundle.jobId, stepId: bundle.stepId } },
+    );
+  }
+
+  // Fallback: use generated step context (only when allowGenericPrompt === true)
+  const fallbackContent = renderTemplate(TEMPLATES["step-prompt-fallback"], {
     jobId: bundle.jobId,
     stepId: bundle.stepId,
     attempt: String(bundle.attempt),
   }, "step-prompt-fallback");
+
+  const content = `**[DEBUG MODE]** Generic fallback active — no primary prompt was resolved.\n\n${fallbackContent}`;
 
   return {
     block: {
@@ -763,14 +847,22 @@ function buildOutputContract(bundle: ContextBundle, reportPath: string): OutputC
       content,
     },
     reportPath,
+    runId: bundle.runId,
+    jobId: bundle.jobId,
+    stepId: bundle.stepId,
+    attempt: bundle.attempt,
     reportSchema: {
       requiredTopLevelFields: ["outputs", "artifacts", "signals", "summary"],
     },
     requiredOutputs,
     ...(requiredArtifacts !== undefined ? { requiredArtifacts } : {}),
     allowedSignals,
+    signalSpecs: bundle.signals,
     artifactRules,
     stopRequirement,
+    ...(bundle.outputsSchema !== undefined ? { outputsSchema: bundle.outputsSchema } : {}),
+    ...(bundle.artifactPolicy !== undefined ? { artifactPolicy: bundle.artifactPolicy } : {}),
+    ...(bundle.signalPolicy !== undefined ? { signalPolicy: bundle.signalPolicy } : {}),
   };
 }
 
@@ -861,6 +953,51 @@ function renderOutputContractLines(output: OutputContract): string[] {
       ? "(none)"
       : output.allowedSignals.map((signal) => `- \`${signal}\``).join("\n");
   const artifactRulesLines = output.artifactRules.map((rule) => `- ${rule}`).join("\n");
+
+  // Step-specific output schema section (Issue #100)
+  let outputsSchemaSection = "";
+  if (output.outputsSchema !== undefined && Object.keys(output.outputsSchema).length > 0) {
+    const lines = Object.entries(output.outputsSchema)
+      .map(([key, value]) => `- \`${key}\`: \`{ type: "${value.type}" }\``);
+    outputsSchemaSection = `\n### Outputs Schema\n\n${lines.join("\n")}\n`;
+  }
+
+  // Artifact policy section (Issue #100)
+  let artifactPolicySection = "";
+  if (output.artifactPolicy !== undefined) {
+    const parts: string[] = [];
+    if (output.artifactPolicy.required !== undefined && output.artifactPolicy.required.length > 0) {
+      parts.push("Required:\n" + output.artifactPolicy.required.map((p) => `- \`${p}\``).join("\n"));
+    }
+    if (output.artifactPolicy.forbidden !== undefined && output.artifactPolicy.forbidden.length > 0) {
+      parts.push("Forbidden:\n" + output.artifactPolicy.forbidden.map((p) => `- \`${p}\``).join("\n"));
+    }
+    if (parts.length > 0) {
+      artifactPolicySection = `\n### Artifact Policy\n\n${parts.join("\n\n")}\n`;
+    }
+  }
+
+  // Signal policy section (Issue #100)
+  let signalPolicySection = "";
+  if (output.signalPolicy !== undefined) {
+    const parts: string[] = [];
+    if (output.signalPolicy.allowed !== undefined && output.signalPolicy.allowed.length > 0) {
+      parts.push("Allowed:\n" + output.signalPolicy.allowed.map((s) => `- \`${s}\``).join("\n"));
+    }
+    if (output.signalPolicy.required_evidence !== undefined && output.signalPolicy.required_evidence.length > 0) {
+      parts.push("Required Evidence:\n" + output.signalPolicy.required_evidence.map((e) => `- \`${e}\``).join("\n"));
+    }
+    if (parts.length > 0) {
+      signalPolicySection = `\n### Signal Policy\n\n${parts.join("\n\n")}\n`;
+    }
+  }
+
+  // Issue #105: Signal semantics table
+  const signalTableSection = renderSignalTableSection(output);
+
+  // Issue #108: Artifact reference schema
+  const artifactReferenceSchemaSection = renderArtifactReferenceSchema(output);
+
   const rendered = renderTemplate(TEMPLATES["output-contract-lines"], {
     reportPath: output.reportPath,
     requiredOutputsLines,
@@ -868,8 +1005,53 @@ function renderOutputContractLines(output: OutputContract): string[] {
     allowedSignalsLines,
     artifactRulesLines,
     stopRequirement: output.stopRequirement,
+    outputsSchemaSection,
+    artifactPolicySection,
+    signalPolicySection,
+    signalTableSection,
+    artifactReferenceSchemaSection,
   }, "output-contract-lines");
   return [...rendered.split("\n"), ""];
+}
+
+function renderSignalTableSection(output: OutputContract): string {
+  if (output.signalSpecs.length === 0) {
+    return "";
+  }
+
+  // Check if any signal has the extended fields (when_to_emit, required_evidence, engine_effect)
+  const hasExtendedFields = output.signalSpecs.some(
+    (s) => s.when_to_emit !== undefined || s.required_evidence !== undefined || s.engine_effect !== undefined,
+  );
+
+  if (!hasExtendedFields) {
+    // Fallback: no extended fields available, don't render the detailed table
+    return "";
+  }
+
+  const rows = output.signalSpecs.map((signal) => {
+    const id = `\`${signal.id}\``;
+    const whenToEmit = signal.when_to_emit ?? "(not specified)";
+    const requiredEvidence = signal.required_evidence ?? "(not specified)";
+    const engineEffect = signal.engine_effect ?? "(not specified)";
+    // Escape pipe characters in table cells
+    return `| ${id} | ${whenToEmit.replace(/\|/g, "\\|")} | ${requiredEvidence.replace(/\|/g, "\\|")} | ${engineEffect.replace(/\|/g, "\\|")} |`;
+  });
+  const signalTableRows = rows.join("\n");
+
+  return "\n" + renderTemplate(TEMPLATES["signal-table"], { signalTableRows }, "signal-table") + "\n";
+}
+
+function renderArtifactReferenceSchema(output: OutputContract): string {
+  const stepDir = `jobs/${output.jobId}/attempts/${output.attempt}/steps/${output.stepId}`;
+  const artifactPathExample = `${stepDir}/summary.md`;
+  const evidenceRefExample = `artifact://${output.runId}/jobs/<upstreamJob>/attempts/<attempt>/steps/<step>/stdout`;
+
+  return "\n" + renderTemplate(TEMPLATES["artifact-reference-schema"], {
+    artifactPathExample,
+    evidenceRefExample,
+    stepArtifactDir: stepDir,
+  }, "artifact-reference-schema") + "\n";
 }
 
 function normalizeEmbeddedMarkdownHeadings(markdown: string): string {
@@ -1008,6 +1190,162 @@ function renderPermissionBoundaryLines(bundle: ContextBundle): string[] {
   return rendered.replace(/\r\n/g, "\n").split("\n").filter((line) => line.length > 0);
 }
 
+function renderAllowedActionsMatrix(bundle: ContextBundle): string {
+  const workspaceMode = getWorkspaceMode(bundle);
+  const permissions = bundle.permissions as PermissionSet;
+  const rows: string[] = [];
+
+  // Repository access
+  if (workspaceMode === "read-only" || !canModifyRepositoryFiles(permissions, workspaceMode)) {
+    rows.push("| Repository Access | Read-only | Repository is in read-only mode or edits are not granted |");
+  } else if (canModifyRepositoryFiles(permissions, workspaceMode)) {
+    rows.push("| Repository Access | Writable | Job may modify repository files according to the task |");
+  } else {
+    rows.push("| Repository Access | Read-only | Edits are not granted |");
+  }
+
+  // Commands
+  if (permissions["commands"] === "none") {
+    rows.push("| Commands | Not granted | Shell commands are not permitted for this step |");
+  } else if (permissions["commands"] === true || permissions["commands"] === "granted") {
+    rows.push("| Commands | Granted | Shell commands are permitted for this step |");
+  } else {
+    rows.push("| Commands | Granted | Shell commands are permitted for this step |");
+  }
+
+  // Signals
+  const signalIds = bundle.signals.map((s) => s.id);
+  if (signalIds.length > 0) {
+    rows.push(`| Signals | ${signalIds.join(", ")} | Allowed signals that may be emitted in report.json |`);
+  } else {
+    rows.push("| Signals | (none) | No signals are allowed from this step |");
+  }
+
+  // State files
+  rows.push("| State Files | None — Engine owned | State files cannot be modified by the agent |");
+
+  const allowedActionsMatrixRows = rows.join("\n");
+  return renderTemplate(TEMPLATES["allowed-actions-matrix"], { allowedActionsMatrixRows }, "allowed-actions-matrix");
+}
+
+function renderContextUsePolicy(bundle: ContextBundle): string {
+  const knowledge = bundle.capabilities.knowledge;
+  const prompts = bundle.capabilities.prompts;
+  const functions = bundle.capabilities.functions;
+  const tools = bundle.capabilities.tools;
+
+  // Category 1: Mandatory — Read Before Acting (primary prompt + readPolicy: required knowledge)
+  const mandatoryItems: string[] = [];
+  if (bundle.primaryPrompt !== undefined) {
+    mandatoryItems.push(
+      `- Primary prompt \`${bundle.primaryPrompt.id}\`: rendered inline in the Workflow Step Prompt section (read before acting)`,
+    );
+  }
+  for (const k of knowledge) {
+    if (k.readPolicy === "required") {
+      const pathInfo = k.path !== undefined ? ` [read from: \`${k.path}\`]` : "";
+      mandatoryItems.push(`- Knowledge \`${k.skill}.${k.id}\`: ${k.usage ?? "read before starting this step"}${pathInfo}`);
+    }
+  }
+  const contextMandatorySection = mandatoryItems.length > 0 ? mandatoryItems.join("\n") : "(none)";
+
+  // Category 2: Mandatory — Reference Externally (knowledge/prompts with paths, excluding required ones)
+  const externalItems: string[] = [];
+  for (const k of knowledge) {
+    if (k.path !== undefined && k.readPolicy !== "required") {
+      externalItems.push(`- Knowledge \`${k.skill}.${k.id}\`: \`${k.path}\``);
+    }
+  }
+  for (const p of prompts) {
+    // Skip the primary prompt since it is rendered inline
+    if (
+      bundle.primaryPrompt !== undefined &&
+      p.skill === bundle.primaryPrompt.skill &&
+      p.id === bundle.primaryPrompt.id
+    ) {
+      continue;
+    }
+    if (p.path !== undefined) {
+      externalItems.push(`- Prompt \`${p.skill}.${p.id}\`: \`${p.path}\``);
+    }
+  }
+  const contextExternalSection = externalItems.length > 0 ? externalItems.join("\n") : "(none)";
+
+  // Category 3: Evidence Only (upstream artifacts — reference, don't modify)
+  const evidenceItems: string[] = [];
+  for (const artifact of bundle.artifacts) {
+    if (isEvidenceArtifactKind(artifact.kind)) {
+      evidenceItems.push(`- \`${artifact.kind}\` from \`${artifact.path}\`: ${artifact.summary}`);
+    }
+  }
+  const contextEvidenceSection = evidenceItems.length > 0 ? evidenceItems.join("\n") : "(none)";
+
+  // Category 4: Optional Context (optional knowledge, functions, tools)
+  const optionalItems: string[] = [];
+  for (const k of knowledge) {
+    if (k.readPolicy !== "required") {
+      const desc = k.description ?? "reference material";
+      optionalItems.push(`- Knowledge \`${k.skill}.${k.id}\`: ${desc}`);
+    }
+  }
+  for (const f of functions) {
+    const desc = f.description ?? "Agent function pattern";
+    optionalItems.push(`- Function \`${f.skill}.${f.id}\`: ${desc}`);
+  }
+  for (const t of tools) {
+    optionalItems.push(`- Tool \`${t.skill}.${t.id}\`: Tool capability`);
+  }
+  const contextOptionalSection = optionalItems.length > 0 ? optionalItems.join("\n") : "(none)";
+
+  return renderTemplate(TEMPLATES["context-use-policy"], {
+    contextMandatorySection,
+    contextExternalSection,
+    contextEvidenceSection,
+    contextOptionalSection,
+  }, "context-use-policy");
+}
+
+function renderVerificationEvidence(bundle: ContextBundle): string {
+  const evidenceArtifacts = bundle.artifacts.filter((a) => isEvidenceArtifactKind(a.kind));
+  if (evidenceArtifacts.length === 0) {
+    return "";
+  }
+
+  const rows = evidenceArtifacts.map((a) => {
+    const kind = a.kind;
+    const source = a.path;
+    const summary = a.summary.replace(/\|/g, "\\|");
+    const status = (a.kind === "check_result" || a.kind === "check") ? "Checked" : "Available";
+    return `| ${kind} | \`${source}\` | ${summary} | ${status} |`;
+  });
+  const evidenceTableRows = rows.join("\n");
+
+  // Review/summarize steps get the claims note
+  const isReviewLike = bundle.stepType === "agent" &&
+    (bundle.jobId.toLowerCase().includes("review") ||
+     bundle.stepId.toLowerCase().includes("review") ||
+     bundle.jobId.toLowerCase().includes("summarize") ||
+     bundle.stepId.toLowerCase().includes("summarize"));
+  const reviewClaimsNote = isReviewLike
+    ? "\nClaims must reference specific evidence below. Unsubstantiated claims are rejected."
+    : "";
+
+  return renderTemplate(TEMPLATES["verification-evidence"], {
+    evidenceTableRows,
+    reviewClaimsNote,
+  }, "verification-evidence");
+}
+
+function isEvidenceArtifactKind(kind: string): boolean {
+  return (
+    kind === "script_stdout" ||
+    kind === "check_result" ||
+    kind === "check" ||
+    kind.includes("diff") ||
+    kind === "agent_report"
+  );
+}
+
 function workspaceModeSummary(bundle: ContextBundle): string {
   return renderPermissionBoundaryLines(bundle).join(" ");
 }
@@ -1054,6 +1392,23 @@ function normalizePromptText(value: string | undefined): string | undefined {
 
 function isPromptPacket(value: ContextBundle | PromptPacket): value is PromptPacket {
   return "system" in value && "task" in value && "step" in value && "output" in value;
+}
+
+function bundleToQualityGateContext(bundle: ContextBundle): QualityGateContext {
+  const workspaceMode = getWorkspaceMode(bundle);
+  const permissions = bundle.permissions as PermissionSet;
+
+  return {
+    runId: bundle.runId,
+    jobId: bundle.jobId,
+    stepId: bundle.stepId,
+    attempt: bundle.attempt,
+    hasPrimaryPrompt: bundle.primaryPrompt !== undefined,
+    allowGenericPrompt: bundle.allowGenericPrompt === true,
+    isReadOnly: workspaceMode === "read-only" || !canModifyRepositoryFiles(permissions, workspaceMode),
+    hasEditPermissions: permissions["edits"] === "write",
+    validArtifactPaths: bundle.artifacts.map((a) => a.path),
+  };
 }
 
 // ---------------------------------------------------------------------------

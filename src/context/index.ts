@@ -95,6 +95,10 @@ export interface SignalSpec {
   description?: string;
   allowed_from: string[];
   schema?: Record<string, unknown>;
+  // Issue #105: Signal Semantics Table — extended fields for structured signal table
+  when_to_emit?: string;
+  required_evidence?: string;
+  engine_effect?: string;
   [key: string]: unknown;
 }
 
@@ -125,6 +129,12 @@ export interface ContextBundle {
   // WF-P13-VARIABLES
   variables?: Record<string, unknown>;
   contextBlocks?: Array<{ id: string; version: number; content: string; writable: boolean }>;
+  // Step-specific output schemas (Issue #100)
+  outputsSchema?: Record<string, { type: string }>;
+  artifactPolicy?: { required?: string[]; forbidden?: string[] };
+  signalPolicy?: { allowed?: string[]; required_evidence?: string[] };
+  // Issue #106: Allow generic prompt fallback when no primary prompt is found
+  allowGenericPrompt?: boolean;
 }
 
 export interface BuildContextOpts {
@@ -783,6 +793,9 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     ...(warnings.length > 0 ? { warnings } : {}),
     inputs: resolvedInputs,
     ...(step.outputs !== undefined ? { stepOutputs: step.outputs } : {}),
+    ...(step.outputs_schema !== undefined ? { outputsSchema: step.outputs_schema } : {}),
+    ...(step.artifact_policy !== undefined ? { artifactPolicy: step.artifact_policy } : {}),
+    ...(step.signal_policy !== undefined ? { signalPolicy: step.signal_policy } : {}),
     ...(step.required_artifacts !== undefined ? { required_artifacts: step.required_artifacts } : {}),
     artifacts,
     ...(Object.keys(upstreamOutputs).length > 0 ? { upstreamOutputs } : {}),
@@ -791,5 +804,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     repositoryWorkspace,
     ...(bundleVariables !== undefined ? { variables: bundleVariables } : {}),
     ...(bundleContextBlocks !== undefined ? { contextBlocks: bundleContextBlocks } : {}),
+    // Issue #106: Pass allow_generic_prompt from step definition
+    ...(step.allow_generic_prompt !== undefined ? { allowGenericPrompt: step.allow_generic_prompt } : {}),
   };
 }

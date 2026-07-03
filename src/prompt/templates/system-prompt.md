@@ -5,3 +5,13 @@ Global invariants:
 
 Capability and permission boundaries:
 {{boundariesLines}}
+
+{{allowedActionsMatrixSection}}
+
+{{instructionPrioritySection}}
+
+{{stopConditionsSection}}
+
+{{contextUsePolicySection}}
+
+{{verificationEvidenceSection}}

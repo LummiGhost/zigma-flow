@@ -58,6 +58,7 @@ import {
 import { promptAction } from "../../src/commands/prompt.js";
 import {
   ConfigError,
+  PromptBuildError,
   StateError,
   UserInputError,
   WorkflowError,
@@ -281,6 +282,7 @@ jobs:
     steps:
       - id: draft
         type: agent
+        allow_generic_prompt: true
         with:
           goal: "\${{ inputs.task }}"
 `;
@@ -312,10 +314,12 @@ jobs:
     steps:
       - id: draft
         type: agent
+        allow_generic_prompt: true
   review:
     steps:
       - id: critique
         type: agent
+        allow_generic_prompt: true
 `;
 
 /**
@@ -696,6 +700,101 @@ describe("buildAgentPrompt — section rendering", () => {
     expect(out).not.toContain("edits: write");
     expect(out).not.toContain("**edits**");
   });
+
+  // ---------------------------------------------------------------------------
+  // Wave 2: Prompt Engineering Hardening — 4 new sections
+  // ---------------------------------------------------------------------------
+
+  it("renders Allowed Actions Matrix with permission data (#101)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+    expect(out).toContain("Allowed Actions Matrix");
+    expect(out).toMatch(/Action Category.*Permission.*Scope\/Details/);
+    expect(out).toContain("Repository Access");
+    expect(out).toContain("Commands");
+    expect(out).toContain("Signals");
+    expect(out).toContain("State Files");
+    expect(out).toContain("None — Engine owned");
+  });
+
+  it("renders Allowed Actions Matrix with read-only permissions when workspace is read-only (#101)", () => {
+    const out = buildAgentPrompt(
+      makeContextBundle({
+        permissions: { contents: "read", edits: "none", workflow_state: "none", commands: "none" },
+        repositoryWorkspace: { mode: "read-only" },
+      }),
+    );
+    expect(out).toContain("Read-only");
+    expect(out).toContain("Not granted");
+  });
+
+  it("renders Instruction Priority section with 6-level hierarchy (#102)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+    expect(out).toContain("Instruction Priority");
+    expect(out).toContain("Workflow Engine Rules");
+    expect(out).toContain("Stop Conditions");
+    expect(out).toContain("Output Contract");
+    expect(out).toContain("Step Instructions");
+    expect(out).toContain("Context Blocks");
+    expect(out).toContain("Task Prompt");
+  });
+
+  it("renders Stop Conditions section with 4 rules (#102)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+    expect(out).toContain("Stop Conditions");
+    expect(out).toContain("Step Complete");
+    expect(out).toContain("Ambiguous Instructions");
+    expect(out).toContain("Permission Violation");
+    expect(out).toContain("Missing Evidence");
+  });
+
+  it("renders Context Use Policy section with knowledge classification (#103)", () => {
+    const out = buildAgentPrompt(makeContextBundle());
+    expect(out).toContain("Context Use Policy");
+    expect(out).toContain("Mandatory -- Read Before Acting");
+    expect(out).toContain("Mandatory -- Reference Externally");
+    expect(out).toContain("Evidence Only");
+    expect(out).toContain("Optional Context");
+    // Required knowledge (readPolicy: "required") appears in Mandatory section
+    expect(out).toContain("code.rules");
+    // Optional knowledge appears in Optional Context section
+    expect(out).toContain("code.layout");
+  });
+
+  it("renders Verification Evidence table when upstream evidence artifacts exist (#104)", () => {
+    const bundle = makeContextBundle({
+      jobId: "review",
+      stepId: "review",
+      artifacts: [
+        {
+          id: "artifact://test/check",
+          kind: "check_result",
+          path: "jobs/check/attempts/1/steps/check/result.json",
+          summary: "All checks passed",
+          size: 100,
+          content_type: "application/json",
+        },
+        {
+          id: "artifact://test/diff",
+          kind: "script_stdout",
+          path: "jobs/implement/attempts/1/steps/diff/stdout.txt",
+          summary: "git diff of changes",
+          size: 200,
+          content_type: "text/plain",
+        },
+      ],
+    });
+    const out = buildAgentPrompt(bundle);
+    expect(out).toContain("Verification Evidence");
+    expect(out).toContain("check_result");
+    expect(out).toContain("script_stdout");
+    // Claims note for review step
+    expect(out).toContain("Claims must reference specific evidence below");
+  });
+
+  it("does not render Verification Evidence section when no upstream evidence artifacts exist (#104)", () => {
+    const out = buildAgentPrompt(makeContextBundle()); // artifacts: []
+    expect(out).not.toContain("Verification Evidence");
+  });
 });
 
 describe("buildAgentPrompt — confinement", () => {
@@ -798,12 +897,46 @@ describe("validatePromptHandoff — quality gate", () => {
 
     const result = validatePromptHandoff(out, bundle);
 
-    expect(result.errors).toEqual([]);
+    // The quality gate (Wave 1) also flags this as an error
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "read_only_write_conflict" }),
+      ]),
+    );
     expect(result.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: "read_only_edits_write" }),
       ]),
     );
+  });
+
+  // Quality gate integration tests (Wave 1, Issue #107)
+  it("quality gate detects unresolved template markers via validatePromptHandoff", () => {
+    const bundle = makeContextBundle();
+    const out = `${buildAgentPrompt(bundle)}\n\n{{unresolved_var}}`;
+
+    const result = validatePromptHandoff(out, bundle);
+
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "unresolved_template_markers" }),
+      ]),
+    );
+  });
+
+  it("throws PromptBuildError when step has no primary prompt", () => {
+    const bundle = makeContextBundle();
+    delete (bundle as unknown as Record<string, unknown>).primaryPrompt;
+    expect(() => buildAgentPrompt(bundle)).toThrow(PromptBuildError);
+  });
+
+  it("renders debug fallback when allowGenericPrompt is true", () => {
+    const bundle = makeContextBundle();
+    delete (bundle as unknown as Record<string, unknown>).primaryPrompt;
+    bundle.allowGenericPrompt = true;
+    const out = buildAgentPrompt(bundle);
+    expect(out).toContain("**[DEBUG MODE]**");
+    expect(out).toContain("Generic fallback active");
   });
 });
 
@@ -1589,7 +1722,10 @@ describe("Template loading and rendering", () => {
 
   it("reports friendly error when template file is missing (Issue #71)", () => {
     for (const name of ["system-prompt", "task-prompt", "step-prompt", "step-prompt-fallback",
-                         "output-contract", "output-contract-lines", "context-block", "permission-boundary"]) {
+                         "output-contract", "output-contract-lines", "context-block", "permission-boundary",
+                         "allowed-actions-matrix", "instruction-priority", "stop-conditions",
+                         "context-use-policy", "verification-evidence",
+                         "signal-table", "artifact-reference-schema"]) {
       const filePath = join(__dirname, "../../src/prompt/templates", `${name}.md`);
       expect(existsSync(filePath), `Missing template: ${name}.md`).toBe(true);
     }
@@ -1779,6 +1915,7 @@ describe("Golden prompt snapshots", () => {
       repositoryWorkspace: { mode: "read-only" },
       artifacts: [],
       inputs: {},
+      allowGenericPrompt: true,
     });
     delete (bundle as unknown as Record<string, unknown>)["primaryPrompt"];
     const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
@@ -1829,6 +1966,192 @@ describe("Golden prompt snapshots", () => {
     });
     const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
     expect(prompt).toMatchSnapshot();
+  });
+
+  // Issue #100: Step-specific output schemas
+  it("step with outputs_schema, artifact_policy, and signal_policy (T-SCHEMA-SNAPSHOT-1)", () => {
+    const bundle = makeContextBundle({
+      runId: "20260701-0001",
+      jobId: "implement",
+      stepId: "implement",
+      attempt: 1,
+      runTask: "Implement a feature requiring structured outputs",
+      primaryPrompt: {
+        skill: "code",
+        id: "implement",
+        path: "prompts/implement.md",
+        content: "# Implement Step\n\nImplement the change according to the plan and output structured data.",
+        source: "step.prompt",
+      },
+      capabilities: {
+        skills: [{ alias: "code", skillId: "zigma.code-change", version: "1.0.0" }],
+        knowledge: [],
+        prompts: [{ skill: "code", id: "implement", path: "prompts/implement.md" }],
+        functions: [],
+        tools: [],
+      },
+      signals: [{ id: "needs_review", description: "Request review", allowed_from: ["implement"] }],
+      permissions: { contents: "read", edits: "write", workflow_state: "none" },
+      artifacts: [],
+      inputs: { task: "Implement structured output feature" },
+      // Step-specific output schemas (Issue #100)
+      outputsSchema: {
+        plan: { type: "string" },
+        summary: { type: "artifact" },
+      },
+      artifactPolicy: {
+        required: ["summary.md", "diff.patch"],
+        forbidden: ["large/*"],
+      },
+      signalPolicy: {
+        allowed: ["needs_review"],
+        required_evidence: ["test-results.json"],
+      },
+    });
+    const prompt = buildAgentPrompt(bundle).replace(/\r\n/g, "\n");
+    expect(prompt).toMatchSnapshot();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wave 3: Prompt Engineering Hardening — Signal Semantics (#105), Fail Fast (#106), Artifact Reference (#108)
+// ---------------------------------------------------------------------------
+
+describe("Signal semantics table (#105)", () => {
+  it("renders signal table with when-to-emit, required-evidence, engine-effect columns when extended fields are present", () => {
+    const bundle = makeContextBundle({
+      signals: [
+        {
+          id: "needs_architecture_design",
+          description: "Request architecture design",
+          allowed_from: ["plan"],
+          when_to_emit: "When the task requires architectural decisions",
+          required_evidence: "Architecture decision record",
+          engine_effect: "Triggers architecture design workflow",
+        },
+        {
+          id: "needs_review",
+          description: "Request human review",
+          allowed_from: ["plan"],
+          when_to_emit: "When implementation is complete",
+          required_evidence: "Implementation summary",
+          engine_effect: "Queues the step for human review",
+        },
+      ],
+    });
+    const out = buildAgentPrompt(bundle);
+
+    expect(out).toContain("### Signal Semantics");
+    expect(out).toContain("| Signal | When to Emit | Required Evidence | Engine Effect |");
+    expect(out).toContain("needs_architecture_design");
+    expect(out).toContain("Triggers architecture design workflow");
+    expect(out).toContain("needs_review");
+    expect(out).toContain("Queues the step for human review");
+  });
+
+  it("does not render signal semantics table when extended fields are absent (fallback to simple list)", () => {
+    const bundle = makeContextBundle({
+      signals: [
+        {
+          id: "needs_review",
+          description: "Request review",
+          allowed_from: ["plan"],
+        },
+      ],
+    });
+    const out = buildAgentPrompt(bundle);
+
+    // Signal semantics table should not appear
+    expect(out).not.toContain("### Signal Semantics");
+    // The signal should still appear in the Allowed Signals list
+    expect(out).toContain("### Allowed Signals");
+    expect(out).toContain("`needs_review`");
+  });
+
+  it("does not render signal semantics table when signals array is empty", () => {
+    const bundle = makeContextBundle({ signals: [] });
+    const out = buildAgentPrompt(bundle);
+
+    expect(out).not.toContain("### Signal Semantics");
+    expect(out).toContain("### Allowed Signals");
+    expect(out).toContain("(none)");
+  });
+});
+
+describe("Fail fast — no primary prompt (#106)", () => {
+  it("throws PromptBuildError when no primary prompt and allowGenericPrompt is not true", () => {
+    const bundle = makeContextBundle();
+    delete (bundle as unknown as Record<string, unknown>)["primaryPrompt"];
+
+    expect(() => buildPromptPacket(bundle)).toThrow(PromptBuildError);
+    expect(() => buildPromptPacket(bundle)).toThrow(
+      "Failed to build prompt for job",
+    );
+  });
+
+  it("throws PromptBuildError when no primary prompt and allowGenericPrompt is false", () => {
+    const bundle = makeContextBundle();
+    delete (bundle as unknown as Record<string, unknown>)["primaryPrompt"];
+    bundle.allowGenericPrompt = false;
+
+    expect(() => buildPromptPacket(bundle)).toThrow(PromptBuildError);
+  });
+
+  it("falls back to generated step prompt when allowGenericPrompt is true", () => {
+    const bundle = makeContextBundle();
+    delete (bundle as unknown as Record<string, unknown>)["primaryPrompt"];
+    bundle.allowGenericPrompt = true;
+
+    // Should NOT throw
+    const packet = buildPromptPacket(bundle);
+    expect(packet.step.source).toBe("generated-fallback");
+    expect(packet.step.block.content).toContain("No primary Skill Pack prompt was resolved");
+  });
+
+  it("still uses primary prompt when it exists even with allowGenericPrompt not set", () => {
+    const bundle = makeContextBundle(); // has primaryPrompt
+    bundle.allowGenericPrompt = false;
+
+    // Should NOT throw — primary prompt takes precedence
+    const packet = buildPromptPacket(bundle);
+    expect(packet.step.source).not.toBe("generated-fallback");
+    expect(packet.step.promptId).toBe("plan");
+  });
+});
+
+describe("Artifact reference schema (#108)", () => {
+  it("renders artifact reference schema in Output Contract with agent-created and existing evidence sections", () => {
+    const bundle = makeContextBundle();
+    const out = buildAgentPrompt(bundle);
+
+    expect(out).toContain("### Artifact Reference Schema");
+    expect(out).toContain("Agent-Created Artifacts");
+    expect(out).toContain("Existing Evidence Artifacts");
+    expect(out).toContain("path` kind");
+    expect(out).toContain("ref` kind");
+  });
+
+  it("shows the step artifact directory in the schema", () => {
+    const bundle = makeContextBundle({
+      runId: "test-run",
+      jobId: "test-job",
+      stepId: "test-step",
+      attempt: 2,
+    });
+    const out = buildAgentPrompt(bundle);
+
+    expect(out).toContain("jobs/test-job/attempts/2/steps/test-step");
+  });
+
+  it("artifact reference schema appears alongside other output contract sections", () => {
+    const bundle = makeContextBundle();
+    const out = buildAgentPrompt(bundle);
+
+    // Verify section order: Report Schema should appear after Artifact Reference Schema
+    const artifactRefIdx = out.indexOf("### Artifact Reference Schema");
+    const reportSchemaIdx = out.indexOf("### Report Schema");
+    expect(artifactRefIdx).toBeGreaterThan(0);
+    expect(reportSchemaIdx).toBeGreaterThan(artifactRefIdx);
   });
 });
 

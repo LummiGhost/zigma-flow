@@ -2,9 +2,13 @@
  * Expression validation tests for Issue #119 — forbidden construct detection.
  *
  * Covers:
- *   - Arithmetic operators (+, *, /) in ${{ }} → ValidationError
+ *   - Arithmetic operators (+, -, *, /, %) in ${{ }} → ValidationError
  *   - Function call syntax in ${{ }} → ValidationError
+ *   - Array/object literals ([], {}) in ${{ }} → ValidationError
+ *   - Ternary expressions (? :) in ${{ }} → ValidationError
+ *   - Template literals (backtick, ${}) in ${{ }} → ValidationError
  *   - Property chain depth > 3 → ValidationError
+ *   - step.env values scanned for forbidden expressions
  *
  * Cross-job goto_step and max_visits exceeded are already tested:
  *   - goto_step cross-job: tests/workflow/flow-schema.test.ts (FR-FLOW-SCHEMA-004)
@@ -209,5 +213,106 @@ jobs:
 `;
 
     expect(() => loadWorkflow(yaml)).not.toThrow();
+  });
+});
+
+describe("validateExpressions — modulo", () => {
+  it("rejects ${{ variables.count % 3 }} (Issue #119)", () => {
+    const stepYaml = [
+      "- id: test-step",
+      "  type: agent",
+      "  uses: zigma/skill",
+      '  if: "${{ variables.count % 3 == 0 }}"',
+    ].join("\n");
+
+    const yaml = makeSingleStepWorkflow(stepYaml);
+
+    let thrown: unknown;
+    try {
+      loadWorkflow(yaml);
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as ValidationError).message.toLowerCase()).toContain("arithmetic");
+  });
+});
+
+describe("validateExpressions — array/object literals", () => {
+  it("rejects ${{ [1, 2, 3] }} (array literal)", () => {
+    const stepYaml = [
+      "- id: test-step",
+      "  type: agent",
+      "  uses: zigma/skill",
+      '  with:',
+      '    items: "${{ [1, 2, 3] }}"',
+    ].join("\n");
+
+    const yaml = makeSingleStepWorkflow(stepYaml);
+
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
+  });
+
+  it("rejects ${{ {a: 1} }} (object literal)", () => {
+    const stepYaml = [
+      "- id: test-step",
+      "  type: agent",
+      "  uses: zigma/skill",
+      '  with:',
+      '    config: "${{ {a: 1} }}"',
+    ].join("\n");
+
+    const yaml = makeSingleStepWorkflow(stepYaml);
+
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
+  });
+});
+
+describe("validateExpressions — ternary", () => {
+  it("rejects ${{ x ? y : z }} (ternary in step.if)", () => {
+    const stepYaml = [
+      "- id: test-step",
+      "  type: agent",
+      "  uses: zigma/skill",
+      '  if: "${{ x ? y : z }}"',
+    ].join("\n");
+
+    const yaml = makeSingleStepWorkflow(stepYaml);
+
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
+  });
+});
+
+describe("validateExpressions — template literals", () => {
+  it("rejects backtick in expression (template literal)", () => {
+    const yaml = `name: expr-test
+version: "0.1.0"
+jobs:
+  main:
+    steps:
+      - id: test-step
+        type: agent
+        uses: zigma/skill
+        if: "\${{ \`template\` }}"
+`;
+
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
+  });
+});
+
+describe("validateExpressions — step.env scanning", () => {
+  it("rejects expressions in step.env values", () => {
+    const stepYaml = [
+      "- id: test-step",
+      "  type: script",
+      "  run: echo hello",
+      "  env:",
+      '    KEY: "${{ inputs.a + inputs.b }}"',
+    ].join("\n");
+
+    const yaml = makeSingleStepWorkflow(stepYaml);
+
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
   });
 });

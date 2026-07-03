@@ -351,10 +351,11 @@ export interface WorkflowDefinition {
 }
 
 // ---------------------------------------------------------------------------
-// Expression validation (§6.4 — forbidden constructs)
+// Expression validation (§6.4 — forbidden constructs: arithmetic, function calls,
+// array/object literals, ternary, template literals, depth > 3)
 // ---------------------------------------------------------------------------
 
-const EXPR_RE = /\$\{\{\s*([^}]*?)\s*\}\}/g;
+const EXPR_RE = /\$\{\{\s*([\s\S]*?)\s*\}\}/g;
 
 /**
  * Scan a single string for `${{ }}` expressions and reject forbidden patterns.
@@ -370,7 +371,7 @@ function checkForbiddenExpressions(value: string, fieldPath: string): void {
     // Arithmetic operators: +, *, / anywhere; - only when used as operator
     // (with surrounding whitespace or adjacent to a digit), not inside
     // hyphenated identifiers like `code-map`.
-    if (/[+*/]/.test(inner) || /(?:\s-\s|-\d|\d-)/.test(inner)) {
+    if (/[+*/%]/.test(inner) || /(?:\s-\s|-\d|\d-)/.test(inner)) {
       throw new ValidationError(
         `Arithmetic expressions are not supported: ${inner}`,
         { details: { field: fieldPath, expression: inner } },
@@ -381,6 +382,30 @@ function checkForbiddenExpressions(value: string, fieldPath: string): void {
     if (/\b\w+\s*\(/.test(inner)) {
       throw new ValidationError(
         `Function calls are not supported: ${inner}`,
+        { details: { field: fieldPath, expression: inner } },
+      );
+    }
+
+    // Array/object literals: [ or { in expression
+    if (/[\[\{]/.test(inner)) {
+      throw new ValidationError(
+        `Array/object literals are not supported: ${inner}`,
+        { details: { field: fieldPath, expression: inner } },
+      );
+    }
+
+    // Ternary operator: ? followed by a word character
+    if (/\?\s*\w/.test(inner)) {
+      throw new ValidationError(
+        `Ternary expressions are not supported: ${inner}`,
+        { details: { field: fieldPath, expression: inner } },
+      );
+    }
+
+    // Template literals: backtick or ${ interpolation
+    if (/`|\$\{/.test(inner)) {
+      throw new ValidationError(
+        `Template literals are not supported: ${inner}`,
         { details: { field: fieldPath, expression: inner } },
       );
     }
@@ -449,6 +474,11 @@ function validateExpressions(workflow: WorkflowDefinition): void {
       }
       if (step.if) {
         checkForbiddenExpressions(step.if, `${base}.if`);
+      }
+      if (step.env) {
+        for (const [envKey, envVal] of Object.entries(step.env)) {
+          checkForbiddenExpressions(envVal, `${base}.env.${envKey}`);
+        }
       }
     }
   }

@@ -3,6 +3,7 @@ dist/
 coverage/
 .vitest/
 *.tsbuildinfo
+.turbo/
 
 # Zigma Flow runtime state (do not commit)
 .zigma-flow/runs/

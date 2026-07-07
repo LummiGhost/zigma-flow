@@ -9,11 +9,12 @@
  * WF-P13-ENGINE-RUNALL Step 2 / WF-P13-RESUME-CANCEL Step 2.
  */
 
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import type { AgentBackend } from "../agent/index.js";
 import { loadAgentConfig, resolveBackendForStep, createBackend } from "../agent/config.js";
 import { runAll, type RunAllOpts, type RunAllSummary } from "../engine/runAll.js";
+import { resolveWorkflowPath } from "./run.js";
 
 // ---------------------------------------------------------------------------
 // runAllAction options
@@ -40,8 +41,8 @@ export async function runAllAction(
   workflowPath: string,
   options: RunAllOptions,
 ): Promise<void> {
-  const absWorkflowPath = resolve(workflowPath);
   const projectRoot = process.cwd();
+  const absWorkflowPath = await resolveWorkflowPath(workflowPath, projectRoot);
   const zigmaflowDir = projectRoot;
   const runsDir = join(projectRoot, ".zigma-flow", "runs");
   const skillLockPath = join(projectRoot, ".zigma-flow", "skill-lock.json");

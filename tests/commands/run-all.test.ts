@@ -134,4 +134,32 @@ describe("runAllAction", () => {
     expect(state.jobs["intake"]?.status).toBe("completed");
     expect(state.jobs["intake"]?.outputs).toEqual({ completed: true });
   });
+
+  it("resolves a bare workflow name from .zigma-flow/workflows/ (#141)", async () => {
+    // Place the workflow under .zigma-flow/workflows/ using a bare name (no path, no extension)
+    const workflowsDir = join(sandbox.projectRoot, ".zigma-flow", "workflows");
+    await mkdir(workflowsDir, { recursive: true });
+    await writeFile(join(workflowsDir, "my-workflow.yml"), SINGLE_AGENT_WORKFLOW_YAML, "utf-8");
+
+    // Pass only the bare name — the old code would resolve to a non-existent raw path
+    await runAllAction("my-workflow", { task: "bare name lookup" });
+
+    expect(TestRunAllBackend.calls).toHaveLength(1);
+    expect(TestRunAllBackend.calls[0]!.prompt).toContain("bare name lookup");
+
+    const config = JSON.parse(await readFile(sandbox.configPath, "utf-8")) as {
+      active_run: string | null;
+    };
+    expect(config.active_run).toBeTruthy();
+
+    const state = JSON.parse(
+      await readFile(join(sandbox.runsDir, config.active_run!, "state.json"), "utf-8"),
+    ) as {
+      status?: string;
+      jobs: Record<string, { status: string; outputs?: Record<string, unknown> }>;
+    };
+
+    expect(state.status).toBe("completed");
+    expect(state.jobs["intake"]?.status).toBe("completed");
+  });
 });

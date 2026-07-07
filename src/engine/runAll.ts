@@ -338,13 +338,32 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   } = ctx;
 
   // Build context (read-only — no disk writes)
-  const bundle = await buildContext({
-    runDir,
-    zigmaflowDir,
-    workflowDef: wf,
-    state,
-    jobId,
-  });
+  let bundle: Awaited<ReturnType<typeof buildContext>>;
+  try {
+    bundle = await buildContext({
+      runDir,
+      zigmaflowDir,
+      workflowDef: wf,
+      state,
+      jobId,
+    });
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    // Fail the job explicitly with a clear error message
+    await recordAgentFailure({
+      runDir,
+      runId,
+      jobId,
+      stepId: stepId,
+      attempt: state.jobs[jobId]?.attempt ?? 1,
+      reason: `Context build failed: ${errorMsg}`,
+      errorType: "config",
+      clock,
+      stateStore,
+      eventWriter,
+    });
+    return { jobId, success: false, action: "failed", detail: `Context build failed: ${errorMsg}` };
+  }
 
   if (bundle.stepType !== "agent") {
     return { jobId, success: false, action: "blocked", detail: "Step type mismatch in buildContext" };

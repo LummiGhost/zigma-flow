@@ -738,12 +738,9 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     },
   }));
 
-  // Advance the job if the agent signals completion via outputs.completed
-  if (outputs.completed === true) {
-    await advanceJob({ runDir, runId, jobId, clock });
-  }
-  // Otherwise the agent has not completed — job stays in "running" state
-  // and will be re-processed on the next loop iteration.
+  // Advance unconditionally after a valid report is accepted — matches accept.ts behavior.
+  // Single-turn agent steps should not require outputs.completed to progress.
+  await advanceJob({ runDir, runId, jobId, clock });
 
   return { jobId, success: true, action: "completed" };
 }

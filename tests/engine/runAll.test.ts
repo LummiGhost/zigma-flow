@@ -144,8 +144,8 @@ class FakeBackend implements AgentBackend {
 }
 
 /**
- * A stale FakeBackend — does NOT advance the job. Used by MAX_ITERATIONS
- * tests to keep the job in "ready" state across loop iterations.
+ * A simple FakeBackend that always succeeds and records calls.
+ * Used by MAX_ITERATIONS tests.
  */
 class StaleFakeBackend implements AgentBackend {
   readonly name = "fake-stale";
@@ -155,21 +155,11 @@ class StaleFakeBackend implements AgentBackend {
 
   async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
     StaleFakeBackend.calls.push(opts);
-    // Write a report that does NOT signal completion — the job stays ready.
     await mkdir(dirname(opts.reportPath), { recursive: true });
     await writeFile(
       opts.reportPath,
-      JSON.stringify(
-        {
-          outputs: { still_running: true },
-          artifacts: [],
-          signals: [],
-          summary: "fake backend executed but job not done",
-        },
-        null,
-        2
-      ),
-      "utf-8"
+      JSON.stringify({ outputs: { done: true }, artifacts: [], signals: [], summary: "ok" }, null, 2),
+      "utf-8",
     );
     return { success: true, reportPath: opts.reportPath };
   }
@@ -223,6 +213,25 @@ jobs:
         type: agent
         allow_generic_prompt: true
         uses: zigma/deploy-skill
+`;
+
+/** Two-agent-step job — used to test maxIterations exhaustion (step 1 runs, step 2 does not). */
+const TWO_AGENT_STEP_YAML = `\
+name: runall-two-agent-steps
+version: "0.1.0"
+jobs:
+  pipeline:
+    steps:
+      - id: step-one
+        type: agent
+        allow_generic_prompt: true
+        with:
+          goal: "first step"
+      - id: step-two
+        type: agent
+        allow_generic_prompt: true
+        with:
+          goal: "second step"
 `;
 
 /** Multi-step job with agent → script → router flow. */
@@ -468,12 +477,15 @@ describe("runAll — MAX_ITERATIONS guard (T-RUNALL-3)", () => {
   it(
     "exits loop after maxIterations and returns summary with iterations===maxIterations (T-RUNALL-3, UC-RUNALL-005, FP-RUNALL-MAX-ITER)",
     async () => {
+      // A two-agent-step workflow where each step consumes one iteration.
+      // With maxIterations=1, step-one runs but step-two never gets a chance to run.
+      // The loop exits with the job still "running" (between steps) — no terminal state.
       const { runId: _precreatedRunId, runDir: _precreatedRunDir, workflowPath } =
-        await bootstrapRun(sandbox, SINGLE_AGENT_YAML, "runall-single-agent");
+        await bootstrapRun(sandbox, TWO_AGENT_STEP_YAML, "runall-two-agent-steps");
 
       await rm(_precreatedRunDir, { recursive: true, force: true });
 
-      const maxIterations = 3;
+      const maxIterations = 1;
 
       const summary = await callRunAll({
         task: "exercise max iter",
@@ -487,12 +499,12 @@ describe("runAll — MAX_ITERATIONS guard (T-RUNALL-3)", () => {
       });
 
       expect(summary.runId).toBeTruthy();
-      // Loop was exhausted, not a terminal state
+      // Loop was exhausted after maxIterations — job is between steps, not terminal
       expect(summary.status).toBeUndefined();
       expect(summary.iterations).toBe(maxIterations);
 
-      // Backend was called exactly maxIterations times
-      expect(StaleFakeBackend.calls).toHaveLength(maxIterations);
+      // Backend was called exactly once (only step-one ran)
+      expect(StaleFakeBackend.calls).toHaveLength(1);
     }
   );
 });

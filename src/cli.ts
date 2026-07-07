@@ -31,6 +31,7 @@ import { rejectAction } from "./commands/reject.js";
 import { verifyRunAction } from "./commands/verify-run.js";
 import { eventsAction } from "./commands/events.js";
 import { artifactsAction } from "./commands/artifacts.js";
+import { skillAddAction } from "./commands/skill-add.js";
 import { SystemClock } from "./run/index.js";
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -320,6 +321,18 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         ...(runId !== undefined ? { runId } : {}),
       });
       process.exitCode = exitCode;
+    });
+
+  const skillCmd = program
+    .command("skill")
+    .description("Manage skill packs.");
+
+  skillCmd
+    .command("add <pack-path>")
+    .description("Register a local skill pack in .zigma-flow/skill-lock.json.")
+    .exitOverride()
+    .action(async (packPath: string) => {
+      await skillAddAction(packPath);
     });
 
   try {

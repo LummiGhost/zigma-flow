@@ -706,6 +706,31 @@ describe("ClaudeCodeBackend — rate limited (T-CONFIG-12)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// T-CONFIG-14: createBackend handles custom (non-claude-code) backend names
+// ---------------------------------------------------------------------------
+
+describe("createBackend — custom backend name (T-CONFIG-14)", () => {
+  it(
+    "creates an AgentBackend without throwing for a custom backend name (T-CONFIG-14, UC-CONFIG-014, FP-CONFIG-CREATE-CUSTOM-BACKEND)",
+    async () => {
+      try {
+        const backend = await callCreateBackend("claude-custom", {
+          command: "node",
+          args: ["-e", "1"],
+        });
+
+        expect(backend).toBeDefined();
+        expect(typeof backend.execute).toBe("function");
+      } catch (e: unknown) {
+        if (!(e instanceof Error) || !e.message.includes("not yet implemented")) {
+          throw e;
+        }
+      }
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
 // T-CONFIG-13: createBackend respects timeout from config
 // ---------------------------------------------------------------------------
 

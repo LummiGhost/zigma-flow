@@ -40,11 +40,21 @@ export class ClaudeCodeBackend implements AgentBackend {
     this.command = config.command;
     this.args = config.args ?? DEFAULT_ARGS;
     this.timeout = config.timeout ?? DEFAULT_TIMEOUT;
-    this.env = config.env ?? {};
+    this.env = this.interpolateEnv(config.env ?? {});
 
     this.backendCommand = this.command;
     this.backendArgs = this.args;
     this.backendTimeoutMs = this.timeout;
+  }
+
+  private interpolateEnv(env: Record<string, string>): Record<string, string> {
+    const result: Record<string, string> = {};
+    for (const [key, value] of Object.entries(env)) {
+      result[key] = value.replace(/\$\{([^}]+)\}/g, (_, varName: string) => {
+        return process.env[varName] ?? `\${${varName}}`;
+      });
+    }
+    return result;
   }
 
   async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {

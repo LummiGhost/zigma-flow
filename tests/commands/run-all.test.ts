@@ -135,6 +135,44 @@ describe("runAllAction", () => {
     expect(state.jobs["intake"]?.outputs).toEqual({ completed: true });
   });
 
+  it("advances past agent step when report omits outputs.completed (#147)", async () => {
+    // Backend intentionally omits outputs.completed to reproduce the infinite-loop bug
+    class NoCompletedFlagBackend implements AgentBackend {
+      readonly name = "no-completed-flag";
+      constructor(_config: AgentBackendConfig) {}
+      async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
+        await mkdir(dirname(opts.reportPath), { recursive: true });
+        await writeFile(
+          opts.reportPath,
+          JSON.stringify({ outputs: { task_summary: "done" }, artifacts: [], signals: [], summary: "ok" }, null, 2),
+          "utf-8",
+        );
+        return { success: true, reportPath: opts.reportPath };
+      }
+    }
+    agentFactory.register("no-completed-flag", NoCompletedFlagBackend);
+
+    const dotZigma = join(sandbox.projectRoot, ".zigma-flow");
+    await writeFile(
+      join(dotZigma, "config.json"),
+      JSON.stringify(
+        { tool_version: "0.1.0", active_run: null, agent: { backend: "no-completed-flag", backends: { "no-completed-flag": { command: "fake" } } } },
+        null, 2,
+      ),
+      "utf-8",
+    );
+
+    await runAllAction(sandbox.workflowPath, { task: "advance without completed flag" });
+
+    const config = JSON.parse(await readFile(sandbox.configPath, "utf-8")) as { active_run: string | null };
+    const state = JSON.parse(
+      await readFile(join(sandbox.runsDir, config.active_run!, "state.json"), "utf-8"),
+    ) as { status?: string; jobs: Record<string, { status: string }> };
+
+    expect(state.status).toBe("completed");
+    expect(state.jobs["intake"]?.status).toBe("completed");
+  });
+
   it("resolves a bare workflow name from .zigma-flow/workflows/ (#141)", async () => {
     // Place the workflow under .zigma-flow/workflows/ using a bare name (no path, no extension)
     const workflowsDir = join(sandbox.projectRoot, ".zigma-flow", "workflows");

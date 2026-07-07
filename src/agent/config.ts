@@ -205,6 +205,10 @@ export function createBackend(
   if (!agentFactory.get("claude-code")) {
     agentFactory.register("claude-code", ClaudeCodeBackend);
   }
+  // Register any configured custom backend using ClaudeCodeBackend as its generic implementation
+  if (!agentFactory.get(name)) {
+    agentFactory.register(name, ClaudeCodeBackend);
+  }
 
   return agentFactory.createBackend(name, {
     command: config.command,

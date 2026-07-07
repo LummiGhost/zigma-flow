@@ -653,6 +653,66 @@ describe("ClaudeCodeBackend — files on timeout (T-CCB-009)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// T-CCB-011: Constructor interpolates ${VAR} in env values
+// ---------------------------------------------------------------------------
+
+describe("ClaudeCodeBackend — env var interpolation (T-CCB-011)", () => {
+  it(
+    "interpolates ${VAR_NAME} placeholders in env config values at construction time (T-CCB-011, UC-ENV-001, FP-ENV-INTERPOLATE)",
+    () => {
+      const originalValue = process.env["TEST_ENV_VAR"];
+      try {
+        process.env["TEST_ENV_VAR"] = "hello";
+
+        const backend = new ClaudeCodeBackend({
+          command: "node",
+          args: ["-p"],
+          timeout: 5_000,
+          env: {
+            MY_VAR: "${TEST_ENV_VAR}",
+            LITERAL: "world",
+          },
+        });
+
+        // Access the private env field via cast to any
+        const env = (backend as unknown as Record<string, unknown>)["env"] as Record<string, string | undefined>;
+
+        expect(env["MY_VAR"]).toBe("hello");
+        expect(env["LITERAL"]).toBe("world");
+      } finally {
+        // Restore original value
+        if (originalValue === undefined) {
+          delete process.env["TEST_ENV_VAR"];
+        } else {
+          process.env["TEST_ENV_VAR"] = originalValue;
+        }
+      }
+    }
+  );
+
+  it(
+    "leaves ${VAR_NAME} as-is when the referenced env variable is not set (T-CCB-011)",
+    () => {
+      // Ensure the variable is not set
+      const key = "ZIGMA_TEST_UNSET_VAR_XYZ";
+      delete process.env[key];
+
+      const backend = new ClaudeCodeBackend({
+        command: "node",
+        args: ["-p"],
+        timeout: 5_000,
+        env: {
+          MY_VAR: `\${${key}}`,
+        },
+      });
+
+      const env = (backend as unknown as Record<string, unknown>)["env"] as Record<string, string | undefined>;
+      expect(env["MY_VAR"]).toBe(`\${${key}}`);
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
 // T-CCB-010: Returns exitCode in structured result on failure
 // ---------------------------------------------------------------------------
 

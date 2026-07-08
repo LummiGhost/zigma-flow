@@ -1,6 +1,6 @@
 {
   "name": "zigma-flow",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Local Agent Workflow Runtime / Workflow Harness.",
   "private": true,
   "type": "module",

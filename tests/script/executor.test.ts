@@ -855,3 +855,160 @@ describe("executeScriptStep — downstream dependency propagation (T-SCRIPT-PROP
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// T-SCRIPT-8: on_failure: { goto_step: <id> } — script failure routes to
+// another step within the same job
+// ---------------------------------------------------------------------------
+
+const SCRIPT_WORKFLOW_GOTO_STEP_YAML = `\
+name: code-change
+version: "0.1.0"
+jobs:
+  build:
+    steps:
+      - id: compile
+        type: script
+        run: "exit 1"
+        on_failure:
+          goto_step: fix
+      - id: fix
+        type: script
+        run: "echo fixed"
+`;
+
+describe("executeScriptStep — on_failure: { goto_step } (T-SCRIPT-8)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "routes to target step within the same job and keeps job running (T-SCRIPT-8, UC-SCRIPT-8)",
+    async () => {
+      const { runId, runDir } = await bootstrapScriptRun(
+        sandbox,
+        SCRIPT_WORKFLOW_GOTO_STEP_YAML
+      );
+
+      const runner = new FakeRunner({
+        exitCode: 1,
+        timedOut: false,
+        stdout: "",
+        stderr: "fail\n",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({
+          runDir,
+          zigmaflowDir: sandbox.zigmaflowDir,
+          runId,
+          jobId: "build",
+          runner,
+        })
+      );
+
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+      expect(types).toContain("step_failed");
+      expect(types).toContain("step_revisited");
+      // job should NOT be completed or failed — it continues to the fix step
+      expect(types).not.toContain("job_completed");
+      expect(types).not.toContain("job_failed");
+      expect(types).not.toContain("job_blocked");
+
+      // verify step_revisited points to the correct target
+      const revisited = events.find((e) => e.type === "step_revisited");
+      expect(revisited?.payload["target_step"]).toBe("fix");
+
+      // state: job stays running, current_step moves to the fix step
+      const snapshot = await readStateSnapshot(runDir);
+      expect(snapshot.jobs["build"]?.status).toBe("running");
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-SCRIPT-9: on_failure: { activate_job: <id> } — script failure activates
+// a declared-optional job and finalizes the source job to blocked
+// ---------------------------------------------------------------------------
+
+const SCRIPT_WORKFLOW_ACTIVATE_JOB_YAML = `\
+name: code-change
+version: "0.1.0"
+jobs:
+  build:
+    steps:
+      - id: compile
+        type: script
+        run: "exit 1"
+        on_failure:
+          activate_job: recovery
+  recovery:
+    activation: "activated by script on_failure"
+    steps:
+      - id: fix
+        type: script
+        run: "echo fix"
+`;
+
+describe("executeScriptStep — on_failure: { activate_job } (T-SCRIPT-9)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "activates target job and finalizes source job to blocked (T-SCRIPT-9, UC-SCRIPT-9)",
+    async () => {
+      const { runId, runDir } = await bootstrapScriptRun(
+        sandbox,
+        SCRIPT_WORKFLOW_ACTIVATE_JOB_YAML
+      );
+
+      const runner = new FakeRunner({
+        exitCode: 1,
+        timedOut: false,
+        stdout: "",
+        stderr: "fail\n",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({
+          runDir,
+          zigmaflowDir: sandbox.zigmaflowDir,
+          runId,
+          jobId: "build",
+          runner,
+        })
+      );
+
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+      expect(types).toContain("step_failed");
+      expect(types).toContain("job_activated");
+      expect(types).toContain("job_blocked");
+
+      // source job must be finalized to blocked, not left in running
+      const snapshot = await readStateSnapshot(runDir);
+      expect(snapshot.jobs["build"]?.status).toBe("blocked");
+      // recovery job must be activated (ready or waiting)
+      const recoveryStatus = snapshot.jobs["recovery"]?.status;
+      expect(["ready", "waiting"]).toContain(recoveryStatus);
+    }
+  );
+});

@@ -523,3 +523,110 @@ describe("retryJob — retry_inputs persistence (T-RETRY-6)", () => {
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// T-RETRY-7: force flag overrides max_attempts exhaustion (blocked → ready)
+// ---------------------------------------------------------------------------
+
+describe("retryJob — force flag overrides max_attempts exhaustion (T-RETRY-7)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "force=true bypasses max_attempts check and retries a blocked job (T-RETRY-7, UC-RETRY-7, FP-RETRY-ENG-7)",
+    async () => {
+      const { runId, runDir } = await bootstrapRun(
+        sandbox,
+        ON_EXCEEDED_DEFAULT_YAML,
+        "retry-on-exceeded-default"
+      );
+
+      // Job already exhausted its single attempt and is blocked
+      await setJobState(runDir, "implement", {
+        status: "blocked",
+        attempt: 1,
+      });
+
+      await retryJob({
+        runDir,
+        runId,
+        jobId: "implement",
+        clock: new FakeClock(),
+        reason: "root cause fixed",
+        force: true,
+      });
+
+      const snap = await readStateSnapshot(runDir);
+      const job = snap.jobs["implement"]!;
+      expect(job.status).toBe("ready");
+      expect(job.attempt).toBe(2);
+      expect(job.retry_reason).toBe("root cause fixed");
+
+      const events = await readEvents(runDir);
+      const tail = events[events.length - 1]!;
+      expect(tail.type).toBe("job_retrying");
+      expect(tail.payload).toMatchObject({
+        job_id: "implement",
+        attempt: 2,
+        reason: "root cause fixed",
+      });
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-RETRY-8: force flag overrides max_attempts with on_exceeded.status=failed
+// ---------------------------------------------------------------------------
+
+describe("retryJob — force overrides on_exceeded.status=failed exhaustion (T-RETRY-8)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "force=true bypasses max_attempts check even when on_exceeded.status=failed (T-RETRY-8, UC-RETRY-8, FP-RETRY-ENG-7)",
+    async () => {
+      const { runId, runDir } = await bootstrapRun(
+        sandbox,
+        ON_EXCEEDED_FAILED_YAML,
+        "retry-on-exceeded-failed"
+      );
+
+      // Job exhausted max_attempts=2 and is in failed state
+      await setJobState(runDir, "implement", {
+        status: "failed",
+        attempt: 2,
+      });
+
+      await retryJob({
+        runDir,
+        runId,
+        jobId: "implement",
+        clock: new FakeClock(),
+        force: true,
+      });
+
+      const snap = await readStateSnapshot(runDir);
+      const job = snap.jobs["implement"]!;
+      expect(job.status).toBe("ready");
+      expect(job.attempt).toBe(3);
+
+      const events = await readEvents(runDir);
+      const tail = events[events.length - 1]!;
+      expect(tail.type).toBe("job_retrying");
+    }
+  );
+});

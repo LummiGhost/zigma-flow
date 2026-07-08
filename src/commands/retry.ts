@@ -35,6 +35,8 @@ export interface RetryActionOpts {
   reason?: string;
   /** Optional wholesale-replacement inputs for the retry attempt. */
   retryInputs?: Record<string, string>;
+  /** Force retry even when max_attempts is exceeded. */
+  force?: boolean;
   /** Clock for timestamping events. */
   clock: Clock;
 }
@@ -44,7 +46,7 @@ export interface RetryActionOpts {
 // ---------------------------------------------------------------------------
 
 export async function retryAction(opts: RetryActionOpts): Promise<void> {
-  const { zigmaflowDir, jobId, reason, retryInputs, clock } = opts;
+  const { zigmaflowDir, jobId, reason, retryInputs, force, clock } = opts;
 
   // 1. Read active_run from config.json
   const activeRunId = await readActiveRun(zigmaflowDir);
@@ -80,15 +82,22 @@ export async function retryAction(opts: RetryActionOpts): Promise<void> {
     clock,
     ...(reason !== undefined ? { reason } : {}),
     ...(retryInputs !== undefined ? { retryInputs } : {}),
+    ...(force !== undefined ? { force } : {}),
   });
 
   // 4. Check resulting status — exhausted retries leave job blocked/failed
   const snap = await stateStore.readSnapshot(runDir);
   const newJobStatus = snap?.jobs[jobId]?.status;
   if (newJobStatus === "blocked" || newJobStatus === "failed") {
-    console.error(`Job '${jobId}' max attempts exceeded — status: ${newJobStatus}.`);
-    process.exitCode = 1;
-    return;
+    if (force) {
+      // Force retry overrode the exhaustion check — this shouldn't happen,
+      // but handle defensively in case the engine module has a different version.
+      console.warn(`Job '${jobId}' is still ${newJobStatus} despite --force.`);
+    } else {
+      console.error(`Job '${jobId}' max attempts exceeded — status: ${newJobStatus}.`);
+      process.exitCode = 1;
+      return;
+    }
   }
 
   const attempt = snap?.jobs[jobId]?.attempt ?? "?";

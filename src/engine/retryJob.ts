@@ -47,6 +47,8 @@ export interface RetryJobOpts {
   reason?: string;
   /** Optional wholesale-replacement inputs for the retry attempt. */
   retryInputs?: Record<string, string>;
+  /** Force retry even when max_attempts is exceeded. */
+  force?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +88,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function retryJob(opts: RetryJobOpts): Promise<void> {
-  const { runDir, runId, jobId, clock, reason, retryInputs } = opts;
+  const { runDir, runId, jobId, clock, reason, retryInputs, force } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -137,7 +139,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
 
   // ── 5. Check if max_attempts exceeded ─────────────────────────────────────
 
-  if (currentAttempt >= maxAttempts) {
+  if (currentAttempt >= maxAttempts && !force) {
     // Exhausted — read on_exceeded.status (default: "blocked")
     const onExceededStatus: "blocked" | "failed" =
       retryConfig !== undefined &&

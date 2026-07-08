@@ -162,8 +162,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .requiredOption("--job <job>", "Job id to retry.")
     .option("--reason <reason>", "Human-readable reason for the retry.")
     .option("--with <inputs>", "JSON string of retry inputs (wholesale replacement).")
+    .option("--force", "Force retry even when max attempts exceeded.")
     .exitOverride()
-    .action(async (options: { job: string; reason?: string; with?: string }) => {
+    .action(async (options: { job: string; reason?: string; with?: string; force?: boolean }) => {
       let retryInputs: Record<string, string> | undefined;
       if (options.with !== undefined) {
         try {
@@ -187,6 +188,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         jobId: options.job,
         ...(options.reason !== undefined ? { reason: options.reason } : {}),
         ...(retryInputs !== undefined ? { retryInputs } : {}),
+        ...(options.force !== undefined ? { force: options.force } : {}),
         clock: new SystemClock(),
       });
     });

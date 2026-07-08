@@ -1,0 +1,4 @@
+# Vitest snapshot files must use LF line endings on all platforms.
+# The test code normalizes rendered output with .replace(/\r\n/g, "\n"),
+# so snapshot comparison breaks if git converts these to CRLF on Windows.
+*.snap text eol=lf

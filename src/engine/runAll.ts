@@ -1077,9 +1077,87 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
     iteration++;
   }
 
+  // ── 3.5. Post-loop: block waiting jobs whose dependencies failed/blocked ───
+  //
+  // After the main loop exits for any reason, "waiting" jobs whose `needs`
+  // entries are ALL terminal-failure states ("failed" or "blocked") can never
+  // become "ready". Mark them "blocked" and fail the run so callers get a
+  // clear exit signal. Skip this step when the run was cancelled.
+
+  let finalState = await stateStore.readSnapshot(runDir);
+
+  if (finalState !== null && finalState.status !== "cancelled") {
+    const deadlockedIds = Object.entries(finalState.jobs)
+      .filter(([jobId, js]) => {
+        if (js.status !== "waiting") return false;
+        const needs = wf.jobs[jobId]?.needs ?? [];
+        return needs.length > 0 && needs.some((dep) => {
+          const s = finalState!.jobs[dep]?.status;
+          return s === "failed" || s === "blocked";
+        });
+      })
+      .map(([id]) => id);
+
+    if (deadlockedIds.length > 0) {
+      let lastEvtId = finalState.last_event_id;
+
+      for (const jobId of deadlockedIds) {
+        const evtId = await nextSequentialEventId(runDir, eventWriter);
+        const evt: ZigmaFlowEvent = {
+          id: evtId,
+          type: "job_blocked",
+          run_id: runId,
+          timestamp: clock.now(),
+          producer: "engine",
+          job: jobId,
+          step: null,
+          attempt: null,
+          payload: { job_id: jobId, reason: "upstream dependency failed or blocked" },
+        };
+        await eventWriter.appendEvent(runDir, evt);
+        onEvent?.(evt);
+        lastEvtId = evtId;
+      }
+
+      if (finalState.status !== "failed") {
+        const runFailedId = await nextSequentialEventId(runDir, eventWriter);
+        const runFailedEvt: ZigmaFlowEvent = {
+          id: runFailedId,
+          type: "run_failed",
+          run_id: runId,
+          timestamp: clock.now(),
+          producer: "engine",
+          job: null,
+          step: null,
+          attempt: null,
+          payload: { reason: "upstream dependency failed or blocked" },
+        };
+        await eventWriter.appendEvent(runDir, runFailedEvt);
+        onEvent?.(runFailedEvt);
+        lastEvtId = runFailedId;
+      }
+
+      const deadlockLastEvtId = lastEvtId;
+      await stateStore.updateState(runDir, (current) => {
+        const updatedJobs = { ...current.jobs };
+        for (const jobId of deadlockedIds) {
+          updatedJobs[jobId] = { ...updatedJobs[jobId]!, status: "blocked" as const };
+        }
+        return {
+          ...current,
+          status: "failed" as const,
+          last_event_id: deadlockLastEvtId,
+          jobs: updatedJobs,
+        };
+      });
+
+      // Re-read after update so the summary reflects the final state
+      finalState = await stateStore.readSnapshot(runDir);
+    }
+  }
+
   // ── 4. Build summary from final state ──────────────────────────────────
 
-  const finalState = await stateStore.readSnapshot(runDir);
   const jobs = Object.entries(finalState?.jobs ?? {}).map(([id, js]) => ({
     id,
     status: js.status,

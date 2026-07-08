@@ -711,6 +711,107 @@ describe("runAll — backend resolver (T-RUNALL-7)", () => {
 // T-RUNALL-8: Script step delegation
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Failing backend — always returns success:false, used by T-RUNALL-9
+// ---------------------------------------------------------------------------
+
+class AlwaysFailBackend implements AgentBackend {
+  readonly name = "fake-always-fail";
+
+  constructor(_config: AgentBackendConfig) {}
+
+  async execute(_opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
+    return { success: false, error: "always fails" };
+  }
+}
+
+/** Two-job workflow: "check" (no deps) → "review" (needs check). */
+const FAIL_PROPAGATE_YAML = `\
+name: runall-fail-propagate
+version: "0.1.0"
+jobs:
+  check:
+    steps:
+      - id: validate
+        type: agent
+        allow_generic_prompt: true
+        with:
+          goal: "run a check"
+  review:
+    needs:
+      - check
+    steps:
+      - id: summarize
+        type: agent
+        allow_generic_prompt: true
+        with:
+          goal: "review results"
+`;
+
+// ---------------------------------------------------------------------------
+// T-RUNALL-9: Upstream failure propagates to waiting downstream jobs
+// ---------------------------------------------------------------------------
+
+describe("runAll — upstream failure propagates to waiting downstream jobs (T-RUNALL-9)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "marks waiting downstream jobs blocked and sets run status to failed when upstream job fails (T-RUNALL-9, UC-RUNALL-011, FP-RUNALL-UPSTREAM-FAIL)",
+    async () => {
+      const { runId: _precreatedRunId, runDir: _precreatedRunDir, workflowPath } =
+        await bootstrapRun(sandbox, FAIL_PROPAGATE_YAML, "runall-fail-propagate");
+
+      await rm(_precreatedRunDir, { recursive: true, force: true });
+
+      const summary = await callRunAll({
+        task: "exercise upstream fail propagation",
+        workflowPath,
+        runsDir: sandbox.runsDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        skillLockPath: sandbox.skillLockPath,
+        backendResolver: () => new AlwaysFailBackend({ command: "fake" }),
+        clock: new FakeClock(),
+      });
+
+      // Run must finish as failed (not stuck or blocked)
+      expect(summary.status).toBe("failed");
+
+      // Upstream job "check" exhausted max_attempts → "blocked" (default on_exceeded)
+      const checkJob = summary.jobs.find((j) => j.id === "check");
+      expect(checkJob).toBeDefined();
+      expect(checkJob!.status).toBe("blocked");
+
+      // Downstream job "review" was waiting and must now be blocked
+      const reviewJob = summary.jobs.find((j) => j.id === "review");
+      expect(reviewJob).toBeDefined();
+      expect(reviewJob!.status).toBe("blocked");
+
+      // Events must include job_blocked for "review" and run_failed
+      const runDir = join(sandbox.runsDir, summary.runId);
+      const events = await readEvents(runDir);
+      const eventTypes = events.map((e) => e.type);
+      expect(eventTypes).toContain("run_failed");
+
+      const reviewBlocked = events.find(
+        (e) => e.type === "job_blocked" && e.job === "review",
+      );
+      expect(reviewBlocked).toBeDefined();
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-RUNALL-8: Script step delegation
+// ---------------------------------------------------------------------------
+
 describe("runAll — script step delegation (T-RUNALL-8)", () => {
   let sandbox: Sandbox;
 

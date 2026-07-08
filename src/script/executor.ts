@@ -526,11 +526,14 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
 
     const onFailure = stepDef.on_failure;
 
-    // Check for object-form routing action (retry_job / activate_job / goto_job)
+    // Check for object-form routing action
     const isObjectFormRoutingAction =
       onFailure !== undefined &&
       typeof onFailure === "object" &&
-      ("retry_job" in onFailure || "activate_job" in onFailure || "goto_job" in onFailure);
+      ("retry_job" in onFailure ||
+        "activate_job" in onFailure ||
+        "goto_job" in onFailure ||
+        "goto_step" in onFailure);
 
     if (isObjectFormRoutingAction) {
       await applyRoutingAction({
@@ -543,6 +546,52 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         reason,
         clock,
       });
+
+      // activate_job and retry_job delegate to other jobs without finalizing
+      // the source. goto_step keeps the source running (correct), and goto_job
+      // already finalizes the source in applyRoutingAction.
+      const isDelegateAction =
+        typeof onFailure === "object" &&
+        onFailure !== null &&
+        ("activate_job" in onFailure || "retry_job" in onFailure);
+
+      if (isDelegateAction) {
+        const postSnap = await stateStore.readSnapshot(runDir);
+        if (postSnap?.jobs[jobId]?.status === "running") {
+          const lastPostId = await eventWriter.readLastEventId(runDir);
+          const postCounter =
+            lastPostId !== null
+              ? parseInt(lastPostId.replace("evt-", ""), 10)
+              : 0;
+          const blockedEventId = nextEventId(postCounter + 1);
+          await eventWriter.appendEvent(runDir, {
+            id: blockedEventId,
+            run_id: runId,
+            type: "job_blocked",
+            timestamp: clock.now(),
+            producer: "engine",
+            job: jobId,
+            step: null,
+            attempt,
+            payload: {
+              job_id: jobId,
+              reason: `on_failure delegation: ${reason}`,
+            },
+          });
+          await stateStore.updateState(runDir, (current) => ({
+            ...current,
+            last_event_id: blockedEventId,
+            jobs: {
+              ...current.jobs,
+              [jobId]: {
+                ...current.jobs[jobId]!,
+                status: "blocked",
+              },
+            },
+          }));
+        }
+      }
+
       return;
     }
 

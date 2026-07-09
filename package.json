@@ -1,8 +1,8 @@
 {
-  "name": "zigma-flow",
+  "name": "@zigma/zigma-flow",
   "version": "0.3.6",
   "description": "Local Agent Workflow Runtime / Workflow Harness.",
-  "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "zigma-flow": "./dist/cli.js"

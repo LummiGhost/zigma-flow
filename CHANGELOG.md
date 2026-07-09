@@ -2,6 +2,117 @@
 
 All notable changes to Zigma Flow are documented in this file.
 
+## Classification Tags
+
+Change entries are classified with the following tags to help readers quickly identify the nature of each change:
+
+- `[runtime]` -- Engine, scheduler, state machine, job execution, agent lifecycle
+- `[DSL]` -- Workflow schema, expression language, variables, context blocks
+- `[CLI]` -- Command-line interface, flags, subcommands, output formatting
+- `[docs]` -- Documentation, README, tutorials, comments
+- `[tests]` -- Test additions, test fixes, test infrastructure
+- `[breaking]` -- Breaking changes to public APIs, schema, or behavior (additive; appears alongside another tag)
+
+## Version Policy
+
+Zigma Flow follows semantic versioning for its release tags. Compatibility guarantees, stability levels (stable, experimental, reserved), and the breaking change process are documented in `docs/compatibility.md`.
+
+---
+
+## [v0.3.6] — Script On-Failure Goto (2026-07-08)
+
+### Engine
+
+- [runtime] Support `goto_step` in `on_failure` handler for script steps, enabling failure recovery flows within the same job.
+- [runtime] Finalize source job after delegation in `on_failure` handler to prevent orphaned job state (#156, #157).
+
+## [v0.3.5] — Upstream Failure Propagation & Force Retry (2026-07-08)
+
+*Includes changes originally intended for v0.3.4 (git tag not created; commits folded into this release).*
+
+### Engine
+
+- [runtime] [breaking] Block downstream waiting jobs when upstream dependency fails, preventing cascading hangs across the DAG (#150, #151).
+- [runtime] Add `--force` flag to retry command for blocked jobs, allowing manual unblock of stuck workflows (#154).
+- [tests] Stabilize T-CANCEL-2 test -- extend accepted terminal statuses to cover completion edge cases (#150).
+
+### Tests
+
+- [tests] Commit golden prompt snapshots to main branch for deterministic prompt diffing.
+- [tests] Add `.gitattributes` to enforce LF line endings for vitest snapshot files on Windows.
+- [tests] Restore prompt golden snapshots after inadvertent deletion.
+
+## [v0.3.4] — Tag Not Created (2026-07-08)
+
+**Note:** The v0.3.4 git tag was not created. All changes intended for this version are documented under v0.3.5 above.
+
+- [runtime] Upstream failure propagation, cancel test stabilization, and `--force` retry flag (see v0.3.5 for details).
+
+## [v0.3.3] — Engine Step Lifecycle Fix (2026-07-07)
+
+### Engine
+
+- [runtime] Advance agent step unconditionally after report is accepted, fixing a state machine progression bug where the step would not advance on certain report paths (#147, #148).
+
+## [v0.3.2] — CLI & Backend Registration Fixes (2026-07-07)
+
+### CLI
+
+- [CLI] Resolve workflow short name in `run-all` command, fixing workflow selection by alias (#141, #143).
+- [CLI] Surface skill resolution errors and add `skill add` command for managing skill packs (#142, #145).
+
+### Runtime
+
+- [runtime] Register custom agent backends loaded from configuration, enabling third-party backend plugins (#139, #140).
+- [runtime] Add environment variable interpolation in agent backend command configuration (#139, #140).
+
+## [v0.3.1] — Gitignore Fix (2026-07-06)
+
+### Runtime
+
+- [runtime] Add `.turbo/` to `.gitignore` to prevent submodule conflicts in monorepo setups (#137).
+
+## [v0.3.0] — DSL Specification & Dogfood Workflows (2026-07-06)
+
+### DSL
+
+- [DSL] Publish `docs/workflow-language.md` -- formal language specification with field-level stability annotations.
+- [DSL] Add stability annotations to the Zod workflow schema; audit stable-field coverage across all definitions (#113).
+- [DSL] Document `context_patches` specification and add reserved-field contract tests preventing state machine field tampering (#115).
+- [DSL] Add forbidden-expression validator with comprehensive error-path tests (#119).
+- [DSL] Add `bugfix.yml` workflow -- 8-stage bug fix pipeline with review gates and validation steps (#125).
+- [DSL] Add `release-candidate.yml` workflow for controlled RC promotion (#127, #130).
+- [DSL] Add `docs-change.yml` workflow for documentation-only change requests (#128, #132).
+- [DSL] Add `design-review.yml` workflow for design proposal review cycles (#129, #133).
+
+### Docs
+
+- [docs] Add `docs/compatibility.md` and `docs/migration.md` documenting version policy, stability levels, and upgrade paths (#120).
+- [docs] Add experimental field breaking-change risk notices across the language specification (#123).
+- [docs] Standardize dogfood report format with runbooks and report templates (#134).
+
+## [v0.2.2] — Runtime Reliability & Prompt Hardening (2026-07-03)
+
+### Runtime
+
+- [runtime] Verify-run command for run state validation, inconsistency detection, and diagnostics reporting.
+- [runtime] Human gate contract: formalize gate step lifecycle, approval flow, and timeout handling.
+- [runtime] Consolidate flaky test fixes across the engine test suite for improved CI stability.
+- [runtime] Prompt engineering hardening (Issues #100-#108): standardized agent prompts, structured output contracts, and improved token efficiency.
+
+### Docs
+
+- [docs] Add user documentation covering runtime reliability features: verify-run, diagnostics, human gate.
+
+## [v0.2.1] — CI Release Workflow (2026-06-29)
+
+### CI
+
+- [tests] Add GitHub release workflow for automated npm publishing on tag push.
+- [tests] Enable npm publishing configuration in package metadata.
+
+---
+
 ## [v0.2.0] — P14 Concurrent Read-Only Job Execution (2026-06-28)
 
 ### Scheduler

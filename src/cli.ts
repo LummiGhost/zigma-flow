@@ -8,6 +8,7 @@
  * Module boundary: must NOT directly push run state.
  */
 
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -400,7 +401,11 @@ function isCommanderError(value: unknown): value is CommanderError {
 // Direct execution entry point
 // ---------------------------------------------------------------------------
 
-const entryPointUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
+let entryPointUrl: string | undefined;
+if (process.argv[1]) {
+  const resolved = realpathSync(process.argv[1]);
+  entryPointUrl = pathToFileURL(resolved).href;
+}
 
 if (entryPointUrl === import.meta.url) {
   main().catch((error: unknown) => {

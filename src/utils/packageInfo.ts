@@ -6,6 +6,6 @@ export interface PackageInfo {
 export function getPackageInfo(): PackageInfo {
   return {
     name: "zigma-flow",
-    version: "0.1.0"
+    version: process.env.ZIGMA_FLOW_VERSION ?? "0.0.0",
   };
 }

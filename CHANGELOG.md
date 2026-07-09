@@ -21,6 +21,23 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.4.2] — Windows CLI Fix (2026-07-09)
+
+### CLI
+
+- [CLI] Fix silent exit on Windows/pnpm: resolve junction paths via `realpathSync` before comparing entry point URLs in ESM entry guard (#159).
+
+### Build
+
+- [CLI] Inject package version at build time via esbuild `define` instead of hardcoding `0.1.0` (#159).
+
+## [v0.4.1] — Package Rename & CD (2026-07-09)
+
+### Project
+
+- [breaking] Package renamed from `@zigma/zigma-flow` to `@zigma-ai/zigma-flow` (#158).
+- [CLI] Add npm Trusted Publisher OIDC auto-publish to CD workflow (release.yml).
+
 ## [v0.4.0] — Productization (2026-07-09)
 
 ### CLI

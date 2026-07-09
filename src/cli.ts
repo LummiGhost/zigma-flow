@@ -29,6 +29,7 @@ import { runAllAction } from "./commands/run-all.js";
 import { approveAction } from "./commands/approve.js";
 import { rejectAction } from "./commands/reject.js";
 import { verifyRunAction } from "./commands/verify-run.js";
+import { doctorAction } from "./commands/doctor.js";
 import { eventsAction } from "./commands/events.js";
 import { artifactsAction } from "./commands/artifacts.js";
 import { skillAddAction } from "./commands/skill-add.js";
@@ -321,6 +322,17 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       const exitCode = await verifyRunAction({
         runsDir: join(process.cwd(), ".zigma-flow", "runs"),
         ...(runId !== undefined ? { runId } : {}),
+      });
+      process.exitCode = exitCode;
+    });
+
+  program
+    .command("doctor")
+    .description("Diagnose the project environment and validate configuration.")
+    .exitOverride()
+    .action(async () => {
+      const exitCode = await doctorAction({
+        zigmaflowDir: join(process.cwd(), ".zigma-flow"),
       });
       process.exitCode = exitCode;
     });

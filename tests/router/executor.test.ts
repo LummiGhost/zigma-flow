@@ -778,7 +778,7 @@ describe("executeRouterStep — no matching case (T-ROUTER-7)", () => {
       expect(caughtError).toBeInstanceOf(RouterError);
       // (c) error.kind === "RouterError"; error.exitCode === 1
       expect((caughtError as RouterError).kind).toBe("RouterError");
-      expect((caughtError as RouterError).exitCode).toBe(1);
+      expect((caughtError as RouterError).exitCode).toBe(23);
 
       // (d) events.jsonl size unchanged (still only the bootstrap events)
       const eventsAfter = await readEvents(runDir);
@@ -835,7 +835,7 @@ describe("executeRouterStep — missing switch field (T-ROUTER-7b)", () => {
       }
       expect(caughtError).toBeInstanceOf(RouterError);
       expect((caughtError as RouterError).kind).toBe("RouterError");
-      expect((caughtError as RouterError).exitCode).toBe(1);
+      expect((caughtError as RouterError).exitCode).toBe(23);
 
       // events.jsonl size unchanged
       const eventsAfter = await readEvents(runDir);

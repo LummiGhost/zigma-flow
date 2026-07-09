@@ -857,7 +857,7 @@ describe("executeCheckStep — unknown check kind (T-CHECK-5)", () => {
       expect(thrown).toBeDefined();
       const err = thrown as { kind?: string; exitCode?: number; name?: string };
       expect(err.kind ?? err.name).toBe("CheckError");
-      expect(err.exitCode).toBe(1);
+      expect(err.exitCode).toBe(22);
 
       // events.jsonl must NOT have grown a step_started line.
       const eventsAfter = await readEvents(runDir);

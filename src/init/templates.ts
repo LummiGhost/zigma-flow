@@ -6,6 +6,9 @@
 
 import { createHash } from "node:crypto";
 
+import { buildScriptCommand } from "./detect.js";
+import type { DetectionResult } from "./detect.js";
+
 // ---------------------------------------------------------------------------
 // config.json
 // ---------------------------------------------------------------------------
@@ -56,8 +59,48 @@ export function skillLockJsonTemplate(skillManifestContent: string): string {
 // workflows/code-change.yml
 // ---------------------------------------------------------------------------
 
-export function codeChangeWorkflowYml(): string {
-  return `name: code-change
+export function codeChangeWorkflowYml(detection?: DetectionResult): string {
+  // Determine build parameters from detection (or fallback defaults)
+  const hasPackageJson = detection?.hasPackageJson ?? false;
+  const pm = detection?.packageManager ?? "pnpm";
+  const scripts = detection?.scripts ?? null;
+
+  // Prepare script commands
+  const cmd = (name: string) => buildScriptCommand(pm, name);
+
+  // --- Static-check job ---
+  let staticCheckRun: string | null;
+  if (!hasPackageJson) {
+    // Backward-compatible default: pnpm with all scripts
+    staticCheckRun = "pnpm typecheck && pnpm lint";
+  } else if (scripts!.typecheck && scripts!.lint) {
+    staticCheckRun = `${cmd("typecheck")} && ${cmd("lint")}`;
+  } else if (scripts!.typecheck) {
+    staticCheckRun = cmd("typecheck");
+  } else if (scripts!.lint) {
+    staticCheckRun = cmd("lint");
+  } else {
+    staticCheckRun = null; // → agent step
+  }
+
+  // --- Unit-test job ---
+  let unitTestRun: string | null;
+  if (!hasPackageJson) {
+    unitTestRun = "pnpm test:ci";
+  } else if (scripts!.testCi) {
+    unitTestRun = cmd("test:ci");
+  } else if (scripts!.test) {
+    unitTestRun = cmd("test");
+  } else {
+    unitTestRun = null; // → agent step
+  }
+
+  // --- Build job ---
+  const hasBuild = hasPackageJson && scripts!.build;
+  const staticCheckNeeds = hasBuild ? "build" : "implement";
+
+  // --- Header (through implement job) ---
+  const header = `name: code-change
 version: 0.3.0
 
 on:
@@ -220,18 +263,60 @@ jobs:
         type: script
         run: "git diff HEAD"
         on_failure: fail
+`;
 
-  static-check:
+  // --- Build job (conditional) ---
+  let buildJob = "";
+  if (hasBuild) {
+    buildJob = `
+  build:
     needs:
       - implement
     workspace:
       mode: read-only
     steps:
+      - id: build
+        type: script
+        run: "${cmd("build")}"
+        on_failure: fail
+`;
+  }
+
+  // --- Static-check job ---
+  let staticCheckJob: string;
+  if (staticCheckRun !== null) {
+    staticCheckJob = `
+  static-check:
+    needs:
+      - ${staticCheckNeeds}
+    workspace:
+      mode: read-only
+    steps:
       - id: check
         type: script
-        run: "pnpm typecheck && pnpm lint"
+        run: "${staticCheckRun}"
         on_failure: fail
+`;
+  } else {
+    staticCheckJob = `
+  static-check:
+    needs:
+      - ${staticCheckNeeds}
+    workspace:
+      mode: read-only
+    steps:
+      - id: check
+        type: agent
+        prompt: |
+          No static check scripts (typecheck or lint) were found in your
+          package.json. Consider adding them to improve code quality.
+`;
+  }
 
+  // --- Unit-test job ---
+  let unitTestJob: string;
+  if (unitTestRun !== null) {
+    unitTestJob = `
   unit-test:
     needs:
       - implement
@@ -240,9 +325,27 @@ jobs:
     steps:
       - id: test
         type: script
-        run: "pnpm test:ci"
+        run: "${unitTestRun}"
         on_failure: fail
+`;
+  } else {
+    unitTestJob = `
+  unit-test:
+    needs:
+      - implement
+    workspace:
+      mode: read-only
+    steps:
+      - id: test
+        type: agent
+        prompt: |
+          No test scripts (test or test:ci) were found in your package.json.
+          Consider adding a test framework to run automated tests.
+`;
+  }
 
+  // --- Footer (review through summarize) ---
+  const footer = `
   review:
     needs:
       - static-check
@@ -307,6 +410,8 @@ jobs:
           skills:
             - code
 `;
+
+  return header + buildJob + staticCheckJob + unitTestJob + footer;
 }
 
 // ---------------------------------------------------------------------------

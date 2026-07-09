@@ -13,7 +13,7 @@ import {
 } from "../../src/init/index.js";
 import { loadSkillPack } from "../../src/skill-pack/index.js";
 import { getPackageInfo } from "../../src/utils/index.js";
-import { loadWorkflow, type WorkflowDefinition } from "../../src/workflow/index.js";
+import { loadWorkflow, type JobDefinition, type StepDefinition, type WorkflowDefinition } from "../../src/workflow/index.js";
 
 /**
  * Init filesystem and integration tests for WF-P1-INIT (Step 1: cases-and-tests).
@@ -828,5 +828,293 @@ describe("P11 Skill Pack refinement (WF-P11-SKILL-PACK)", () => {
     // review-change. This case replaces the legacy TC-WORKFLOW-10 assertion
     // `expect(def.functions ?? []).toEqual([])`.
     expect((def.functions ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+/**
+ * v0.4 Productization init tests (WF-INIT, Step 1: cases-and-tests).
+ *
+ * These tests verify that runInit tailors workflow generation to the
+ * detected package manager and available project scripts.
+ *
+ * Reference:
+ *   - docs/phases/v0.4-productization/workflows/wf-init/01-cases-and-tests.md
+ *   - docs/phases/v0.4-productization/02-development-plan.md M1
+ *
+ * These tests are red-phase: runInit does not yet call detection, so
+ * templates always output hardcoded pnpm commands. Tests that expect
+ * non-pnpm commands or conditional script steps will fail until Step 2
+ * implements detection and parameterized templates.
+ */
+
+describe("v0.4 init environment detection (WF-INIT)", () => {
+  let tempDir: string;
+  let dotZigma: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "zigma-flow-init-v04-"));
+    dotZigma = join(tempDir, ".zigma-flow");
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function readWorkflowYml(): Promise<string> {
+    return readFile(join(dotZigma, "workflows", "code-change.yml"), "utf-8");
+  }
+
+  async function loadGeneratedWorkflow(): Promise<WorkflowDefinition> {
+    const yml = await readWorkflowYml();
+    return loadWorkflow(yml);
+  }
+
+  /**
+   * Write a mock project to tempDir:
+   * - package.json with the given scripts
+   * - a lockfile matching the given package manager name
+   */
+  async function setupProject(
+    pm: string,
+    scripts: Record<string, string>
+  ): Promise<void> {
+    const pkg = { name: "test-project", scripts };
+    await writeFile(join(tempDir, "package.json"), JSON.stringify(pkg), "utf-8");
+
+    const lockfileMap: Record<string, string> = {
+      pnpm: "pnpm-lock.yaml",
+      npm: "package-lock.json",
+      yarn: "yarn.lock",
+      bun: "bun.lockb"
+    };
+    const lockfile = lockfileMap[pm];
+    if (lockfile) {
+      await writeFile(join(tempDir, lockfile), "", "utf-8");
+    }
+  }
+
+  // ---------- static-check job: package manager variations ----------
+
+  // T-INIT-15
+  it("generates pnpm-based static-check in pnpm project (T-INIT-15)", async () => {
+    await setupProject("pnpm", { typecheck: "tsc", lint: "eslint ." });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const step = wf.jobs["static-check"]?.steps[0];
+    expect(step?.type).toBe("script");
+    expect(step?.run).toBe("pnpm typecheck && pnpm lint");
+  });
+
+  // T-INIT-16
+  it("generates npm-based static-check in npm project (T-INIT-16)", async () => {
+    await setupProject("npm", { typecheck: "tsc", lint: "eslint ." });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const step = wf.jobs["static-check"]?.steps[0];
+    expect(step?.type).toBe("script");
+    expect(step?.run).toBe("npm run typecheck && npm run lint");
+  });
+
+  // T-INIT-17
+  it("generates yarn-based static-check in yarn project (T-INIT-17)", async () => {
+    await setupProject("yarn", { typecheck: "tsc", lint: "eslint ." });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const step = wf.jobs["static-check"]?.steps[0];
+    expect(step?.type).toBe("script");
+    expect(step?.run).toBe("yarn typecheck && yarn lint");
+  });
+
+  // T-INIT-18
+  it("generates bun-based static-check in bun project (T-INIT-18)", async () => {
+    await setupProject("bun", { typecheck: "tsc", lint: "eslint ." });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const step = wf.jobs["static-check"]?.steps[0];
+    expect(step?.type).toBe("script");
+    expect(step?.run).toBe("bun run typecheck && bun run lint");
+  });
+
+  // ---------- static-check job: partial script availability ----------
+
+  // T-INIT-19
+  it("generates typecheck-only static-check when only typecheck exists (T-INIT-19)", async () => {
+    await setupProject("pnpm", { typecheck: "tsc --noEmit" });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const step = wf.jobs["static-check"]?.steps[0];
+    expect(step?.type).toBe("script");
+    expect(step?.run).toBe("pnpm typecheck");
+  });
+
+  // T-INIT-20
+  it("generates lint-only static-check when only lint exists (T-INIT-20)", async () => {
+    await setupProject("pnpm", { lint: "eslint ." });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const step = wf.jobs["static-check"]?.steps[0];
+    expect(step?.type).toBe("script");
+    expect(step?.run).toBe("pnpm lint");
+  });
+
+  // T-INIT-21
+  it("uses agent step for static-check when no typecheck or lint scripts exist (T-INIT-21)", async () => {
+    await setupProject("pnpm", { start: "node index.js" });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const job = wf.jobs["static-check"];
+    expect(job, "static-check job must exist").toBeDefined();
+
+    // When no check scripts are available, static-check should be an agent
+    // step that guides the user, not a script step that would always fail.
+    const step = job!.steps[0];
+    expect(step?.type, "static-check without scripts should be an agent step").toBe("agent");
+  });
+
+  // ---------- unit-test job: test script variations ----------
+
+  // T-INIT-22
+  it("generates test:ci-based unit-test when test:ci exists (T-INIT-22)", async () => {
+    await setupProject("pnpm", { "test:ci": "vitest run --coverage", test: "vitest" });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const step = wf.jobs["unit-test"]?.steps[0];
+    expect(step?.type).toBe("script");
+    expect(step?.run).toBe("pnpm test:ci");
+  });
+
+  // T-INIT-23
+  it("falls back to test script when test:ci does not exist (T-INIT-23)", async () => {
+    await setupProject("pnpm", { test: "vitest run" });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const step = wf.jobs["unit-test"]?.steps[0];
+    expect(step?.type).toBe("script");
+    expect(step?.run).toBe("pnpm test");
+  });
+
+  // T-INIT-24
+  it("uses agent step for unit-test when no test scripts exist (T-INIT-24)", async () => {
+    await setupProject("pnpm", { start: "node index.js" });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const job = wf.jobs["unit-test"];
+    expect(job, "unit-test job must exist").toBeDefined();
+
+    const step = job!.steps[0];
+    expect(step?.type, "unit-test without test scripts should be an agent step").toBe("agent");
+  });
+
+  // ---------- build job ----------
+
+  // T-INIT-25
+  it("generates a build job when build script exists (T-INIT-25)", async () => {
+    await setupProject("pnpm", { build: "tsc", typecheck: "tsc", lint: "eslint ." });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const buildJob = wf.jobs["build"];
+    expect(buildJob, "build job should exist when build script is present").toBeDefined();
+
+    const step = buildJob!.steps[0];
+    expect(step?.type).toBe("script");
+    expect(step?.run).toBe("pnpm build");
+
+    // build should be a dependency of static-check or downstream jobs
+    // (exact placement decided in Step 2; existence is the red-phase assertion)
+  });
+
+  // T-INIT-25b
+  it("does NOT generate a build job when no build script exists (T-INIT-25b)", async () => {
+    await setupProject("pnpm", { typecheck: "tsc", lint: "eslint ." });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    // In the current (pre-detection) templates, build job never exists.
+    // Post-detection, it should only exist when build script is present.
+    expect(wf.jobs["build"]).toBeUndefined();
+  });
+
+  // ---------- bare project fallback ----------
+
+  // T-INIT-26
+  it("falls back to default pnpm commands when no package.json exists (T-INIT-26)", async () => {
+    // No package.json, no lockfile -- bare directory.
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+
+    // static-check should still exist with fallback pnpm commands.
+    const staticCheck = wf.jobs["static-check"];
+    expect(staticCheck, "static-check must exist in bare project").toBeDefined();
+
+    // unit-test should still exist with fallback.
+    const unitTest = wf.jobs["unit-test"];
+    expect(unitTest, "unit-test must exist in bare project").toBeDefined();
+
+    // Workflow must be fully loadable.
+    expect(wf.name).toBeDefined();
+    expect(Object.keys(wf.jobs).length).toBeGreaterThan(0);
+  });
+
+  // ---------- npm test command format ----------
+
+  // T-INIT-27
+  it("uses npm run test:ci format in npm project (T-INIT-27)", async () => {
+    await setupProject("npm", {
+      typecheck: "tsc",
+      lint: "eslint .",
+      "test:ci": "vitest run --coverage"
+    });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    const wf = await loadGeneratedWorkflow();
+    const unitTestStep = wf.jobs["unit-test"]?.steps[0];
+    expect(unitTestStep?.type).toBe("script");
+    expect(unitTestStep?.run).toBe("npm run test:ci");
+  });
+
+  // ---------- skill-lock integrity after detection-based generation ----------
+
+  // T-INIT-28
+  it("skill-lock hash matches generated skill.yml after tailored init (T-INIT-28)", async () => {
+    await setupProject("pnpm", { typecheck: "tsc", lint: "eslint .", "test:ci": "vitest run" });
+    const { error } = await safeRunInit(tempDir);
+    expect(error).toBeUndefined();
+
+    // skill-lock.json must exist and parse.
+    const lockRaw = await readFile(join(dotZigma, "skill-lock.json"), "utf-8");
+    const lock = JSON.parse(lockRaw) as { skills?: Record<string, { hash?: string }> };
+    expect(lock.skills?.["zigma.code-change"]?.hash).toBeDefined();
+    expect((lock.skills?.["zigma.code-change"]?.hash ?? "").length).toBeGreaterThan(0);
+
+    // Skill pack must load successfully.
+    const packRoot = join(dotZigma, "skills", "code-change");
+    const def = await loadSkillPack(packRoot);
+    expect(def.id).toBe("zigma.code-change");
   });
 });

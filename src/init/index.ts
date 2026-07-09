@@ -31,6 +31,8 @@ import {
   workflowGuideMd
 } from "./templates.js";
 
+import { detectEnvironment } from "./detect.js";
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -134,6 +136,9 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
 
   const directories = await createDirectories(dirPaths);
 
+  // Detect project environment for tailored template generation
+  const detection = await detectEnvironment(options.cwd);
+
   // Generate template content
   const version = getPackageInfo().version;
   const skillYmlContent = skillYml();
@@ -142,7 +147,7 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
   const fileEntries: Array<[string, string]> = [
     [configJsonPath, configJsonTemplate(version)],
     [join(dotZigma, "skill-lock.json"), skillLockJsonTemplate(skillYmlContent)],
-    [join(dotZigma, "workflows", "code-change.yml"), codeChangeWorkflowYml()],
+    [join(dotZigma, "workflows", "code-change.yml"), codeChangeWorkflowYml(detection)],
     [join(dotZigma, "workflows", "code-change-fast.yml"), codeChangeFastWorkflowYml()],
     [join(dotZigma, "skills", "code-change", "skill.yml"), skillYmlContent],
     [

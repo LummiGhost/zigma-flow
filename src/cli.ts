@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 
 import { Command } from "commander";
 
-import { ZigmaFlowError, getPackageInfo } from "./utils/index.js";
+import { ZigmaFlowError, formatError, getPackageInfo } from "./utils/index.js";
 import { initAction } from "./commands/init.js";
 import { validateAction } from "./commands/validate.js";
 import { runAction } from "./commands/run.js";
@@ -353,10 +353,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     await program.parseAsync(argv as string[]);
   } catch (error: unknown) {
     if (error instanceof ZigmaFlowError) {
-      console.error(error.message);
-      if (error.suggestion !== undefined) {
-        console.error(error.suggestion);
-      }
+      console.error(formatError(error));
       process.exitCode = error.exitCode;
       return;
     }

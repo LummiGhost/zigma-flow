@@ -17,3 +17,4 @@ export {
   type ZigmaFlowErrorKind,
   type ZigmaFlowErrorOptions
 } from "./errors.js";
+export { formatError } from "./error-format.js";

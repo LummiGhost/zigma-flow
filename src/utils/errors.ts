@@ -56,7 +56,7 @@ export class UserInputError extends ZigmaFlowError {
 
 export class ValidationError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
-    super("ValidationError", message, 3, options);
+    super("ValidationError", message, 10, options);
   }
 }
 
@@ -74,54 +74,54 @@ export class FilesystemError extends ZigmaFlowError {
 
 export class SkillPackError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
-    super("SkillPackError", message, 3, options);
+    super("SkillPackError", message, 12, options);
   }
 }
 
 export class WorkflowError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
-    super("WorkflowError", message, 3, options);
+    super("WorkflowError", message, 11, options);
   }
 }
 
 export class ArtifactError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
-    super("ArtifactError", message, 1, options);
+    super("ArtifactError", message, 30, options);
   }
 }
 
 export class StateError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
-    super("StateError", message, 1, options);
+    super("StateError", message, 20, options);
   }
 }
 
 export class ScriptError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
-    super("ScriptError", message, 1, options);
+    super("ScriptError", message, 21, options);
   }
 }
 
 export class CheckError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
-    super("CheckError", message, 1, options);
+    super("CheckError", message, 22, options);
   }
 }
 
 export class RouterError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
-    super("RouterError", message, 1, options);
+    super("RouterError", message, 23, options);
   }
 }
 
 export class PermissionError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
-    super("PermissionError", message, 1, options);
+    super("PermissionError", message, 14, options);
   }
 }
 
 export class PromptBuildError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
-    super("PromptBuildError", message, 3, options);
+    super("PromptBuildError", message, 13, options);
   }
 }

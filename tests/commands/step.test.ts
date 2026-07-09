@@ -348,7 +348,7 @@ describe("stepAction (CLI integration) — non-script step", () => {
         )
       ).rejects.toMatchObject({
         kind: "WorkflowError",
-        exitCode: 3,
+        exitCode: 11,
       });
 
       await expect(

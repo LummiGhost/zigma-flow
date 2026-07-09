@@ -1,6 +1,6 @@
 {
   "name": "@zigma/zigma-flow",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "description": "Local Agent Workflow Runtime / Workflow Harness.",
   "license": "Apache-2.0",
   "type": "module",

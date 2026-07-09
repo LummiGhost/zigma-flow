@@ -19,6 +19,34 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+---
+
+## [v0.4.0] — Productization (2026-07-09)
+
+### CLI
+
+- [CLI] `zigma-flow init` detects project package manager (pnpm/npm/yarn/bun) and available scripts, generating tailored workflow YAML with correct commands (#97, #158).
+- [CLI] `zigma-flow init` produces agent steps instead of failing script steps when no typecheck/lint/test scripts are found (#158).
+- [CLI] `zigma-flow init` adds a build job to the workflow DAG when the project has a build script (#158).
+- [CLI] New `zigma-flow doctor` command for environment and configuration diagnostics: Node.js version, config.json, skill-lock.json, workflow YAML, and skill pack validation (#97, #158).
+
+### Error Handling
+
+- [CLI] [breaking] Stabilize exit code taxonomy: 13 unique codes (2-30 range) replacing the collapsed 1/3 scheme. See `docs/error-codes.md` (#158).
+- [CLI] Structured error output via `formatError()` with kind, exit code, and optional context fields (Run, Job, Step, Artifact, Suggestion) (#158).
+
+### Documentation
+
+- [docs] `examples/basic-code-change/` — 19-file runnable TypeScript project demonstrating zigma-flow workflow structure (#158).
+- [docs] Rewritten README Quick Start with 7 copy-pasteable steps for new users (#158).
+- [docs] `docs/error-codes.md` — stable error code reference (#158).
+- [docs] `docs/release-checklist.md` — 7-step release process (#158).
+
+### Project
+
+- [breaking] Package renamed to `@zigma/zigma-flow`; license set to Apache 2.0; removed `private: true` (#158).
+- [docs] CHANGELOG catch-up: v0.2.2 through v0.3.6 entries added with classification tags (#158).
+
 ## [v0.3.6] — Script On-Failure Goto (2026-07-08)
 
 ### Engine

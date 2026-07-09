@@ -9,3 +9,4 @@ coverage/
 .zigma-flow/runs/
 .zigma-flow/config.json
 /.zigma-flow
+.claude/scheduled_tasks.lock

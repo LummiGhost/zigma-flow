@@ -1,0 +1,9 @@
+{
+  "skills": {
+    "zigma.code-change": {
+      "resolved": "local://skills/code-change",
+      "version": "1.0.0",
+      "hash": "90839676482f22cd00e02177938fc88a498d4369c66fe715b402eefff8502057"
+    }
+  }
+}

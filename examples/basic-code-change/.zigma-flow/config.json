@@ -1,0 +1,14 @@
+{
+  "tool_version": "0.3.6",
+  "active_run": null,
+  "agent": {
+    "backend": "claude-code",
+    "backends": {
+      "claude-code": {
+        "command": "claude",
+        "args": ["-p"],
+        "timeout": 600000
+      }
+    }
+  }
+}

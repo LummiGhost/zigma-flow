@@ -1,0 +1,78 @@
+id: zigma.code-change
+kind: skill-pack
+name: zigma.code-change
+version: 1.0.0
+description: >
+  Code change skill pack for Zigma Flow.
+
+knowledge:
+  - id: coding-guidelines
+    path: knowledge/coding-guidelines.md
+  - id: workflow-guide
+    path: knowledge/workflow-guide.md
+  - id: common-failure-patterns
+    path: knowledge/common-failure-patterns.md
+
+prompts:
+  - id: intake
+    path: prompts/intake.md
+  - id: code-map
+    path: prompts/code-map.md
+  - id: plan
+    path: prompts/plan.md
+  - id: architecture-design
+    path: prompts/architecture-design.md
+  - id: implement
+    path: prompts/implement.md
+  - id: review
+    path: prompts/review.md
+  - id: summarize
+    path: prompts/summarize.md
+
+scripts: []
+checks: []
+
+functions:
+  - id: implement-by-plan
+    description: Execute plan steps to modify code according to a given implementation plan
+    jobs:
+      - implement
+    inputs:
+      plan:
+        type: string
+        description: "Implementation plan to execute"
+      context:
+        type: string
+        description: "Additional context or constraints for the implementation"
+    outputs:
+      summary:
+        type: string
+        description: "Summary of changes made"
+      files_changed:
+        type: string
+        description: "Comma-separated list of modified files"
+  - id: review-change
+    description: Review code changes for quality, correctness, and adherence to guidelines
+    jobs:
+      - review
+    inputs:
+      diff:
+        type: string
+        description: "Git diff of changes to review"
+      plan:
+        type: string
+        description: "Original implementation plan for comparison"
+    outputs:
+      verdict:
+        type: string
+        description: "approved, rejected, or needs_architecture_design"
+      issues:
+        type: string
+        description: "Description of issues found; empty string if approved"
+
+policies:
+  default_permissions:
+    contents: read
+    edits: none
+    commands: none
+    workflow_state: none

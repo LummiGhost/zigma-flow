@@ -33,6 +33,8 @@ import type { RouterAction } from "../workflow/index.js";
 import { WorkflowError, StateError } from "../utils/index.js";
 import { artifactStepDir, appendArtifactIndex, artifactId, artifactFileRelativePath } from "../artifact/index.js";
 import { applyRoutingAction } from "../engine/routing.js";
+import { resolveExpression } from "../expression/index.js";
+import type { ExpressionContext } from "../expression/index.js";
 import { computeReadyJobs } from "../dag/index.js";
 
 // ---------------------------------------------------------------------------
@@ -188,10 +190,37 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
   };
   await stateStore.writeSnapshot(runDir, runningState);
 
+  // ── 5a. Build expression context for resolving ${{ }} in with: values ────
+
+  const checkStepIdx = jobDef.steps.findIndex((s) => s.id === stepId);
+  const stepsCtx: ExpressionContext["steps"] = {};
+  for (let i = 0; i < checkStepIdx; i++) {
+    const prevStepId = jobDef.steps[i]!.id;
+    stepsCtx[prevStepId] = { outputs: jobState.outputs ?? {} };
+  }
+  const exprCtx: ExpressionContext = {
+    inputs: {},
+    run: { id: runId, workflow: state.workflow },
+    jobs: Object.fromEntries(
+      Object.entries(state.jobs).map(([jId, j]) => [jId, { outputs: j.outputs ?? {} }])
+    ),
+    steps: stepsCtx,
+    ...(state.variables !== undefined ? { variables: state.variables } : {}),
+  };
+
   // ── 6. Invoke CheckRunner ─────────────────────────────────────────────────
 
-  const checkRunWith = typeof stepDef.with === "object" && stepDef.with !== null
+  const rawWith = typeof stepDef.with === "object" && stepDef.with !== null
     ? (stepDef.with as Record<string, unknown>)
+    : undefined;
+
+  const checkRunWith: Record<string, unknown> | undefined = rawWith !== undefined
+    ? Object.fromEntries(
+        Object.entries(rawWith).map(([k, v]) => [
+          k,
+          typeof v === "string" ? resolveExpression(v, exprCtx) : v,
+        ])
+      )
     : undefined;
 
   const checkResult = await runner.run({

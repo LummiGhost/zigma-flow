@@ -32,6 +32,8 @@ import { WorkflowError, StateError, SkillPackError } from "../utils/index.js";
 import { artifactStepDir, artifactId, appendArtifactIndex, artifactFileRelativePath } from "../artifact/index.js";
 import { applyRoutingAction } from "../engine/routing.js";
 import { computeReadyJobs } from "../dag/index.js";
+import { resolveExpression } from "../expression/index.js";
+import type { ExpressionContext } from "../expression/index.js";
 
 // ---------------------------------------------------------------------------
 // ExecuteScriptStepOpts
@@ -288,6 +290,30 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     );
   }
 
+  // ── 5a. Resolve ${{ }} template expressions in command and cwd ────────────
+
+  const scriptStepIdx = jobDef.steps.findIndex((s) => s.id === stepId);
+  const stepsCtx: ExpressionContext["steps"] = {};
+  for (let i = 0; i < scriptStepIdx; i++) {
+    const prevStepId = jobDef.steps[i]!.id;
+    stepsCtx[prevStepId] = { outputs: jobState.outputs ?? {} };
+  }
+  const exprCtx: ExpressionContext = {
+    inputs: {},
+    run: { id: runId, workflow: state.workflow },
+    jobs: Object.fromEntries(
+      Object.entries(state.jobs).map(([jId, j]) => [jId, { outputs: j.outputs ?? {} }])
+    ),
+    steps: stepsCtx,
+    ...(state.variables !== undefined ? { variables: state.variables } : {}),
+  };
+
+  command = resolveExpression(command, exprCtx);
+
+  const resolvedCwd = typeof stepDef.cwd === "string"
+    ? resolveExpression(stepDef.cwd, exprCtx)
+    : stepDef.cwd;
+
   // ── 6. Parse timeout and invoke ProcessRunner ─────────────────────────────
 
   const timeoutMs = parseTimeoutMs(stepDef.timeout);
@@ -296,7 +322,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     command,
     ...(typeof stepDef.shell === "string" ? { shell: stepDef.shell } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-    ...(typeof stepDef.cwd === "string" ? { cwd: stepDef.cwd } : {}),
+    ...(typeof resolvedCwd === "string" ? { cwd: resolvedCwd } : {}),
     ...(stepDef.env !== undefined ? { env: stepDef.env } : {}),
   });
 

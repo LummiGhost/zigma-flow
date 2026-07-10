@@ -152,6 +152,8 @@ export interface RunAllOpts {
   zigmaflowDir: string;
   /** Path to skill-lock.json. */
   skillLockPath: string;
+  /** Additional named inputs from CLI --input flags. */
+  inputs?: Record<string, string>;
   /**
    * Resolver that returns an AgentBackend for a given step-level backend name.
    * Called with `undefined` when no step-level backend is declared — the
@@ -893,6 +895,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       runsDir,
       skillLockPath,
       clock,
+      ...(opts.inputs !== undefined ? { inputs: opts.inputs } : {}),
     });
     runId = result.runId;
   } else {

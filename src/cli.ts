@@ -36,6 +36,24 @@ import { artifactsAction } from "./commands/artifacts.js";
 import { skillAddAction } from "./commands/skill-add.js";
 import { SystemClock } from "./run/index.js";
 
+function collectInputs(value: string, previous: string[]): string[] {
+  return previous.concat([value]);
+}
+
+function parseInputs(inputs?: string[]): Record<string, string> | undefined {
+  if (inputs === undefined || inputs.length === 0) return undefined;
+  const result: Record<string, string> = {};
+  for (const entry of inputs) {
+    const eqIdx = entry.indexOf("=");
+    if (eqIdx < 1) {
+      console.error(`Invalid --input format: "${entry}". Expected key=value.`);
+      process.exit(2);
+    }
+    result[entry.slice(0, eqIdx)] = entry.slice(eqIdx + 1);
+  }
+  return result;
+}
+
 export async function main(argv: string[] = process.argv): Promise<void> {
   const packageInfo = getPackageInfo();
 
@@ -77,9 +95,11 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command("run <workflow>")
     .description("Create a new workflow run.")
     .requiredOption("--task <task>", "Task description for this run.")
+    .option("--input <key=value>", "Named input for the workflow (repeatable).", collectInputs, [] as string[])
     .exitOverride()
-    .action(async (workflowPath: string, options: { task: string }) => {
-      await runAction(workflowPath, options);
+    .action(async (workflowPath: string, options: { task: string; input?: string[] }) => {
+      const inputs = parseInputs(options.input);
+      await runAction(workflowPath, { task: options.task, ...(inputs !== undefined ? { inputs } : {}) });
     });
 
   program
@@ -90,8 +110,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--backend <name>", "Agent backend to use (default: from config, or claude-code).")
     .option("--parallelism <N>", "Maximum concurrent job count (default 4).", parseInt)
     .option("--fail-fast", "Enable fail-fast abort propagation on job failure.")
+    .option("--input <key=value>", "Named input for the workflow (repeatable).", collectInputs, [] as string[])
     .exitOverride()
-    .action(async (workflowPath: string, options: { task?: string; resume?: string; backend?: string; parallelism?: number; failFast?: boolean }) => {
+    .action(async (workflowPath: string, options: { task?: string; resume?: string; backend?: string; parallelism?: number; failFast?: boolean; input?: string[] }) => {
       if (options.task === undefined && options.resume === undefined) {
         console.error("Error: Either --task <description> or --resume <run-id> is required.");
         process.exit(2);
@@ -100,12 +121,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         console.error("Error: --task and --resume are mutually exclusive.");
         process.exit(2);
       }
+      const inputs = parseInputs(options.input);
       await runAllAction(workflowPath, {
         ...(options.task !== undefined ? { task: options.task } : {}),
         ...(options.resume !== undefined ? { resume: options.resume } : {}),
         ...(options.backend !== undefined ? { backend: options.backend } : {}),
         ...(options.parallelism !== undefined ? { parallelism: options.parallelism } : {}),
         ...(options.failFast !== undefined ? { failFast: options.failFast } : {}),
+        ...(inputs !== undefined ? { inputs } : {}),
       });
     });
 

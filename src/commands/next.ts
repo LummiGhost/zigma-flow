@@ -18,9 +18,8 @@
 import { join } from "node:path";
 
 import { acceptAgentReport } from "../engine/accept.js";
-import { readActiveRun } from "../run/index.js";
+import { resolveRunId } from "../run/index.js";
 import type { Clock } from "../run/index.js";
-import { ConfigError } from "../utils/index.js";
 
 // ---------------------------------------------------------------------------
 // nextAction options
@@ -33,6 +32,8 @@ export interface NextActionOpts {
   jobId: string;
   /** Clock for timestamping the agent_report_accepted event. */
   clock: Clock;
+  /** Optional explicit run id (from --run flag). */
+  runId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -40,16 +41,10 @@ export interface NextActionOpts {
 // ---------------------------------------------------------------------------
 
 export async function nextAction(opts: NextActionOpts): Promise<void> {
-  const { zigmaflowDir, jobId, clock } = opts;
+  const { zigmaflowDir, jobId, clock, runId } = opts;
 
-  // 1. Read active_run from config.json
-  const activeRunId = await readActiveRun(zigmaflowDir);
-  if (activeRunId === null) {
-    throw new ConfigError(
-      "No active run found. Run `zigma-flow run` first to create a run.",
-      { details: { zigmaflowDir } }
-    );
-  }
+  // 1. Resolve run id (explicit --run or active_run from config)
+  const activeRunId = await resolveRunId(zigmaflowDir, runId);
 
   const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
   const runDir = join(runsDir, activeRunId);

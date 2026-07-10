@@ -16,9 +16,8 @@
 import { join } from "node:path";
 
 import { abortRun } from "../engine/abort.js";
-import { readActiveRun } from "../run/index.js";
+import { resolveRunId } from "../run/index.js";
 import type { Clock } from "../run/index.js";
-import { ConfigError } from "../utils/index.js";
 
 // ---------------------------------------------------------------------------
 // abortAction options
@@ -31,6 +30,8 @@ export interface AbortActionOpts {
   clock: Clock;
   /** Optional human-readable reason for the abort. */
   reason?: string;
+  /** Optional explicit run id (from --run flag). */
+  runId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -38,19 +39,10 @@ export interface AbortActionOpts {
 // ---------------------------------------------------------------------------
 
 export async function abortAction(opts: AbortActionOpts): Promise<void> {
-  const { zigmaflowDir, clock, reason } = opts;
+  const { zigmaflowDir, clock, reason, runId } = opts;
 
-  // 1. Read active_run from config.json
-  const activeRunId = await readActiveRun(zigmaflowDir);
-  if (activeRunId === null) {
-    throw new ConfigError(
-      "No active run found. Run `zigma-flow run` first to create a run.",
-      {
-        details: { zigmaflowDir },
-        suggestion: "Run 'zigma-flow list-runs' to see available runs, or 'zigma-flow run <workflow> --task <task>' to create a new one.",
-      }
-    );
-  }
+  // 1. Resolve run id (explicit --run or active_run from config)
+  const activeRunId = await resolveRunId(zigmaflowDir, runId);
 
   const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
   const runDir = join(runsDir, activeRunId);

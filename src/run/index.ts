@@ -5,7 +5,7 @@
  * WF-P3-RUN Step 2 / WF-P4-STATE Step 2.
  */
 
-import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -316,6 +316,40 @@ export async function snapshotSkillLock(runDir: string, skillLockPath: string): 
 // ---------------------------------------------------------------------------
 // Active run pointer helpers — WF-P5-PROMPT
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolve a run id from an optional explicit `--run` flag or the active run.
+ *
+ * When `explicitRunId` is provided, verifies it exists in the runs directory
+ * and returns it. Otherwise falls back to `readActiveRun`.
+ *
+ * Throws ConfigError if no run can be resolved.
+ */
+export async function resolveRunId(
+  zigmaflowDir: string,
+  explicitRunId?: string,
+): Promise<string> {
+  const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
+
+  if (explicitRunId !== undefined) {
+    const runDir = join(runsDir, explicitRunId);
+    try {
+      await readdir(runDir);
+      return explicitRunId;
+    } catch (e: unknown) {
+      throw new FilesystemError(`Run directory not found: ${runDir}`, { cause: e });
+    }
+  }
+
+  const activeRunId = await readActiveRun(zigmaflowDir);
+  if (activeRunId === null) {
+    throw new ConfigError(
+      "No active run found. Run `zigma-flow run` first to create a run.",
+      { details: { zigmaflowDir } }
+    );
+  }
+  return activeRunId;
+}
 
 /**
  * Read the active run id from `.zigma-flow/config.json`.

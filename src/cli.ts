@@ -123,11 +123,13 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command("prompt")
     .description("Generate an agent prompt for the current step of the active run.")
     .option("--job <job>", "Job id to generate a prompt for (defaults to the single ready job).")
+    .option("--run <run_id>", "Target a specific run instead of the active run.")
     .exitOverride()
-    .action(async (options: { job?: string }) => {
+    .action(async (options: { job?: string; run?: string }) => {
       await promptAction({
         zigmaflowDir: process.cwd(),
         ...(options.job !== undefined ? { job: options.job } : {}),
+        ...(options.run !== undefined ? { runId: options.run } : {}),
         clock: new SystemClock(),
       });
     });
@@ -136,11 +138,13 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command("step")
     .description("Execute the current script step of the active run.")
     .option("--job <job>", "Job id to execute (defaults to the single ready job).")
+    .option("--run <run_id>", "Target a specific run instead of the active run.")
     .exitOverride()
-    .action(async (options: { job?: string }) => {
+    .action(async (options: { job?: string; run?: string }) => {
       await stepAction({
         zigmaflowDir: process.cwd(),
         ...(options.job !== undefined ? { job: options.job } : {}),
+        ...(options.run !== undefined ? { runId: options.run } : {}),
         clock: new SystemClock(),
       });
     });
@@ -149,11 +153,13 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command("next")
     .description("Accept the agent report for the current step of a job and advance the run.")
     .requiredOption("--job <job>", "Job id whose agent report should be accepted.")
+    .option("--run <run_id>", "Target a specific run instead of the active run.")
     .exitOverride()
-    .action(async (options: { job: string }) => {
+    .action(async (options: { job: string; run?: string }) => {
       await nextAction({
         zigmaflowDir: process.cwd(),
         jobId: options.job,
+        ...(options.run !== undefined ? { runId: options.run } : {}),
         clock: new SystemClock(),
       });
     });
@@ -165,8 +171,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--reason <reason>", "Human-readable reason for the retry.")
     .option("--with <inputs>", "JSON string of retry inputs (wholesale replacement).")
     .option("--force", "Force retry even when max attempts exceeded.")
+    .option("--run <run_id>", "Target a specific run instead of the active run.")
     .exitOverride()
-    .action(async (options: { job: string; reason?: string; with?: string; force?: boolean }) => {
+    .action(async (options: { job: string; reason?: string; with?: string; force?: boolean; run?: string }) => {
       let retryInputs: Record<string, string> | undefined;
       if (options.with !== undefined) {
         try {
@@ -191,6 +198,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         ...(options.reason !== undefined ? { reason: options.reason } : {}),
         ...(retryInputs !== undefined ? { retryInputs } : {}),
         ...(options.force !== undefined ? { force: options.force } : {}),
+        ...(options.run !== undefined ? { runId: options.run } : {}),
         clock: new SystemClock(),
       });
     });
@@ -199,12 +207,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command("abort")
     .description("Cancel the active run without deleting artifacts.")
     .option("--reason <reason>", "Human-readable reason for the abort.")
+    .option("--run <run_id>", "Target a specific run instead of the active run.")
     .exitOverride()
-    .action(async (options: { reason?: string }) => {
+    .action(async (options: { reason?: string; run?: string }) => {
       await abortAction({
         zigmaflowDir: process.cwd(),
         clock: new SystemClock(),
         ...(options.reason !== undefined ? { reason: options.reason } : {}),
+        ...(options.run !== undefined ? { runId: options.run } : {}),
       });
     });
 

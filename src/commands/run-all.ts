@@ -31,6 +31,8 @@ export interface RunAllOptions {
   parallelism?: number;
   /** Enable fail-fast abort propagation (default false, AD-P14-005). */
   failFast?: boolean;
+  /** Additional named inputs from CLI --input flags. */
+  inputs?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +84,7 @@ export async function runAllAction(
     },
     ...(options.parallelism !== undefined ? { parallelism: options.parallelism } : {}),
     ...(options.failFast !== undefined ? { failFast: options.failFast } : {}),
+    ...(options.inputs !== undefined ? { inputs: options.inputs } : {}),
   };
 
   const summary: RunAllSummary = await runAll(runAllOpts);

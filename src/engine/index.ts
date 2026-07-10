@@ -58,6 +58,7 @@ export interface CreateRunInputs {
   runsDir: string;
   skillLockPath: string;
   clock?: Clock; // injectable for tests; defaults to SystemClock
+  inputs?: Record<string, string>; // additional named inputs from CLI --input flags
 }
 
 export interface CreateRunResult {
@@ -92,6 +93,7 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     },
     created_at: createdAt,
     skill_lock_snapshot: "skill-lock.snapshot.json",
+    ...(inputs.inputs !== undefined ? { inputs: inputs.inputs } : {}),
   });
 
   // RC-R04/R05/R06: Compute initial job states (ready / waiting / inactive)

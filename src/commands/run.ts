@@ -15,6 +15,7 @@ import { createRun } from "../engine/index.js";
 
 export interface RunOptions {
   task: string;
+  inputs?: Record<string, string>;
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -68,6 +69,7 @@ export async function runAction(workflowPath: string, options: RunOptions): Prom
     task: options.task,
     runsDir,
     skillLockPath,
+    ...(options.inputs !== undefined ? { inputs: options.inputs } : {}),
   });
 
   console.log(`run: ${runId}`);

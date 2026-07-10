@@ -12,6 +12,7 @@ import { access } from "node:fs/promises";
 import { resolve, join } from "node:path";
 
 import { createRun } from "../engine/index.js";
+import { readActiveRun, LocalStateStore } from "../run/index.js";
 
 export interface RunOptions {
   task: string;
@@ -62,6 +63,18 @@ export async function runAction(workflowPath: string, options: RunOptions): Prom
   const absWorkflowPath = await resolveWorkflowPath(workflowPath, projectRoot);
   const runsDir = join(projectRoot, ".zigma-flow", "runs");
   const skillLockPath = join(projectRoot, ".zigma-flow", "skill-lock.json");
+
+  // Warn if overwriting an active run that is not yet completed
+  const existingActive = await readActiveRun(projectRoot);
+  if (existingActive !== null) {
+    const stateStore = new LocalStateStore();
+    const existingRunDir = join(runsDir, existingActive);
+    const existingState = await stateStore.readSnapshot(existingRunDir);
+    if (existingState !== null && existingState.status !== "completed" && existingState.status !== "cancelled") {
+      console.warn(`Warning: active_run (${existingActive}, status: ${existingState.status ?? "running"}) will be replaced.`);
+      console.warn(`Use 'zigma-flow list-runs' to see all runs, or 'zigma-flow status --run ${existingActive}' to check its status.`);
+    }
+  }
 
   const { runId } = await createRun({
     workflowPath: absWorkflowPath,

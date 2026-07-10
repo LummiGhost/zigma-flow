@@ -18,7 +18,7 @@
 import { join } from "node:path";
 
 import { retryJob } from "../engine/retryJob.js";
-import { readActiveRun, LocalStateStore } from "../run/index.js";
+import { resolveRunId, LocalStateStore } from "../run/index.js";
 import type { Clock } from "../run/index.js";
 import { ConfigError, UserInputError } from "../utils/index.js";
 
@@ -39,6 +39,8 @@ export interface RetryActionOpts {
   force?: boolean;
   /** Clock for timestamping events. */
   clock: Clock;
+  /** Optional explicit run id (from --run flag). */
+  runId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,16 +48,10 @@ export interface RetryActionOpts {
 // ---------------------------------------------------------------------------
 
 export async function retryAction(opts: RetryActionOpts): Promise<void> {
-  const { zigmaflowDir, jobId, reason, retryInputs, force, clock } = opts;
+  const { zigmaflowDir, jobId, reason, retryInputs, force, clock, runId } = opts;
 
-  // 1. Read active_run from config.json
-  const activeRunId = await readActiveRun(zigmaflowDir);
-  if (activeRunId === null) {
-    throw new ConfigError(
-      "No active run found. Run `zigma-flow run` first to create a run.",
-      { details: { zigmaflowDir } }
-    );
-  }
+  // 1. Resolve run id (explicit --run or active_run from config)
+  const activeRunId = await resolveRunId(zigmaflowDir, runId);
 
   const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
   const runDir = join(runsDir, activeRunId);

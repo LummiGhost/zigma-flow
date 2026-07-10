@@ -36,12 +36,11 @@ import {
 import {
   JsonlEventWriter,
   LocalStateStore,
-  readActiveRun,
+  resolveRunId,
   type Clock,
 } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import {
-  ConfigError,
   StateError,
   UserInputError,
   ValidationError,
@@ -60,6 +59,8 @@ export interface PromptActionOpts {
   job?: string;
   /** Clock for timestamping events. */
   clock: Clock;
+  /** Optional explicit run id (from --run flag). */
+  runId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,18 +100,12 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function promptAction(opts: PromptActionOpts): Promise<void> {
-  const { zigmaflowDir, clock } = opts;
+  const { zigmaflowDir, clock, runId } = opts;
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
 
-  // 1. Read active_run from config.json
-  const activeRunId = await readActiveRun(zigmaflowDir);
-  if (activeRunId === null) {
-    throw new ConfigError(
-      "No active run found. Run `zigma-flow run` first to create a run.",
-      { details: { zigmaflowDir } }
-    );
-  }
+  // 1. Resolve run id (explicit --run or active_run from config)
+  const activeRunId = await resolveRunId(zigmaflowDir, runId);
 
   const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
   const runDir = join(runsDir, activeRunId);

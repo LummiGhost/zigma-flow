@@ -50,7 +50,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import { createRun } from "../../src/engine/index.js";
-import type { Clock } from "../../src/run/index.js";
+import type { Clock, RunState } from "../../src/run/index.js";
 import { executeScriptStep } from "../../src/script/executor.js";
 
 // ---------------------------------------------------------------------------
@@ -1009,6 +1009,327 @@ describe("executeScriptStep — on_failure: { activate_job } (T-SCRIPT-9)", () =
       // recovery job must be activated (ready or waiting)
       const recoveryStatus = snapshot.jobs["recovery"]?.status;
       expect(["ready", "waiting"]).toContain(recoveryStatus);
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-SCRIPT-10: ${{ }} template expression resolution in run: field
+// ---------------------------------------------------------------------------
+
+const SCRIPT_WORKFLOW_EXPR_YAML = `\
+name: expr-test
+version: "0.1.0"
+jobs:
+  producer:
+    steps:
+      - id: gen
+        type: agent
+        prompt: "generate outputs"
+  consumer:
+    needs:
+      - producer
+    steps:
+      - id: use-path
+        type: script
+        run: "cd \${{ jobs.producer.outputs.worktree_path }} && pnpm typecheck"
+`;
+
+describe("executeScriptStep — expression resolution in run: (T-SCRIPT-10)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "resolves ${{ jobs.<id>.outputs.<key> }} expressions in run: field (T-SCRIPT-10, UC-SCRIPT-EXPR-1)",
+    async () => {
+      const { runId, runDir, workflowPath } = await bootstrapScriptRun(
+        sandbox,
+        SCRIPT_WORKFLOW_EXPR_YAML
+      );
+
+      // Pre-populate state: producer job completed with outputs
+      const statePath = join(runDir, "state.json");
+      const rawState = JSON.parse(await readFile(statePath, "utf-8")) as RunState;
+      const augmentedState: RunState = {
+        ...rawState,
+        jobs: {
+          ...rawState.jobs,
+          producer: {
+            status: "completed",
+            outputs: { worktree_path: "/tmp/worktrees/issue-42" },
+          },
+          consumer: {
+            status: "ready",
+          },
+        },
+      };
+      await writeFile(statePath, JSON.stringify(augmentedState, null, 2), "utf-8");
+
+      const runner = new FakeRunner({
+        exitCode: 0,
+        timedOut: false,
+        stdout: "ok\n",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({
+          runDir,
+          zigmaflowDir: sandbox.zigmaflowDir,
+          runId,
+          jobId: "consumer",
+          runner,
+        })
+      );
+
+      // Verify the expression was resolved in the command
+      expect(runner.calls.length).toBe(1);
+      expect(runner.calls[0]!.command).toBe(
+        "cd /tmp/worktrees/issue-42 && pnpm typecheck"
+      );
+    }
+  );
+
+  it(
+    "resolves ${{ steps.<id>.outputs.<key> }} expressions in run: field",
+    async () => {
+      // Use a single-job workflow where a previous agent step sets outputs
+      const workflowYaml = `\
+name: expr-steps-test
+version: "0.1.0"
+jobs:
+  main:
+    steps:
+      - id: setup
+        type: agent
+        prompt: "setup"
+      - id: run-test
+        type: script
+        run: "npm test -- --dir=\${{ steps.setup.outputs.test_dir }}"
+`;
+      const workflowPath = join(sandbox.projectRoot, "expr-steps-test.yml");
+      await writeFile(workflowPath, workflowYaml, "utf-8");
+
+      const { runId: sid, runDir: sdir } = await bootstrapScriptRun(
+        sandbox,
+        workflowYaml
+      );
+
+      // Update state: setup step is done, outputs set, current_step = run-test
+      const statePath = join(sdir, "state.json");
+      const rawState = JSON.parse(await readFile(statePath, "utf-8")) as RunState;
+      const augmentedState: RunState = {
+        ...rawState,
+        jobs: {
+          ...rawState.jobs,
+          main: {
+            ...rawState.jobs.main,
+            status: "running",
+            current_step: "run-test",
+            outputs: { test_dir: "./tests/unit" },
+          },
+        },
+      };
+      await writeFile(statePath, JSON.stringify(augmentedState, null, 2), "utf-8");
+
+      const runner = new FakeRunner({
+        exitCode: 0,
+        timedOut: false,
+        stdout: "tests pass\n",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({
+          runDir: sdir,
+          zigmaflowDir: sandbox.zigmaflowDir,
+          runId: sid,
+          jobId: "main",
+          runner,
+        })
+      );
+
+      expect(runner.calls.length).toBe(1);
+      expect(runner.calls[0]!.command).toBe(
+        "npm test -- --dir=./tests/unit"
+      );
+    }
+  );
+
+  it(
+    "resolves ${{ variables.<name> }} expressions in run: field",
+    async () => {
+      const workflowYaml = `\
+name: expr-var-test
+version: "0.1.0"
+jobs:
+  main:
+    steps:
+      - id: cmd
+        type: script
+        run: "deploy --env=\${{ variables.target_env }}"
+`;
+      const workflowPath = join(sandbox.projectRoot, "expr-var-test.yml");
+      await writeFile(workflowPath, workflowYaml, "utf-8");
+
+      const { runId: runId2, runDir: runDir2 } = await bootstrapScriptRun(
+        sandbox,
+        workflowYaml
+      );
+
+      // Set variables in state
+      const statePath = join(runDir2, "state.json");
+      const rawState = JSON.parse(await readFile(statePath, "utf-8")) as RunState;
+      const augmentedState: RunState = {
+        ...rawState,
+        variables: { target_env: "staging" },
+      };
+      await writeFile(statePath, JSON.stringify(augmentedState, null, 2), "utf-8");
+
+      const runner = new FakeRunner({
+        exitCode: 0,
+        timedOut: false,
+        stdout: "deployed\n",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({
+          runDir: runDir2,
+          zigmaflowDir: sandbox.zigmaflowDir,
+          runId: runId2,
+          jobId: "main",
+          runner,
+        })
+      );
+
+      expect(runner.calls.length).toBe(1);
+      expect(runner.calls[0]!.command).toBe("deploy --env=staging");
+    }
+  );
+
+  it(
+    "resolves ${{ }} in cwd: field alongside run: field",
+    async () => {
+      const workflowYaml = `\
+name: expr-cwd-test
+version: "0.1.0"
+jobs:
+  producer:
+    steps:
+      - id: gen
+        type: agent
+        prompt: "gen"
+  consumer:
+    needs:
+      - producer
+    steps:
+      - id: build
+        type: script
+        run: "pnpm build"
+        cwd: "\${{ jobs.producer.outputs.worktree_path }}"
+`;
+      const { runId: cid, runDir: cdir } = await bootstrapScriptRun(
+        sandbox,
+        workflowYaml
+      );
+
+      const statePath = join(cdir, "state.json");
+      const rawState = JSON.parse(await readFile(statePath, "utf-8")) as RunState;
+      const augmentedState: RunState = {
+        ...rawState,
+        jobs: {
+          ...rawState.jobs,
+          producer: {
+            status: "completed",
+            outputs: { worktree_path: "/tmp/wt/issue-99" },
+          },
+          consumer: {
+            status: "ready",
+          },
+        },
+      };
+      await writeFile(statePath, JSON.stringify(augmentedState, null, 2), "utf-8");
+
+      const runner = new FakeRunner({
+        exitCode: 0,
+        timedOut: false,
+        stdout: "built\n",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({
+          runDir: cdir,
+          zigmaflowDir: sandbox.zigmaflowDir,
+          runId: cid,
+          jobId: "consumer",
+          runner,
+        })
+      );
+
+      expect(runner.calls.length).toBe(1);
+      expect(runner.calls[0]!.cwd).toBe("/tmp/wt/issue-99");
+    }
+  );
+
+  it(
+    "leaves unknown expression patterns unchanged",
+    async () => {
+      const workflowYaml = `\
+name: expr-unknown-test
+version: "0.1.0"
+jobs:
+  main:
+    steps:
+      - id: cmd
+        type: script
+        run: "echo \${{ jobs.nonexistent.outputs.val }}"
+`;
+      const { runId: uid, runDir: udir } = await bootstrapScriptRun(
+        sandbox,
+        workflowYaml
+      );
+
+      const runner = new FakeRunner({
+        exitCode: 0,
+        timedOut: false,
+        stdout: "",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({
+          runDir: udir,
+          zigmaflowDir: sandbox.zigmaflowDir,
+          runId: uid,
+          jobId: "main",
+          runner,
+        })
+      );
+
+      expect(runner.calls.length).toBe(1);
+      // Unknown pattern left unchanged per resolveExpression contract
+      expect(runner.calls[0]!.command).toBe(
+        "echo ${{ jobs.nonexistent.outputs.val }}"
+      );
     }
   );
 });

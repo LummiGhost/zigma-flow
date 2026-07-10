@@ -99,6 +99,8 @@ interface AgentReport {
 }
 
 function validateReportShape(parsed: unknown): AgentReport {
+  const errors: string[] = [];
+
   if (typeof parsed !== "object" || parsed === null) {
     throw new ValidationError("report.json must be a JSON object", {
       details: { actual: typeof parsed },
@@ -108,27 +110,26 @@ function validateReportShape(parsed: unknown): AgentReport {
   const obj = parsed as Record<string, unknown>;
 
   if (typeof obj["outputs"] !== "object" || obj["outputs"] === null || Array.isArray(obj["outputs"])) {
-    throw new ValidationError('report.json is missing required field "outputs" (must be an object)', {
-      details: { field: "outputs" },
-    });
+    errors.push('missing required field "outputs" (must be an object)');
   }
 
   if (!Array.isArray(obj["artifacts"])) {
-    throw new ValidationError('report.json is missing required field "artifacts" (must be an array)', {
-      details: { field: "artifacts" },
-    });
+    errors.push('missing required field "artifacts" (must be an array)');
   }
 
   if (!Array.isArray(obj["signals"])) {
-    throw new ValidationError('report.json is missing required field "signals" (must be an array)', {
-      details: { field: "signals" },
-    });
+    errors.push('missing required field "signals" (must be an array)');
   }
 
   if (typeof obj["summary"] !== "string") {
-    throw new ValidationError('report.json is missing required field "summary" (must be a string)', {
-      details: { field: "summary" },
-    });
+    errors.push('missing required field "summary" (must be a string)');
+  }
+
+  if (errors.length > 0) {
+    throw new ValidationError(
+      `report.json has ${errors.length} validation error(s):\n  - ${errors.join("\n  - ")}`,
+      { details: { errors } }
+    );
   }
 
   const signals: Array<{ type: string; reason?: string }> = (
@@ -148,10 +149,10 @@ function validateReportShape(parsed: unknown): AgentReport {
   });
 
   return {
-    outputs: obj["outputs"] as Record<string, unknown>,
-    artifacts: obj["artifacts"] as unknown[],
+    outputs: (obj["outputs"] ?? {}) as Record<string, unknown>,
+    artifacts: (obj["artifacts"] ?? []) as unknown[],
     signals,
-    summary: obj["summary"],
+    summary: obj["summary"] as string,
     status: obj["status"] !== undefined ? String(obj["status"]) : undefined,
     ...(obj["context_patches"] !== undefined ? { context_patches: obj["context_patches"] as unknown[] } : {}),
   };

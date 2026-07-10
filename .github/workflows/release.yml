@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
   release:
@@ -52,7 +51,9 @@ jobs:
           test -f dist/templates/system-prompt.md
 
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
 
       - name: Create GitHub Release
         env:

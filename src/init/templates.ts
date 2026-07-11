@@ -6,7 +6,7 @@
 
 import { createHash } from "node:crypto";
 
-import { buildScriptCommand } from "./detect.js";
+import { buildInstallCommand, buildScriptCommand } from "./detect.js";
 import type { DetectionResult } from "./detect.js";
 
 // ---------------------------------------------------------------------------
@@ -97,7 +97,39 @@ export function codeChangeWorkflowYml(detection?: DetectionResult): string {
 
   // --- Build job ---
   const hasBuild = hasPackageJson && scripts!.build;
-  const staticCheckNeeds = hasBuild ? "build" : "implement";
+
+  // --- Install-deps job (conditional on hasPackageJson) ---
+  let installDepsJob = "";
+  if (hasPackageJson) {
+    const installCmd = buildInstallCommand(pm);
+    installDepsJob = `
+  install-deps:
+    needs:
+      - implement
+    workspace:
+      mode: writable
+    steps:
+      - id: install
+        type: script
+        run: "${installCmd}"
+        env:
+          CI: "true"
+        on_failure: fail
+`;
+  }
+
+  // --- Needs strings (install-deps prepended when applicable) ---
+  const staticCheckNeeds = (() => {
+    const deps: string[] = hasBuild ? ["build"] : ["implement"];
+    if (hasPackageJson) deps.push("install-deps");
+    return deps.map(d => `      - ${d}`).join("\n");
+  })();
+
+  const unitTestNeeds = (() => {
+    const deps: string[] = ["implement"];
+    if (hasPackageJson) deps.push("install-deps");
+    return deps.map(d => `      - ${d}`).join("\n");
+  })();
 
   // --- Header (through implement job) ---
   const header = `name: code-change
@@ -262,6 +294,8 @@ jobs:
       - id: collect-diff
         type: script
         run: "git diff HEAD"
+        env:
+          CI: "true"
         on_failure: fail
 `;
 
@@ -278,6 +312,8 @@ jobs:
       - id: build
         type: script
         run: "${cmd("build")}"
+        env:
+          CI: "true"
         on_failure: fail
 `;
   }
@@ -288,20 +324,22 @@ jobs:
     staticCheckJob = `
   static-check:
     needs:
-      - ${staticCheckNeeds}
+${staticCheckNeeds}
     workspace:
       mode: read-only
     steps:
       - id: check
         type: script
         run: "${staticCheckRun}"
+        env:
+          CI: "true"
         on_failure: fail
 `;
   } else {
     staticCheckJob = `
   static-check:
     needs:
-      - ${staticCheckNeeds}
+${staticCheckNeeds}
     workspace:
       mode: read-only
     steps:
@@ -319,20 +357,22 @@ jobs:
     unitTestJob = `
   unit-test:
     needs:
-      - implement
+${unitTestNeeds}
     workspace:
       mode: read-only
     steps:
       - id: test
         type: script
         run: "${unitTestRun}"
+        env:
+          CI: "true"
         on_failure: fail
 `;
   } else {
     unitTestJob = `
   unit-test:
     needs:
-      - implement
+${unitTestNeeds}
     workspace:
       mode: read-only
     steps:
@@ -411,7 +451,7 @@ jobs:
             - code
 `;
 
-  return header + buildJob + staticCheckJob + unitTestJob + footer;
+  return header + installDepsJob + buildJob + staticCheckJob + unitTestJob + footer;
 }
 
 // ---------------------------------------------------------------------------
@@ -476,6 +516,8 @@ jobs:
       - id: collect-diff
         type: script
         run: "git diff HEAD"
+        env:
+          CI: "true"
         on_failure: fail
 
   static-check:
@@ -487,6 +529,8 @@ jobs:
       - id: check
         type: script
         run: "pnpm typecheck && pnpm lint"
+        env:
+          CI: "true"
         on_failure: fail
 
   unit-test:
@@ -498,6 +542,8 @@ jobs:
       - id: test
         type: script
         run: "pnpm test:ci"
+        env:
+          CI: "true"
         on_failure: fail
 
   summarize:

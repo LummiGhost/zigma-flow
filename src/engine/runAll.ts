@@ -740,6 +740,49 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     },
   }));
 
+  // ── on_output routing (Issue #172) — before advanceJob ─────────────────
+  // If the step declares on_output and a reported output value matches a
+  // routing rule, dispatch the action instead of advancing the job.
+
+  if (stepDef.on_output) {
+    for (const [outputKey, valueMap] of Object.entries(stepDef.on_output)) {
+      const outputValue = String(outputs[outputKey] ?? "");
+      if (outputValue && valueMap[outputValue] !== undefined) {
+        const action = valueMap[outputValue]!;
+
+        // Lazy-import applyRoutingAction to avoid circular dependency
+        const { applyRoutingAction } = await import("./routing.js");
+        await applyRoutingAction({
+          runDir,
+          runId,
+          sourceJobId: jobId,
+          sourceStepId: stepId,
+          attempt,
+          action,
+          reason: `on_output routing: ${outputKey} = ${outputValue}`,
+          clock,
+        });
+
+        // Advance the source job after object routing actions (retry_job /
+        // activate_job), matching accept.ts signal-path behaviour. These
+        // actions only modify the target job, so the source must be advanced
+        // separately to avoid re-execution on the next loop iteration.
+        // - continue: advanceJob is already called inside applyRoutingAction.
+        // - fail/block: source is already terminal (no-op).
+        // - goto_job: source is already completed inside applyRoutingAction.
+        const isObjectRoutingAction =
+          typeof action === "object" &&
+          action !== null &&
+          ("retry_job" in action || "activate_job" in action);
+        if (isObjectRoutingAction) {
+          await advanceJob({ runDir, runId, jobId, clock });
+        }
+
+        return { jobId, success: true, action: "completed" };
+      }
+    }
+  }
+
   // Advance unconditionally after a valid report is accepted — matches accept.ts behavior.
   // Single-turn agent steps should not require outputs.completed to progress.
   await advanceJob({ runDir, runId, jobId, clock });

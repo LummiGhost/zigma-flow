@@ -187,7 +187,14 @@ const StepBaseSchema = z.object({
   timeout_minutes: z.number().int().positive().optional(),
   // Step-specific output schemas (Issue #100)
   /** @stability experimental — may change in any minor version release without deprecation — not yet in published language spec */
-  outputs_schema: z.record(z.string(), z.object({ type: z.string() })).optional(),
+  outputs_schema: z.record(z.string(), z.object({
+    type: z.string(),
+    values: z.array(z.string()).optional(),
+    on_value: z.record(z.string(), RouterActionSchema).optional(),
+  })).optional(),
+  // Output-based routing (Issue #172)
+  /** @stability experimental — may change in any minor version release without deprecation — not yet in published language spec */
+  on_output: z.record(z.string(), z.record(z.string(), RouterActionSchema)).optional(),
   /** @stability experimental — may change in any minor version release without deprecation — not yet in published language spec */
   artifact_policy: z.object({
     /** @stability experimental — may change in any minor version release without deprecation */
@@ -252,7 +259,9 @@ export interface StepDefinition {
   /** DSL-reserved field. Runtime enforcement deferred to v0.3+. */
   timeout_minutes?: number;
   // Step-specific output schemas (Issue #100)
-  outputs_schema?: Record<string, { type: string }>;
+  outputs_schema?: Record<string, { type: string; values?: string[]; on_value?: Record<string, RouterAction> }>;
+  // Output-based routing (Issue #172)
+  on_output?: Record<string, Record<string, RouterAction>>;
   artifact_policy?: { required?: string[]; forbidden?: string[] };
   signal_policy?: { allowed?: string[]; required_evidence?: string[] };
   // Issue #106: Allow generic prompt fallback when no primary prompt is found
@@ -629,7 +638,24 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
     }
   }
 
-  // 6d. Validate goto_step targets exist in same job (WF-P13-FLOW)
+  // 6d. on_output keys must reference declared output keys (Issue #172)
+  for (const [jobName, job] of Object.entries(wf.jobs)) {
+    for (const step of job.steps) {
+      if (step.on_output) {
+        const declaredOutputs = new Set(Object.keys(step.outputs ?? {}));
+        for (const key of Object.keys(step.on_output)) {
+          if (!declaredOutputs.has(key)) {
+            throw new ValidationError(
+              `on_output key "${key}" is not a declared output for step "${step.id}" in job "${jobName}"`,
+              { details: { job: jobName, step: step.id, key } }
+            );
+          }
+        }
+      }
+    }
+  }
+
+  // 6e. Validate goto_step targets exist in same job (WF-P13-FLOW)
   for (const [jobName, job] of Object.entries(wf.jobs)) {
     const stepIds = new Set(job.steps.map(s => s.id));
     for (const step of job.steps) {

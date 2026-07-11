@@ -282,6 +282,30 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
     }
   }
 
+  // ── 4c. Validate output values against declared constraints (Issue #172) ───
+  // If a step declares outputs with a "values" constraint (in outputs or
+  // outputs_schema), validate that the report's output value is in the set.
+
+  for (const [key, value] of Object.entries(normalizedOutputs)) {
+    const outputDecl = stepDef?.outputs?.[key];
+    const outputSchema = stepDef?.outputs_schema?.[key];
+    const allowedValues: string[] | undefined =
+      (outputSchema?.values) ??
+      (outputDecl !== null && typeof outputDecl === "object"
+        ? (outputDecl as Record<string, unknown>)["values"] as string[] | undefined
+        : undefined);
+
+    if (allowedValues !== undefined && Array.isArray(allowedValues) && allowedValues.length > 0) {
+      const strValue = String(value ?? "");
+      if (!allowedValues.includes(strValue)) {
+        throw new ValidationError(
+          `Output "${key}" value "${strValue}" is not in declared values: [${allowedValues.join(", ")}]`,
+          { details: { outputKey: key, actualValue: strValue, allowedValues } }
+        );
+      }
+    }
+  }
+
   const signalsArray = report.signals;
 
   // ── Status handling (AD-P13-013) — before signals ─────────────────────
@@ -329,6 +353,71 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
     });
 
     return;
+  }
+
+  // ── on_output routing (Issue #172) — before signals ─────────────────────
+  // If the step declares on_output and a reported output value matches a
+  // routing rule, dispatch the action via applyRoutingAction. This takes
+  // priority over signal routing.
+
+  if (stepDef?.on_output) {
+    for (const [outputKey, valueMap] of Object.entries(stepDef.on_output)) {
+      const outputValue = String(normalizedOutputs[outputKey] ?? "");
+      if (outputValue && valueMap[outputValue] !== undefined) {
+        const action = valueMap[outputValue]!;
+
+        // Persist outputs to state before dispatch
+        const stateWithOutputs: RunState = {
+          ...state,
+          jobs: {
+            ...state.jobs,
+            [jobId]: {
+              ...jobState,
+              outputs: normalizedOutputs,
+            },
+          },
+        };
+        await stateStore.writeSnapshot(runDir, stateWithOutputs);
+
+        // Apply context patches if present
+        if (report.context_patches && report.context_patches.length > 0) {
+          const { applyContextPatch: acp } = await import("./applyContextPatch.js");
+          await acp({
+            runDir,
+            runId,
+            jobId,
+            stepId,
+            attempt,
+            patches: report.context_patches as ContextPatch[],
+            clock,
+          });
+        }
+
+        // Dispatch the routing action
+        await applyRoutingAction({
+          runDir,
+          runId,
+          sourceJobId: jobId,
+          sourceStepId: stepId,
+          attempt,
+          action,
+          reason: `on_output routing: ${outputKey} = ${outputValue}`,
+          clock,
+        });
+
+        // Advance the source job after routing dispatch (same as signal path)
+        const isObjectRoutingAction =
+          typeof action === "object" &&
+          action !== null &&
+          ("retry_job" in action || "activate_job" in action);
+        if (isObjectRoutingAction) {
+          const { advanceJob } = await import("./index.js");
+          await advanceJob({ runDir, runId, jobId, clock });
+        }
+
+        return;
+      }
+    }
   }
 
   if (signalsArray.length > 0) {

@@ -42,6 +42,7 @@ import {
   ValidationError,
 } from "../utils/index.js";
 import { advanceJob, createRun, executeCurrentStep } from "./index.js";
+import { validateReportShape } from "./accept.js";
 import { enterHumanGate } from "./humanGate.js";
 import { recordAgentFailure } from "./recordAgentFailure.js";
 import { appendArtifactIndex } from "../artifact/artifactIndex.js";
@@ -693,18 +694,75 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   // acceptAgentReport so that the loop can decide when to advance based
   // on the agent's reported outputs.
   const reportRaw = await readFile(reportPath, "utf-8");
-  const report = JSON.parse(reportRaw) as {
-    outputs?: Record<string, unknown>;
-    signals?: Array<{ type: string; reason?: string }>;
-    artifacts?: string[];
-    summary?: string;
-  };
+  let reportParsed: unknown;
+  try {
+    reportParsed = JSON.parse(reportRaw);
+  } catch (e: unknown) {
+    throw new ValidationError(`report.json contains malformed JSON at: ${reportPath}`, { cause: e });
+  }
 
-  const outputs =
-    typeof report.outputs === "object" && report.outputs !== null
-      ? (report.outputs as Record<string, unknown>)
-      : {};
-  const signals = Array.isArray(report.signals) ? report.signals : [];
+  // Validate report shape (§2.6)
+  const report = validateReportShape(reportParsed);
+  const outputs = report.outputs;
+
+  // Validate that all declared output keys are present
+  if (stepDef.outputs) {
+    const declaredKeys = Object.keys(stepDef.outputs);
+    const missingKeys = declaredKeys.filter((k) => !(k in outputs));
+    if (missingKeys.length > 0) {
+      throw new ValidationError(
+        `Report is missing declared output(s): ${missingKeys.join(", ")}`,
+        { details: { missing: missingKeys, declared: declaredKeys } }
+      );
+    }
+  }
+
+  // Validate output value types against outputs_schema
+  if (stepDef.outputs_schema) {
+    for (const [key, schema] of Object.entries(stepDef.outputs_schema)) {
+      const value = outputs[key];
+      if (value === undefined) continue;
+
+      const expectedType = schema.type;
+      let actualType: string;
+      if (value === null) {
+        actualType = "null";
+      } else if (Array.isArray(value)) {
+        actualType = "array";
+      } else {
+        actualType = typeof value;
+      }
+
+      if (expectedType !== actualType) {
+        throw new ValidationError(
+          `Output "${key}" type mismatch: expected ${expectedType}, got ${actualType}`,
+          { details: { key, expected: expectedType, actual: actualType } }
+        );
+      }
+    }
+  }
+
+  // Validate required_artifacts against report artifacts
+  if (stepDef.required_artifacts && stepDef.required_artifacts.length > 0) {
+    const reportArtifactRefs = report.artifacts
+      .filter((a): a is string => typeof a === "string")
+      .map((a) => a);
+
+    for (const required of stepDef.required_artifacts) {
+      const found = reportArtifactRefs.some((a) => {
+        return a === required || a.endsWith("/" + required);
+      });
+      if (!found) {
+        throw new ValidationError(
+          `Required artifact "${required}" not found in report artifacts. ` +
+          `The step requires this artifact to be produced.`,
+          { details: { required, actual: reportArtifactRefs } }
+        );
+      }
+    }
+  }
+
+  const signals = report.signals;
 
   // Emit agent_report_accepted event
   const acceptedEventId = await nextSequentialEventId(runDir, eventWriter);

@@ -98,7 +98,7 @@ interface AgentReport {
   context_patches?: unknown[];
 }
 
-function validateReportShape(parsed: unknown): AgentReport {
+export function validateReportShape(parsed: unknown): AgentReport {
   const errors: string[] = [];
 
   if (typeof parsed !== "object" || parsed === null) {
@@ -258,6 +258,19 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
     }
   }
 
+  // ── 3c. Validate declared output keys are present in report ──────────────
+
+  if (stepDef?.outputs) {
+    const declaredKeys = Object.keys(stepDef.outputs);
+    const missingKeys = declaredKeys.filter((k) => !(k in report.outputs));
+    if (missingKeys.length > 0) {
+      throw new ValidationError(
+        `Report is missing declared output(s): ${missingKeys.join(", ")}`,
+        { details: { missing: missingKeys, declared: declaredKeys } }
+      );
+    }
+  }
+
   const normalizedOutputs: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(report.outputs)) {
     const outputDef = stepDef?.outputs?.[key];
@@ -279,6 +292,32 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
       normalizedOutputs[key] = value.split("\n").map((s) => s.trim()).filter(Boolean);
     } else {
       normalizedOutputs[key] = value;
+    }
+  }
+
+  // ── 3d. Validate output value types against outputs_schema ─────────────
+
+  if (stepDef?.outputs_schema) {
+    for (const [key, schema] of Object.entries(stepDef.outputs_schema)) {
+      const value = normalizedOutputs[key];
+      if (value === undefined) continue;
+
+      const expectedType = schema.type;
+      let actualType: string;
+      if (value === null) {
+        actualType = "null";
+      } else if (Array.isArray(value)) {
+        actualType = "array";
+      } else {
+        actualType = typeof value;
+      }
+
+      if (expectedType !== actualType) {
+        throw new ValidationError(
+          `Output "${key}" type mismatch: expected ${expectedType}, got ${actualType}`,
+          { details: { key, expected: expectedType, actual: actualType } }
+        );
+      }
     }
   }
 

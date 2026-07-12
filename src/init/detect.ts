@@ -157,3 +157,25 @@ export function buildScriptCommand(pm: PackageManager, scriptName: string): stri
   const needsRun = pm === "npm" || pm === "bun";
   return needsRun ? `${pm} run ${scriptName}` : `${pm} ${scriptName}`;
 }
+
+/**
+ * Build an install command for the given package manager that uses frozen
+ * lockfile semantics (ci-like install).
+ *
+ * pnpm:  "pnpm install --frozen-lockfile"
+ * npm:   "npm ci"
+ * yarn:  "yarn install --frozen-lockfile"
+ * bun:   "bun install --frozen-lockfile"
+ */
+export function buildInstallCommand(pm: PackageManager): string {
+  switch (pm) {
+    case "pnpm":
+      return "pnpm install --frozen-lockfile";
+    case "yarn":
+      return "yarn install --frozen-lockfile";
+    case "bun":
+      return "bun install --frozen-lockfile";
+    case "npm":
+      return "npm ci";
+  }
+}

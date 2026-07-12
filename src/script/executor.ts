@@ -323,7 +323,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     ...(typeof stepDef.shell === "string" ? { shell: stepDef.shell } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(typeof resolvedCwd === "string" ? { cwd: resolvedCwd } : {}),
-    ...(stepDef.env !== undefined ? { env: stepDef.env } : {}),
+    env: { CI: "true", ...(stepDef.env ?? {}) },
   });
 
   // ── 7. Write stdout/stderr artifacts ─────────────────────────────────────

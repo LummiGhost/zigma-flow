@@ -40,6 +40,7 @@ import { randomUUID } from "node:crypto";
 
 import { runInit } from "../../src/init/index.js";
 import { loadWorkflow } from "../../src/workflow/index.js";
+import type { WorkflowDefinition } from "../../src/workflow/index.js";
 import { createRun, executeCurrentStep } from "../../src/engine/index.js";
 import { acceptAgentReport } from "../../src/engine/accept.js";
 import type { Clock, JobState, RunState } from "../../src/run/index.js";
@@ -201,11 +202,25 @@ async function writeAgentReport(
   stepId: string,
   signals: Array<{ type: string; reason?: string }> = [],
   extraArtifacts: string[] = [],
+  wf?: WorkflowDefinition,
 ): Promise<void> {
   const dir = artifactStepDir(runDir, jobId, attempt, stepId);
   await mkdir(dir, { recursive: true });
+
+  // Auto-populate all declared output keys from the step definition
+  const stepDef = wf?.jobs[jobId]?.steps.find((s) => s.id === stepId);
+  const outputs: Record<string, unknown> = {};
+  if (stepDef?.outputs) {
+    for (const key of Object.keys(stepDef.outputs)) {
+      outputs[key] = `${key}_value`;
+    }
+  }
+  if (Object.keys(outputs).length === 0) {
+    outputs.summary = `${jobId} completed`;
+  }
+
   const report = {
-    outputs: { summary: `${jobId} completed` },
+    outputs,
     artifacts: extraArtifacts,
     signals,
     summary: `${jobId} step done`,
@@ -229,6 +244,7 @@ async function runAgentJob(
   clock: Clock,
   signals: Array<{ type: string; reason?: string }> = [],
   extraArtifacts: string[] = [],
+  wf?: WorkflowDefinition,
 ): Promise<void> {
   await promoteReadyJobs(runDir, wfJobs);
 
@@ -239,7 +255,7 @@ async function runAgentJob(
     attempt,
   });
 
-  await writeAgentReport(runDir, jobId, attempt, stepId, signals, extraArtifacts);
+  await writeAgentReport(runDir, jobId, attempt, stepId, signals, extraArtifacts, wf);
 
   await acceptAgentReport({ runDir, runId, jobId, clock });
 }
@@ -254,7 +270,8 @@ async function runAgentJobAttempt(
   stepId: string,
   attempt: number,
   clock: Clock,
-  signals: Array<{ type: string; reason?: string }> = []
+  signals: Array<{ type: string; reason?: string }> = [],
+  wf?: WorkflowDefinition,
 ): Promise<void> {
   await patchJobState(runDir, jobId, {
     status: "running",
@@ -262,7 +279,7 @@ async function runAgentJobAttempt(
     attempt,
   });
 
-  await writeAgentReport(runDir, jobId, attempt, stepId, signals);
+  await writeAgentReport(runDir, jobId, attempt, stepId, signals, [], wf);
 
   await acceptAgentReport({ runDir, runId, jobId, clock });
 }
@@ -442,11 +459,11 @@ describe("TC-DOGFOOD-3: full happy-path run", () => {
       // Step 3: Run jobs in DAG order
 
       // 1. intake (no deps) — agent step id: "analyze"
-      await runAgentJob(runDir, runId, "intake", "analyze", wfJobs, clock);
+      await runAgentJob(runDir, runId, "intake", "analyze", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["intake"]!.status).toBe("completed");
 
       // 2. code-map (needs: intake) — agent step id: "map"
-      await runAgentJob(runDir, runId, "code-map", "map", wfJobs, clock);
+      await runAgentJob(runDir, runId, "code-map", "map", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["code-map"]!.status).toBe("completed");
 
       // 3. risk-scan (needs: code-map) — check step id: "validate"
@@ -455,7 +472,7 @@ describe("TC-DOGFOOD-3: full happy-path run", () => {
       expect((await readStateSnapshot(runDir)).jobs["risk-scan"]!.status).toBe("completed");
 
       // 4. plan (needs: risk-scan) — agent step id: "plan"
-      await runAgentJob(runDir, runId, "plan", "plan", wfJobs, clock);
+      await runAgentJob(runDir, runId, "plan", "plan", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["plan"]!.status).toBe("completed");
 
       // 5. architecture-design stays inactive (activation: "manual", not triggered)
@@ -465,7 +482,7 @@ describe("TC-DOGFOOD-3: full happy-path run", () => {
       //    architecture-design is inactive → implement can proceed once plan completes
       //    P11: implement has 3 steps: agent (implement), script (collect-diff), check (check-diff)
       //    After agent step, engine advances to collect-diff; running script step completes the job.
-      await runAgentJob(runDir, runId, "implement", "implement", wfJobs, clock);
+      await runAgentJob(runDir, runId, "implement", "implement", wfJobs, clock, [], [], wf);
       await runExecutedJob(runDir, runId, "implement", wfJobs, sandbox.projectDir, clock, mockRunner);
       expect((await readStateSnapshot(runDir)).jobs["implement"]!.status).toBe("completed");
 
@@ -478,11 +495,11 @@ describe("TC-DOGFOOD-3: full happy-path run", () => {
       expect((await readStateSnapshot(runDir)).jobs["unit-test"]!.status).toBe("completed");
 
       // 9. review (needs: static-check, unit-test) — agent step id: "review"
-      await runAgentJob(runDir, runId, "review", "review", wfJobs, clock);
+      await runAgentJob(runDir, runId, "review", "review", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["review"]!.status).toBe("completed");
 
       // 10. summarize (needs: review) — agent step id: "summarize"
-      await runAgentJob(runDir, runId, "summarize", "summarize", wfJobs, clock, [], ["summary.md"]);
+      await runAgentJob(runDir, runId, "summarize", "summarize", wfJobs, clock, [], ["summary.md"], wf);
       expect((await readStateSnapshot(runDir)).jobs["summarize"]!.status).toBe("completed");
 
       // Final assertions: all jobs except architecture-design are "completed"
@@ -563,11 +580,11 @@ describe("TC-DOGFOOD-5: needs_architecture_design signal activates architecture-
       expect(initialState.jobs["architecture-design"]!.status).toBe("inactive");
 
       // 1. intake — agent step "analyze"
-      await runAgentJob(runDir, runId, "intake", "analyze", wfJobs, clock);
+      await runAgentJob(runDir, runId, "intake", "analyze", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["intake"]!.status).toBe("completed");
 
       // 2. code-map — agent step "map"
-      await runAgentJob(runDir, runId, "code-map", "map", wfJobs, clock);
+      await runAgentJob(runDir, runId, "code-map", "map", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["code-map"]!.status).toBe("completed");
 
       // 3. risk-scan — check step "validate"
@@ -580,7 +597,7 @@ describe("TC-DOGFOOD-5: needs_architecture_design signal activates architecture-
       //    Then advanceJob completes plan.
       await runAgentJob(runDir, runId, "plan", "plan", wfJobs, clock, [
         { type: "needs_architecture_design" },
-      ]);
+      ], [], wf);
 
       // After signal: plan is completed and architecture-design is activated.
       // However, architecture-design has needs: [plan]. When the signal fires,
@@ -620,7 +637,7 @@ describe("TC-DOGFOOD-5: needs_architecture_design signal activates architecture-
       //    We already patched it to "ready" above, so we call acceptAgentReport directly
       //    (via runAgentJob which also calls promoteReadyJobs — fine since it won't re-touch it).
       //    promoteReadyJobs will also promote implement (needs: [plan], plan is completed).
-      await runAgentJob(runDir, runId, "architecture-design", "design", wfJobs, clock);
+      await runAgentJob(runDir, runId, "architecture-design", "design", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["architecture-design"]!.status).toBe("completed");
 
       // After architecture-design completes, implement should be ready
@@ -629,7 +646,7 @@ describe("TC-DOGFOOD-5: needs_architecture_design signal activates architecture-
       expect(postArchDesignState.jobs["implement"]!.status).toBe("ready");
 
       // 6. implement — agent step "implement" then script step "collect-diff"
-      await runAgentJob(runDir, runId, "implement", "implement", wfJobs, clock);
+      await runAgentJob(runDir, runId, "implement", "implement", wfJobs, clock, [], [], wf);
       await runExecutedJob(runDir, runId, "implement", wfJobs, sandbox.projectDir, clock, mockRunner);
       expect((await readStateSnapshot(runDir)).jobs["implement"]!.status).toBe("completed");
 
@@ -642,11 +659,11 @@ describe("TC-DOGFOOD-5: needs_architecture_design signal activates architecture-
       expect((await readStateSnapshot(runDir)).jobs["unit-test"]!.status).toBe("completed");
 
       // 9. review — agent step "review"
-      await runAgentJob(runDir, runId, "review", "review", wfJobs, clock);
+      await runAgentJob(runDir, runId, "review", "review", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["review"]!.status).toBe("completed");
 
       // 10. summarize — agent step "summarize"
-      await runAgentJob(runDir, runId, "summarize", "summarize", wfJobs, clock, [], ["summary.md"]);
+      await runAgentJob(runDir, runId, "summarize", "summarize", wfJobs, clock, [], ["summary.md"], wf);
       expect((await readStateSnapshot(runDir)).jobs["summarize"]!.status).toBe("completed");
 
       // Final assertions: ALL 10 jobs completed (including architecture-design this time)
@@ -718,16 +735,16 @@ describe("TC-DOGFOOD-4: review_rejected signal path", () => {
       // Run through the DAG until review
 
       // 1. intake
-      await runAgentJob(runDir, runId, "intake", "analyze", wfJobs, clock);
+      await runAgentJob(runDir, runId, "intake", "analyze", wfJobs, clock, [], [], wf);
       // 2. code-map
-      await runAgentJob(runDir, runId, "code-map", "map", wfJobs, clock);
+      await runAgentJob(runDir, runId, "code-map", "map", wfJobs, clock, [], [], wf);
       // 3. risk-scan
       await runExecutedJob(runDir, runId, "risk-scan", wfJobs, sandbox.projectDir, clock, mockCheckRunner);
       // 4. plan
-      await runAgentJob(runDir, runId, "plan", "plan", wfJobs, clock);
+      await runAgentJob(runDir, runId, "plan", "plan", wfJobs, clock, [], [], wf);
       // 5. implement (attempt 1) — 3 steps: agent, script, check
       //    After agent step, engine advances to collect-diff; running script step completes the job.
-      await runAgentJob(runDir, runId, "implement", "implement", wfJobs, clock);
+      await runAgentJob(runDir, runId, "implement", "implement", wfJobs, clock, [], [], wf);
       await runExecutedJob(runDir, runId, "implement", wfJobs, sandbox.projectDir, clock, mockRunner);
       // 6. static-check
       await runExecutedJob(runDir, runId, "static-check", wfJobs, sandbox.projectDir, clock, mockRunner);
@@ -744,7 +761,7 @@ describe("TC-DOGFOOD-4: review_rejected signal path", () => {
       //    which resets implement to ready at attempt 2.
       await runAgentJob(runDir, runId, "review", "review", wfJobs, clock, [
         { type: "review_rejected", reason: "tests are insufficient" },
-      ]);
+      ], [], wf);
 
       // After the signal: review should be completed, implement should be ready at attempt 2
       const postSignalState = await readStateSnapshot(runDir);
@@ -785,7 +802,7 @@ describe("TC-DOGFOOD-4: review_rejected signal path", () => {
 
       // Now run implement attempt 2 through to completion (verify retry works)
       // implement is already at ready/attempt 2 — just need to run it
-      await runAgentJobAttempt(runDir, runId, "implement", "implement", 2, clock);
+      await runAgentJobAttempt(runDir, runId, "implement", "implement", 2, clock, [], wf);
       // P11: implement has 3 steps — after agent step, engine advances to collect-diff (script)
       //      running the script step completes the job.
       await runExecutedJob(runDir, runId, "implement", wfJobs, sandbox.projectDir, clock, mockRunner);

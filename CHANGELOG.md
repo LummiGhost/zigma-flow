@@ -19,6 +19,22 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.4.6] — Patch Release (2026-07-13)
+
+### Runtime
+
+- [runtime] Add built-in GitHub and git worktree workflow definitions for fetch issue, publish PR, comment, close-and-merge, and worktree lifecycle operations (#176, #180).
+- [runtime] Add job-level workspace directory resolution with expression support for script, check, and router steps (#181).
+- [runtime] Add traverse/fan-out workflow execution support with audit events and schema coverage (#182).
+
+### CLI
+
+- [CLI] Add `--cwd` support with validation and command wiring for running workflows from an explicit working directory (#177, #183).
+
+### Tests
+
+- [tests] Add regression coverage for built-in workflows, workspace resolution, traverse schema, traverse execution, and CLI `--cwd` handling (#180, #181, #182, #183).
+
 ---
 
 ## [v0.4.2] — Windows CLI Fix (2026-07-09)

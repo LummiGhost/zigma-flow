@@ -278,6 +278,44 @@ export interface StepDefinition {
  * object with optional `directory` (working directory path) and optional
  * `mode` ("read-only" | "writable") plus arbitrary extension keys.
  *
+ * ## Forms (any one of the following)
+ *
+ * ### 1. String form (simple path)
+ * ```yaml
+ * workspace: /absolute/path
+ * workspace: ${{ jobs.create.outputs.dir }}/subdir
+ * ```
+ *
+ * ### 2. Object form with directory
+ * ```yaml
+ * workspace:
+ *   directory: /absolute/path
+ * ```
+ *
+ * ### 3. Object form with mode only (no working directory)
+ * ```yaml
+ * workspace:
+ *   mode: read-only
+ * ```
+ *
+ * ## Precedence
+ *
+ * - Job-level `workspace.directory` (or string-form `workspace`) sets the
+ *   default working directory for **script, check, and router** steps within
+ *   the job. Agent steps run in their own subprocess and are **not** affected.
+ * - Step-level `cwd` on script steps takes precedence over the job-level
+ *   workspace directory.
+ * - For check steps, `with.cwd` takes precedence over the job-level workspace
+ *   directory, which in turn takes precedence over `runDir` for path resolution.
+ * - If no workspace is configured, steps default to the project root.
+ *
+ * ## Expression support
+ *
+ * Both the string form and `directory` field accept `${{ }}` expressions.
+ * These are resolved at job execution time against the current run state
+ * (job outputs, variables). Only simple path references are permitted;
+ * arithmetic and function expressions are rejected at schema validation time.
+ *
  * @stability experimental — `directory` and string-form workspace may change
  *   in any minor version release without deprecation.
  */

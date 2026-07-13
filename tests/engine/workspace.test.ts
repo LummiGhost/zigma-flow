@@ -11,15 +11,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join, parse as parsePath, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import { loadWorkflow } from "../../src/workflow/index.js";
-import type { WorkflowDefinition } from "../../src/workflow/index.js";
 import { extractWorkspacePath, resolveJobWorkingDirectory } from "../../src/engine/workspace.js";
-import { ValidationError, WorkflowError } from "../../src/utils/index.js";
+import { ValidationError } from "../../src/utils/index.js";
 import type { RunState } from "../../src/run/index.js";
 
 // ---------------------------------------------------------------------------
@@ -213,12 +212,12 @@ describe("extractWorkspacePath", () => {
     expect(extractWorkspacePath(jobDef)).toBeUndefined();
   });
 
-  it("returns undefined for object workspace with empty directory", () => {
+  it("returns undefined for object workspace with empty directory string", () => {
     const jobDef = {
       steps: [{ id: "s1", type: "script" as const, run: "echo" }],
       workspace: { directory: "" },
     };
-    expect(extractWorkspacePath(jobDef)).toBe("");
+    expect(extractWorkspacePath(jobDef)).toBeUndefined();
   });
 });
 
@@ -285,6 +284,27 @@ describe("resolveJobWorkingDirectory", () => {
     const state = makeRunState();
     const result = await resolveJobWorkingDirectory(jobDef, state);
     expect(result).toBe(tmpDir);
+  });
+
+  it("resolves relative path from current working directory", async () => {
+    // Create a subdirectory so the relative path resolves to a real directory
+    const subDir = join(tmpDir, "subdir");
+    await mkdir(subDir, { recursive: true });
+
+    // Switch cwd to tmpDir so that "./subdir" resolves
+    const origCwd = process.cwd();
+    try {
+      process.chdir(tmpDir);
+      const jobDef = {
+        steps: [{ id: "s1", type: "script" as const, run: "echo" }],
+        workspace: "./subdir",
+      };
+      const state = makeRunState();
+      const result = await resolveJobWorkingDirectory(jobDef, state);
+      expect(result).toBe(resolve(tmpDir, "subdir"));
+    } finally {
+      process.chdir(origCwd);
+    }
   });
 
   it("resolves ${{ variables.<name> }} in workspace path", async () => {

@@ -287,6 +287,9 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       jobId,
       clock,
       runner: actualRunner,
+      // Forward job-level working directory so check implementations can
+      // resolve relative file paths against the configured workspace.
+      ...(jobCwd !== undefined ? { jobCwd } : {}),
     });
   } else if (stepDef.type === "router") {
     await executeRouterStep({
@@ -295,7 +298,14 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       runId,
       jobId,
       clock,
+      // Forward job-level working directory for consistency across step types.
+      // Router steps are primarily control-flow and less filesystem-dependent,
+      // but accepting the parameter keeps the executor interface uniform.
+      ...(jobCwd !== undefined ? { jobCwd } : {}),
     });
+    // NOTE: Agent steps are intentionally excluded from jobCwd forwarding.
+    // They run in their own subprocess with a backend-managed working directory,
+    // and their projectRoot is set to the zigmaflowDir (project root).
   } else {
     throw new WorkflowError(
       `Step "${stepId}" in job "${jobId}" is type "${stepDef.type}", not a script, check, or router step (P8 scope)`,

@@ -9,7 +9,7 @@
  */
 
 import { stat } from "node:fs/promises";
-import { isAbsolute, resolve, parse as parsePath } from "node:path";
+import { resolve, parse as parsePath } from "node:path";
 
 import type { JobDefinition } from "../workflow/index.js";
 import type { RunState } from "../run/index.js";
@@ -28,7 +28,7 @@ export function extractWorkspacePath(
   const ws = jobDef.workspace;
   if (ws === undefined) return undefined;
   if (typeof ws === "string") return ws;
-  if (typeof ws === "object" && ws !== null && typeof ws.directory === "string") {
+  if (typeof ws === "object" && ws !== null && typeof ws.directory === "string" && ws.directory.length > 0) {
     return ws.directory;
   }
   return undefined;
@@ -86,8 +86,11 @@ export async function resolveJobWorkingDirectory(
     );
   }
 
-  // Resolve relative paths from the current working directory
-  const absolutePath = isAbsolute(resolved) ? resolved : resolve(resolved);
+  // Resolve to an absolute path, normalizing away ".." segments.
+  // Using resolve() unconditionally ensures the result is always a canonical
+  // absolute path without directory traversal artifacts, even when the
+  // incoming string is already absolute.
+  const absolutePath = resolve(resolved);
 
   // Path traversal safety: resolved path must not be a filesystem root
   {
@@ -95,6 +98,26 @@ export async function resolveJobWorkingDirectory(
     if (absolutePath.length === 0 || (parsed.root === absolutePath && parsed.base === "")) {
       throw new ValidationError(
         `Workspace path resolved to filesystem root: "${raw}" → "${absolutePath}"`,
+        {
+          details: { raw_path: raw, resolved_path: absolutePath },
+        },
+      );
+    }
+  }
+
+  // Defense-in-depth: reject any path that still contains ".." segments
+  // after normalization. Node's resolve() should have already collapsed
+  // these, but this guard protects against edge cases and future changes.
+  //
+  // Residual risk: this feature is intended for trusted users with
+  // workflow-authoring access. Symlinks that point outside the intended
+  // workspace tree are not detected here — the primary defense is that
+  // the resolved path must exist as a real directory.
+  {
+    const segments = absolutePath.split(/[/\\]/);
+    if (segments.includes("..")) {
+      throw new ValidationError(
+        `Workspace path contains ".." traversal after normalization: "${raw}" → "${absolutePath}"`,
         {
           details: { raw_path: raw, resolved_path: absolutePath },
         },

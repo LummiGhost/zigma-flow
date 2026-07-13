@@ -47,6 +47,11 @@ export {
   type StepStartedPayload,
   type HumanGateWaitingPayload,
   type HumanDecisionPayload,
+  type TraverseStartedPayload,
+  type TraverseItemStartedPayload,
+  type TraverseItemCompletedPayload,
+  type TraverseItemFailedPayload,
+  type TraverseCompletedPayload,
   type ZigmaFlowEvent,
   type ZigmaFlowEventType,
 } from "./eventTypes.js";

@@ -51,6 +51,8 @@ export { applyContextPatch } from "./applyContextPatch.js";
 export type { ApplyContextPatchOpts, ContextPatch, ContextPatchKind } from "./applyContextPatch.js";
 export { enterHumanGate, recordHumanDecision } from "./humanGate.js";
 export type { EnterHumanGateOpts, RecordHumanDecisionOpts } from "./humanGate.js";
+export { checkAndExecuteTraverses, resolveTraverseInput, getTraverseInputJob, parseVirtualJobId } from "./traverse.js";
+export type { ExecuteTraverseOpts, ExecuteTraverseResult } from "./traverse.js";
 
 export interface CreateRunInputs {
   workflowPath: string;

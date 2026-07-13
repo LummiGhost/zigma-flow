@@ -45,7 +45,12 @@ export type ZigmaFlowEventType =
   | "step_revisited"
   | "step_visit_exceeded"
   | "human_gate_waiting"
-  | "human_decision";
+  | "human_decision"
+  | "traverse_started"
+  | "traverse_item_started"
+  | "traverse_item_completed"
+  | "traverse_item_failed"
+  | "traverse_completed";
 
 /**
  * Runtime tuple of all 36 event type tags.
@@ -88,6 +93,11 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "step_visit_exceeded",
   "human_gate_waiting",
   "human_decision",
+  "traverse_started",
+  "traverse_item_started",
+  "traverse_item_completed",
+  "traverse_item_failed",
+  "traverse_completed",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -336,6 +346,41 @@ export interface HumanDecisionPayload {
 }
 
 // ---------------------------------------------------------------------------
+// WF-P16-TRAVERSE payload interfaces (Issue #179)
+// ---------------------------------------------------------------------------
+
+export interface TraverseStartedPayload {
+  traverse_id: string;
+  item_count: number;
+  concurrency: number;
+  target_job: string;
+}
+
+export interface TraverseItemStartedPayload {
+  traverse_id: string;
+  item_index: number;
+  item_key: string;
+}
+
+export interface TraverseItemCompletedPayload {
+  traverse_id: string;
+  item_index: number;
+  outputs?: Record<string, unknown>;
+}
+
+export interface TraverseItemFailedPayload {
+  traverse_id: string;
+  item_index: number;
+  error: string;
+}
+
+export interface TraverseCompletedPayload {
+  traverse_id: string;
+  results_count: number;
+  errors_count: number;
+}
+
+// ---------------------------------------------------------------------------
 // EventEnvelope — the common envelope wrapping every event
 // ---------------------------------------------------------------------------
 
@@ -392,7 +437,12 @@ export type ZigmaFlowEvent =
   | (EventEnvelope & { type: "step_revisited"; payload: StepRevisitedPayload })
   | (EventEnvelope & { type: "step_visit_exceeded"; payload: StepVisitExceededPayload })
   | (EventEnvelope & { type: "human_gate_waiting"; payload: HumanGateWaitingPayload })
-  | (EventEnvelope & { type: "human_decision"; payload: HumanDecisionPayload });
+  | (EventEnvelope & { type: "human_decision"; payload: HumanDecisionPayload })
+  | (EventEnvelope & { type: "traverse_started"; payload: TraverseStartedPayload })
+  | (EventEnvelope & { type: "traverse_item_started"; payload: TraverseItemStartedPayload })
+  | (EventEnvelope & { type: "traverse_item_completed"; payload: TraverseItemCompletedPayload })
+  | (EventEnvelope & { type: "traverse_item_failed"; payload: TraverseItemFailedPayload })
+  | (EventEnvelope & { type: "traverse_completed"; payload: TraverseCompletedPayload });
 
 // ---------------------------------------------------------------------------
 // nextEventId — sequential event id formatter

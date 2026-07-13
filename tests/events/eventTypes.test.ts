@@ -103,7 +103,7 @@ function runEnvelope(id: string, type: ZigmaFlowEventType): EventEnvelope {
 // ---------------------------------------------------------------------------
 
 describe("ZigmaFlowEventType", () => {
-  it("enumerates all 34 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
+  it("enumerates all 41 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
     const expected: ZigmaFlowEventType[] = [
       "run_created",
       "job_ready",
@@ -141,12 +141,17 @@ describe("ZigmaFlowEventType", () => {
       "step_visit_exceeded",
       "human_gate_waiting",
       "human_decision",
+      "traverse_started",
+      "traverse_item_started",
+      "traverse_item_completed",
+      "traverse_item_failed",
+      "traverse_completed",
     ];
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(36);
-    expect(expected.length).toBe(36);
+    expect(EVENT_TYPES.length).toBe(41);
+    expect(expected.length).toBe(41);
   });
 });
 
@@ -305,6 +310,16 @@ describe("ZigmaFlowEvent", () => {
           return "human_gate_waiting";
         case "human_decision":
           return "human_decision";
+        case "traverse_started":
+          return "traverse_started";
+        case "traverse_item_started":
+          return "traverse_item_started";
+        case "traverse_item_completed":
+          return "traverse_item_completed";
+        case "traverse_item_failed":
+          return "traverse_item_failed";
+        case "traverse_completed":
+          return "traverse_completed";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;

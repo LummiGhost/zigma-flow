@@ -36,6 +36,8 @@ const PROTECTED_PATTERNS = [
 export async function checkProtectedRuntimeFiles(opts: {
   with: Record<string, unknown>;
   runDir: string;
+  /** Job-level workspace directory; used as default cwd (lower priority than with.cwd). */
+  cwd?: string;
   git?: GitInspector;
 }): Promise<CheckResult> {
   const w = opts.with;
@@ -56,8 +58,9 @@ export async function checkProtectedRuntimeFiles(opts: {
     );
   }
 
+  // Resolve cwd: with.cwd > job-level cwd > runDir
   const cwd =
-    typeof w["cwd"] === "string" ? w["cwd"] : opts.runDir;
+    typeof w["cwd"] === "string" ? w["cwd"] : (opts.cwd ?? opts.runDir);
 
   const git = opts.git ?? new SimpleGitInspector();
   const changed = await git.changedFiles(cwd);

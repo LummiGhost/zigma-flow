@@ -13,6 +13,8 @@ import { CheckError } from "../../utils/errors.js";
 export async function checkFileExists(opts: {
   with: Record<string, unknown>;
   runDir: string;
+  /** Job-level workspace directory; used as base for resolving relative file paths. */
+  cwd?: string;
 }): Promise<CheckResult> {
   const w = opts.with;
 
@@ -37,12 +39,13 @@ export async function checkFileExists(opts: {
     );
   }
 
+  const baseDir = opts.cwd ?? opts.runDir;
   const failures: string[] = [];
 
   for (const file of files) {
     const resolved = path.isAbsolute(file)
       ? file
-      : path.join(opts.runDir, file);
+      : path.join(baseDir, file);
     try {
       await fs.stat(resolved);
     } catch {

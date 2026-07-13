@@ -13,6 +13,8 @@ import { CheckError } from "../../utils/errors.js";
 export async function checkRequiredFields(opts: {
   with: Record<string, unknown>;
   runDir: string;
+  /** Job-level workspace directory; used as base for resolving relative file paths. */
+  cwd?: string;
 }): Promise<CheckResult> {
   const w = opts.with;
 
@@ -27,11 +29,12 @@ export async function checkRequiredFields(opts: {
     });
   }
 
+  const baseDir = opts.cwd ?? opts.runDir;
   const file = w["file"];
   const fields = w["fields"] as string[];
   const resolved = path.isAbsolute(file)
     ? file
-    : path.join(opts.runDir, file);
+    : path.join(baseDir, file);
 
   let data: unknown;
   try {

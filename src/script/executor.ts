@@ -52,6 +52,12 @@ export interface ExecuteScriptStepOpts {
   clock: Clock;
   /** Injectable ProcessRunner; defaults to ExecaProcessRunner in production. */
   runner: ProcessRunner;
+  /**
+   * Job-level working directory resolved from `jobs.<id>.workspace`.
+   * Used as the default cwd when the step does not specify its own `cwd`.
+   * Step-level `cwd` takes precedence. (Issue #178)
+   */
+  jobCwd?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -310,9 +316,10 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
 
   command = resolveExpression(command, exprCtx);
 
+  // Resolve step cwd: step-level cwd takes precedence, job-level cwd is the default.
   const resolvedCwd = typeof stepDef.cwd === "string"
     ? resolveExpression(stepDef.cwd, exprCtx)
-    : stepDef.cwd;
+    : (stepDef.cwd ?? opts.jobCwd);
 
   // ── 6. Parse timeout and invoke ProcessRunner ─────────────────────────────
 

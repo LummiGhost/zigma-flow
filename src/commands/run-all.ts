@@ -33,6 +33,8 @@ export interface RunAllOptions {
   failFast?: boolean;
   /** Additional named inputs from CLI --input flags. */
   inputs?: Record<string, string>;
+  /** Project root directory (defaults to process.cwd()). */
+  projectRoot?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -43,7 +45,7 @@ export async function runAllAction(
   workflowPath: string,
   options: RunAllOptions,
 ): Promise<void> {
-  const projectRoot = process.cwd();
+  const projectRoot = options.projectRoot ?? process.cwd();
   const absWorkflowPath = await resolveWorkflowPath(workflowPath, projectRoot);
   const zigmaflowDir = projectRoot;
   const runsDir = join(projectRoot, ".zigma-flow", "runs");

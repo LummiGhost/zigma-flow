@@ -17,6 +17,8 @@ import { readActiveRun, LocalStateStore } from "../run/index.js";
 export interface RunOptions {
   task: string;
   inputs?: Record<string, string>;
+  /** Project root directory (defaults to process.cwd()). */
+  projectRoot?: string;
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -60,7 +62,7 @@ export async function resolveWorkflowPath(
 }
 
 export async function runAction(workflowPath: string, options: RunOptions): Promise<void> {
-  const projectRoot = process.cwd();
+  const projectRoot = options.projectRoot ?? process.cwd();
   const absWorkflowPath = await resolveWorkflowPath(workflowPath, projectRoot);
   const runsDir = join(projectRoot, ".zigma-flow", "runs");
   const skillLockPath = join(projectRoot, ".zigma-flow", "skill-lock.json");

@@ -8,13 +8,13 @@
  * Module boundary: must NOT directly push run state.
  */
 
-import { realpathSync } from "node:fs";
-import { join } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Command } from "commander";
 
-import { ZigmaFlowError, formatError, getPackageInfo } from "./utils/index.js";
+import { ZigmaFlowError, UserInputError, formatError, getPackageInfo } from "./utils/index.js";
 import { initAction } from "./commands/init.js";
 import { validateAction } from "./commands/validate.js";
 import { runAction } from "./commands/run.js";
@@ -54,15 +54,137 @@ function parseInputs(inputs?: string[]): Record<string, string> | undefined {
   return result;
 }
 
+/**
+ * Resolve and validate the --cwd CLI option.
+ *
+ * Relative paths are resolved against `process.cwd()`. Throws `UserInputError`
+ * (exit code 2) when the path does not exist, is a file, or is inaccessible.
+ *
+ * Returns `undefined` when no --cwd was supplied (caller falls back to
+ * `process.cwd()`).
+ */
+function resolveCwdOption(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  // Guard against --cwd= (empty value), which would silently resolve to
+  // process.cwd() because path.resolve("") === process.cwd().
+  if (raw.trim() === "") {
+    throw new UserInputError(
+      "--cwd received an empty value",
+      {
+        suggestion:
+          "Provide a valid directory path with --cwd <path>, or omit --cwd to use the current working directory.",
+      }
+    );
+  }
+  const absPath = resolve(raw);
+  let stats;
+  try {
+    stats = statSync(absPath);
+  } catch {
+    throw new UserInputError(
+      `--cwd path does not exist or is inaccessible: ${absPath}`,
+      {
+        suggestion:
+          "Verify the path exists, or omit --cwd to use the current working directory.",
+      }
+    );
+  }
+  if (!stats.isDirectory()) {
+    throw new UserInputError(
+      `--cwd must be a directory, but got a file: ${absPath}`,
+      {
+        suggestion:
+          "Provide a path to an existing directory, or omit --cwd to use the current working directory.",
+      }
+    );
+  }
+  return absPath;
+}
+
 export async function main(argv: string[] = process.argv): Promise<void> {
   const packageInfo = getPackageInfo();
 
+  try {
+    // ── Extract --cwd from argv (program-level global option) ──────────────
+    let rawCwd: string | undefined;
+    const filteredArgv: string[] = [];
+    for (let i = 0; i < argv.length; i++) {
+      const arg = argv[i]!;
+      if (arg === "--cwd") {
+        const next = argv[i + 1];
+        if (next !== undefined && !next.startsWith("-")) {
+          rawCwd = next;
+          i++;
+        } else {
+          throw new UserInputError(
+            "--cwd requires a <path> argument",
+            { suggestion: "Usage: zigma-flow --cwd <path> <command>" }
+          );
+        }
+      } else if (arg.startsWith("--cwd=")) {
+        rawCwd = arg.slice("--cwd=".length);
+      } else {
+        filteredArgv.push(arg);
+      }
+    }
+
+    // ── Resolve & validate --cwd, then delegate ─────────────────────────────
+    const resolvedCwd = resolveCwdOption(rawCwd);
+    // `resolvedCwd` is stable (either a string or undefined), so these could be
+    // simple constants. They are kept as zero-argument arrow functions for
+    // consistency with the existing call-site convention (cwd() / rDir() /
+    // zfDir()). Converting to constants would require updating every call site.
+    const cwd = (): string => resolvedCwd ?? process.cwd();
+    const zfDir = (): string => join(cwd(), ".zigma-flow");
+    const rDir = (): string => join(zfDir(), "runs");
+
+    await runProgram(filteredArgv, packageInfo, cwd, zfDir, rDir);
+  } catch (error: unknown) {
+    if (error instanceof ZigmaFlowError) {
+      console.error(formatError(error));
+      process.exitCode = error.exitCode;
+      return;
+    }
+
+    // Commander throws a CommanderError when exitOverride() is set.
+    // Help and version display exit with code 0; errors exit with non-zero.
+    if (isCommanderError(error)) {
+      const informationalCodes = new Set([
+        "commander.helpDisplayed",
+        "commander.help",
+        "commander.version"
+      ]);
+      if (informationalCodes.has(error.code)) {
+        // Help/version: treat as success (exit code stays 0).
+        return;
+      }
+      // Unknown command, unknown option, etc.: non-zero exit.
+      process.exitCode = error.exitCode !== 0 ? error.exitCode : 1;
+      return;
+    }
+
+    throw error;
+  }
+}
+
+async function runProgram(
+  filteredArgv: string[],
+  packageInfo: { version: string },
+  cwd: () => string,
+  zfDir: () => string,
+  rDir: () => string,
+): Promise<void> {
   const program = new Command();
 
   program
     .name("zigma-flow")
     .description("Local Agent Workflow Runtime / Workflow Harness.")
     .version(packageInfo.version, "-V, --version")
+    // NOTE: This option is declared for help-text display only. The actual
+    // --cwd parsing and validation happens via manual argv extraction in main()
+    // above (before Commander's parser runs). The commander parser never sees
+    // the raw --cwd argument because it is filtered out of filteredArgv.
+    .option("--cwd <path>", "Working directory for zigma-flow (defaults to current working directory).")
     // Route all commander output through console so test spies can capture it.
     .configureOutput({
       writeOut: (str) => {
@@ -80,7 +202,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description("Initialize a .zigma-flow/ directory in the current working directory.")
     .exitOverride()
     .action(async () => {
-      await initAction();
+      await initAction({ cwd: cwd() });
     });
 
   program
@@ -99,7 +221,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (workflowPath: string, options: { task: string; input?: string[] }) => {
       const inputs = parseInputs(options.input);
-      await runAction(workflowPath, { task: options.task, ...(inputs !== undefined ? { inputs } : {}) });
+      await runAction(workflowPath, { task: options.task, projectRoot: cwd(), ...(inputs !== undefined ? { inputs } : {}) });
     });
 
   program
@@ -123,6 +245,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       }
       const inputs = parseInputs(options.input);
       await runAllAction(workflowPath, {
+        projectRoot: cwd(),
         ...(options.task !== undefined ? { task: options.task } : {}),
         ...(options.resume !== undefined ? { resume: options.resume } : {}),
         ...(options.backend !== undefined ? { backend: options.backend } : {}),
@@ -139,7 +262,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("-v, --verbose", "Show step-level details for each job.")
     .exitOverride()
     .action(async (options: { run?: string; verbose?: boolean }) => {
-      await statusAction(options, join(process.cwd(), ".zigma-flow", "runs"));
+      await statusAction(options, rDir());
     });
 
   program
@@ -150,7 +273,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (options: { job?: string; run?: string }) => {
       await promptAction({
-        zigmaflowDir: process.cwd(),
+        zigmaflowDir: cwd(),
         ...(options.job !== undefined ? { job: options.job } : {}),
         ...(options.run !== undefined ? { runId: options.run } : {}),
         clock: new SystemClock(),
@@ -165,7 +288,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (options: { job?: string; run?: string }) => {
       await stepAction({
-        zigmaflowDir: process.cwd(),
+        zigmaflowDir: cwd(),
         ...(options.job !== undefined ? { job: options.job } : {}),
         ...(options.run !== undefined ? { runId: options.run } : {}),
         clock: new SystemClock(),
@@ -180,7 +303,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (options: { job: string; run?: string }) => {
       await nextAction({
-        zigmaflowDir: process.cwd(),
+        zigmaflowDir: cwd(),
         jobId: options.job,
         ...(options.run !== undefined ? { runId: options.run } : {}),
         clock: new SystemClock(),
@@ -216,7 +339,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         }
       }
       await retryAction({
-        zigmaflowDir: process.cwd(),
+        zigmaflowDir: cwd(),
         jobId: options.job,
         ...(options.reason !== undefined ? { reason: options.reason } : {}),
         ...(retryInputs !== undefined ? { retryInputs } : {}),
@@ -234,7 +357,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (options: { reason?: string; run?: string }) => {
       await abortAction({
-        zigmaflowDir: process.cwd(),
+        zigmaflowDir: cwd(),
         clock: new SystemClock(),
         ...(options.reason !== undefined ? { reason: options.reason } : {}),
         ...(options.run !== undefined ? { runId: options.run } : {}),
@@ -246,7 +369,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description("List all runs in the .zigma-flow/runs/ directory.")
     .exitOverride()
     .action(async () => {
-      await listRunsAction({ zigmaflowDir: process.cwd() });
+      await listRunsAction({ zigmaflowDir: cwd() });
     });
 
   program
@@ -255,7 +378,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (runId?: string) => {
       await showAction({
-        zigmaflowDir: process.cwd(),
+        zigmaflowDir: cwd(),
         ...(runId !== undefined ? { runId } : {}),
       });
     });
@@ -267,7 +390,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (options: { job?: string }) => {
       await stepAction({
-        zigmaflowDir: process.cwd(),
+        zigmaflowDir: cwd(),
         ...(options.job !== undefined ? { job: options.job } : {}),
         clock: new SystemClock(),
       });
@@ -296,7 +419,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         }
       }
       await approveAction({
-        zigmaflowDir: process.cwd(),
+        zigmaflowDir: cwd(),
         jobId: options.job,
         ...(options.step !== undefined ? { stepId: options.step } : {}),
         ...(options.comment !== undefined ? { comment: options.comment } : {}),
@@ -314,7 +437,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (options: { job: string; comment: string; step?: string }) => {
       await rejectAction({
-        zigmaflowDir: process.cwd(),
+        zigmaflowDir: cwd(),
         jobId: options.job,
         comment: options.comment,
         ...(options.step !== undefined ? { stepId: options.step } : {}),
@@ -329,7 +452,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (runId: string | undefined, options: { limit?: number }) => {
       await eventsAction({
-        runsDir: join(process.cwd(), ".zigma-flow", "runs"),
+        runsDir: rDir(),
         ...(runId !== undefined ? { runId } : {}),
         ...(options.limit !== undefined ? { limit: options.limit } : {}),
       });
@@ -342,7 +465,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (runId: string | undefined, options: { job?: string }) => {
       await artifactsAction({
-        runsDir: join(process.cwd(), ".zigma-flow", "runs"),
+        runsDir: rDir(),
         ...(runId !== undefined ? { runId } : {}),
         ...(options.job !== undefined ? { job: options.job } : {}),
       });
@@ -354,7 +477,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async (runId?: string) => {
       const exitCode = await verifyRunAction({
-        runsDir: join(process.cwd(), ".zigma-flow", "runs"),
+        runsDir: rDir(),
         ...(runId !== undefined ? { runId } : {}),
       });
       process.exitCode = exitCode;
@@ -366,7 +489,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .exitOverride()
     .action(async () => {
       const exitCode = await doctorAction({
-        zigmaflowDir: join(process.cwd(), ".zigma-flow"),
+        zigmaflowDir: zfDir(),
       });
       process.exitCode = exitCode;
     });
@@ -380,11 +503,11 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description("Register a local skill pack in .zigma-flow/skill-lock.json.")
     .exitOverride()
     .action(async (packPath: string) => {
-      await skillAddAction(packPath);
+      await skillAddAction(packPath, { zigmaflowDir: cwd() });
     });
 
   try {
-    await program.parseAsync(argv as string[]);
+    await program.parseAsync(filteredArgv);
   } catch (error: unknown) {
     if (error instanceof ZigmaFlowError) {
       console.error(formatError(error));

@@ -50,6 +50,7 @@ import { artifactId } from "../artifact/artifactMetadata.js";
 import type { ArtifactMetadata } from "../artifact/artifactMetadata.js";
 import { selectExecutable } from "./scheduler.js";
 import type { ExecutableBatch } from "./scheduler.js";
+import { checkAndExecuteTraverses, parseVirtualJobId } from "./traverse.js";
 
 /** Fallback timeout when backend does not expose a timeout value. */
 const DEFAULT_BACKEND_TIMEOUT = 600_000;
@@ -216,6 +217,8 @@ function getJobMode(
   jobId: string,
   workflow: import("../workflow/index.js").WorkflowDefinition,
 ): "read-only" | "writable" {
+  // Virtual traverse jobs are always read-only (Issue #179)
+  if (parseVirtualJobId(jobId) !== null) return "read-only";
   const jobDef = workflow.jobs[jobId];
   if (!jobDef) return "writable";
   const workspace = jobDef.workspace;
@@ -272,9 +275,77 @@ async function executeJobOnce(
     onEvent,
   } = ctx;
 
-  const jobDef = wf.jobs[jobId];
+  // Handle virtual traverse jobs: redirect to the target job definition (Issue #179)
+  let jobDef = wf.jobs[jobId];
+  let effectiveJobId = jobId;
+
+  if (jobDef === undefined) {
+    const parsedVirt = parseVirtualJobId(jobId);
+    if (parsedVirt) {
+      const traverseDef = wf.traverse?.[parsedVirt.traverseId];
+      const targetJobName = traverseDef?.target.job;
+      if (targetJobName) {
+        jobDef = wf.jobs[targetJobName];
+        effectiveJobId = targetJobName;
+      }
+    }
+  }
+
   if (jobDef === undefined) {
     return { jobId, success: false, action: "blocked", detail: "Job not found in workflow definition" };
+  }
+
+  // ── Virtual job fast path: complete immediately with item value ────
+  // For traverse virtual jobs, the target job's actual steps are NOT
+  // executed. Instead, the virtual job completes with the item value
+  // stored as a variable. The traverse tracker (checkAndExecuteTraverses)
+  // picks up the completion and aggregates results. (Issue #179)
+  const virtualJobInfo = parseVirtualJobId(jobId);
+  if (virtualJobInfo) {
+    const traverseState = state.traverses?.[virtualJobInfo.traverseId];
+    const itemValue = traverseState?.items[virtualJobInfo.itemIndex];
+    const itemKey = traverseState?.item_key ?? "item";
+    const indexKey = traverseState?.index_key;
+
+    const outputs: Record<string, unknown> = {
+      [itemKey]: itemValue,
+    };
+    if (indexKey) {
+      outputs[indexKey] = virtualJobInfo.itemIndex;
+    }
+
+    // Emit job_completed event for the virtual job
+    const jobCompletedId = await nextSequentialEventId(runDir, eventWriter);
+    const jobCompletedEvt: ZigmaFlowEvent = {
+      id: jobCompletedId,
+      run_id: runId,
+      type: "job_completed",
+      timestamp: clock.now(),
+      producer: "engine",
+      job: jobId,
+      step: null,
+      attempt: 1,
+      batch_id: batchId,
+      payload: { job_id: jobId, attempt: 1 },
+    };
+    await eventWriter.appendEvent(runDir, jobCompletedEvt);
+    onEvent?.(jobCompletedEvt);
+
+    // Update virtual job state to completed with outputs
+    await stateStore.updateState(runDir, (cur) => ({
+      ...cur,
+      last_event_id: jobCompletedId,
+      jobs: {
+        ...cur.jobs,
+        [jobId]: {
+          ...cur.jobs[jobId]!,
+          status: "completed" as const,
+          outputs,
+        },
+      },
+    }));
+
+    return { jobId, success: true, action: "completed", detail: "Virtual job completed with item value" };
   }
 
   const jobState = state.jobs[jobId];
@@ -1090,6 +1161,22 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       }
     }
 
+    // ── Traverse: pick up ready virtual jobs (WF-P16-TRAVERSE) ───────────
+    // Virtual jobs from traverse nodes are not in wf.jobs so the scheduler
+    // skips them. Pick them up here with read-only mode (they don't modify
+    // workspace state independently).
+    if (wf.traverse) {
+      const readyVirtualJobs = Object.entries(state.jobs)
+        .filter(([id, js]) => js.status === "ready" && parseVirtualJobId(id) !== null)
+        .map(([id]) => id);
+
+      for (const vjid of readyVirtualJobs) {
+        if (jobsToRun.length < parallelism) {
+          jobsToRun.push({ jobId: vjid, mode: "read-only" });
+        }
+      }
+    }
+
     if (jobsToRun.length === 0) {
       // No ready or running jobs — check if there are pending (waiting/inactive) jobs
       const hasPending = Object.values(state.jobs).some(
@@ -1199,6 +1286,29 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         console.log(`  zigma-flow run-all <workflow> --resume ${runId}`);
         console.log();
         break;
+      }
+    }
+
+    // ── Post-batch: process traverse nodes (WF-P16-TRAVERSE, Issue #179) ──
+
+    if (wf.traverse) {
+      const postBatchState2 = await stateStore.readSnapshot(runDir);
+      if (postBatchState2 !== null) {
+        const traverseResult = await checkAndExecuteTraverses({
+          runDir,
+          runId,
+          wf,
+          state: postBatchState2,
+          clock,
+          stateStore,
+          eventWriter,
+          onEvent,
+        });
+        // If traverse started items or completed, a new iteration will pick them up
+        if (traverseResult.worked) {
+          // The state has been updated by checkAndExecuteTraverses.
+          // Continue to next iteration to pick up ready virtual jobs.
+        }
       }
     }
 

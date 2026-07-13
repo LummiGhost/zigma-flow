@@ -322,6 +322,8 @@ export interface StepDefinition {
 const JobWorkspaceSchema = z.union([
   z.string(),
   z.object({
+    /** @stability stable */
+    mode: z.enum(["read-only", "writable"]).optional(),
     /** @stability experimental */
     directory: z.string().optional(),
   }).catchall(z.unknown()),
@@ -347,12 +349,57 @@ const JobSchema = z.object({
 export interface JobDefinition {
   steps: StepDefinition[];
   /** Working directory path (string, may contain expressions) or config object with optional directory + mode. */
-  workspace?: string | { directory?: string; [key: string]: unknown };
+  workspace?: string | { mode?: string; directory?: string; [key: string]: unknown };
   needs?: string[];
   optional_needs?: string[];
   activation?: string;
   retry?: Record<string, unknown>;
   permissions?: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// TraverseDefinition schema (WF-P16-TRAVERSE, Issue #179)
+// ---------------------------------------------------------------------------
+
+const TraverseTargetSchema = z.object({
+  /** @stability experimental — may change in any minor version release without deprecation */
+  job: z.string(),
+});
+
+const TraverseItemContextSchema = z.object({
+  /** @stability experimental — may change in any minor version release without deprecation */
+  key: z.string(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  index_key: z.string().optional(),
+});
+
+const TraverseSchema = z.object({
+  /** @stability experimental — may change in any minor version release without deprecation */
+  input: z.string(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  concurrency: z.number().int().min(1).max(10).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  on_item_failure: z.enum(["fail_all", "continue", "collect"]).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  target: TraverseTargetSchema,
+  /** @stability experimental — may change in any minor version release without deprecation */
+  item_context: TraverseItemContextSchema,
+  /** @stability experimental — may change in any minor version release without deprecation */
+  outputs: z.record(z.string(), z.string()).optional(),
+});
+
+export interface TraverseDefinition {
+  input: string;
+  concurrency?: number;
+  on_item_failure?: "fail_all" | "continue" | "collect";
+  target: {
+    job: string;
+  };
+  item_context: {
+    key: string;
+    index_key?: string;
+  };
+  outputs?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +439,8 @@ const WorkflowSchema = z.object({
   })).optional(),
   /** @stability stable */
   jobs: z.record(z.string(), JobSchema),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  traverse: z.record(z.string(), TraverseSchema).optional(),
 });
 
 export interface WorkflowDefinition {
@@ -412,6 +461,7 @@ export interface WorkflowDefinition {
     allowed_writers: string[];
   }>;
   jobs: Record<string, JobDefinition>;
+  traverse?: Record<string, TraverseDefinition>;
 }
 
 // ---------------------------------------------------------------------------
@@ -759,6 +809,61 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
       `Workflow DAG contains a cycle: ${path}`,
       { details: { cycles } }
     );
+  }
+
+  // 8b. Traverse validation (WF-P16-TRAVERSE, Issue #179)
+  if (wf.traverse) {
+    for (const [traverseId, tDef] of Object.entries(wf.traverse)) {
+      // 8b.i. input must be a valid ${{ }} expression
+      const inputExpr = tDef.input.trim();
+      if (!inputExpr.startsWith("${{") || !inputExpr.endsWith("}}")) {
+        throw new ValidationError(
+          `traverse "${traverseId}" input must be a \$\{\{ \}\} expression, got: "${tDef.input}"`,
+          { details: { traverseId, input: tDef.input } }
+        );
+      }
+      // Validate expression content
+      checkForbiddenExpressions(tDef.input, `traverse.${traverseId}.input`);
+
+      // 8b.ii. target.job must reference an existing job
+      if (!wf.jobs[tDef.target.job]) {
+        throw new ValidationError(
+          `traverse "${traverseId}" target.job "${tDef.target.job}" does not reference an existing job`,
+          { details: { traverseId, targetJob: tDef.target.job } }
+        );
+      }
+
+      // 8b.iii. item_context.key must be a valid variable name
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tDef.item_context.key)) {
+        throw new ValidationError(
+          `traverse "${traverseId}" item_context.key "${tDef.item_context.key}" is not a valid variable name`,
+          { details: { traverseId, key: tDef.item_context.key } }
+        );
+      }
+
+      // 8b.iv. item_context.index_key must be a valid variable name if present
+      if (tDef.item_context.index_key && !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tDef.item_context.index_key)) {
+        throw new ValidationError(
+          `traverse "${traverseId}" item_context.index_key "${tDef.item_context.index_key}" is not a valid variable name`,
+          { details: { traverseId, indexKey: tDef.item_context.index_key } }
+        );
+      }
+
+      // 8b.v. outputs: validate any expression in output expressions
+      if (tDef.outputs) {
+        for (const [outputKey, outputExpr] of Object.entries(tDef.outputs)) {
+          checkForbiddenExpressions(outputExpr, `traverse.${traverseId}.outputs.${outputKey}`);
+        }
+      }
+
+      // 8b.vi. traverse id must not conflict with a job id
+      if (wf.jobs[traverseId]) {
+        throw new ValidationError(
+          `traverse id "${traverseId}" conflicts with an existing job id`,
+          { details: { traverseId } }
+        );
+      }
+    }
   }
 
   // 9. WF-P13-VARIABLES: Validate allowed_writers reference real steps

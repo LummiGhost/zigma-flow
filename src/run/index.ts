@@ -81,6 +81,32 @@ export interface JobState {
   step_status?: "awaiting_human"; // per-step status for human gate (WF-P15-ENGINE, AD-P15-001)
 }
 
+/** Item-level result from a traverse execution (WF-P16-TRAVERSE, Issue #179). */
+export interface TraverseItemResult {
+  index: number;
+  key: string;
+  outputs?: Record<string, unknown>;
+  error?: string;
+  status: "completed" | "failed";
+}
+
+/** Runtime state for a single traverse node (WF-P16-TRAVERSE, Issue #179). */
+export interface TraverseState {
+  status: "pending" | "running" | "completed" | "failed";
+  input_expression: string;
+  items: unknown[];
+  item_key: string;
+  index_key?: string;
+  on_item_failure: "fail_all" | "continue" | "collect";
+  concurrency: number;
+  target_job: string;
+  completed_count: number;
+  failed_count: number;
+  active_count: number;
+  item_results: TraverseItemResult[];
+  aggregated_outputs?: Record<string, unknown[]>;
+}
+
 export interface RunState {
   run_id: string;
   workflow: string;      // workflow name (NOT path)
@@ -91,6 +117,7 @@ export interface RunState {
   jobs: Record<string, JobState>;
   variables?: Record<string, unknown>; // WF-P13-VARIABLES
   context_blocks?: Record<string, { current_version: number; current_artifact: string }>; // WF-P13-VARIABLES
+  traverses?: Record<string, TraverseState>; // WF-P16-TRAVERSE
 }
 
 export interface RunYamlMeta {

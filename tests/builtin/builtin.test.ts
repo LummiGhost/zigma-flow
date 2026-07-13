@@ -137,7 +137,10 @@ describe("githubFetchIssue", () => {
 
   it("has read-only workspace mode", () => {
     const wf = githubFetchIssue(defaultInputs);
-    expect(wf.jobs["fetch"]!.workspace?.mode).toBe("read-only");
+    const workspace = wf.jobs["fetch"]!.workspace;
+    expect(typeof workspace).toBe("object");
+    expect(workspace).not.toBeNull();
+    expect((workspace as { mode?: string }).mode).toBe("read-only");
   });
 
   it("escapes special characters in input values", () => {

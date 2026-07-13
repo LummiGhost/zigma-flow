@@ -66,8 +66,9 @@ function getJobMode(
     return "writable";
   }
   const workspace = jobDef.workspace;
-  if (!workspace) {
-    // No workspace field — treat as writable (conservative default).
+  if (!workspace || typeof workspace === "string") {
+    // No workspace object (or string-form workspace = path only) —
+    // treat as writable (conservative default).
     return "writable";
   }
   return workspace.mode === "read-only" ? "read-only" : "writable";

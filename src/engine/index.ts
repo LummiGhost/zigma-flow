@@ -51,6 +51,7 @@ export { applyContextPatch } from "./applyContextPatch.js";
 export type { ApplyContextPatchOpts, ContextPatch, ContextPatchKind } from "./applyContextPatch.js";
 export { enterHumanGate, recordHumanDecision } from "./humanGate.js";
 export type { EnterHumanGateOpts, RecordHumanDecisionOpts } from "./humanGate.js";
+export { resolveJobWorkingDirectory, extractWorkspacePath } from "./workspace.js";
 
 export interface CreateRunInputs {
   workflowPath: string;
@@ -228,10 +229,12 @@ export interface ExecuteCurrentStepOpts {
   jobId: string;
   runner?: ProcessRunner | CheckRunner;
   clock: Clock;
+  /** Job-level working directory (Issue #178). Passed through to step executors. */
+  jobCwd?: string;
 }
 
 export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<void> {
-  const { runDir, zigmaflowDir, runId, jobId, clock } = opts;
+  const { runDir, zigmaflowDir, runId, jobId, clock, jobCwd } = opts;
 
   // Read current state to validate job exists
   const stateStore = new LocalStateStore();
@@ -273,6 +276,7 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       jobId,
       clock,
       runner: actualRunner,
+      ...(jobCwd !== undefined ? { jobCwd } : {}),
     });
   } else if (stepDef.type === "check") {
     const actualRunner = (opts.runner as CheckRunner | undefined) ?? new LocalCheckRunner();

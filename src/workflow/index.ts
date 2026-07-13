@@ -273,11 +273,27 @@ export interface StepDefinition {
 // Job schema
 // ---------------------------------------------------------------------------
 
+/**
+ * Job workspace: a string path (may contain `${{ }}` expressions) or an
+ * object with optional `directory` (working directory path) and optional
+ * `mode` ("read-only" | "writable") plus arbitrary extension keys.
+ *
+ * @stability experimental — `directory` and string-form workspace may change
+ *   in any minor version release without deprecation.
+ */
+const JobWorkspaceSchema = z.union([
+  z.string(),
+  z.object({
+    /** @stability experimental */
+    directory: z.string().optional(),
+  }).catchall(z.unknown()),
+]);
+
 const JobSchema = z.object({
   /** @stability stable */
   steps: z.array(StepBaseSchema),
-  /** @stability stable */
-  workspace: z.record(z.string(), z.unknown()).optional(),
+  /** @stability stable — mode field; @stability experimental — directory field and string form */
+  workspace: JobWorkspaceSchema.optional(),
   /** @stability stable */
   needs: z.array(z.string()).optional(),
   /** @stability stable */
@@ -292,7 +308,8 @@ const JobSchema = z.object({
 
 export interface JobDefinition {
   steps: StepDefinition[];
-  workspace?: Record<string, unknown>;
+  /** Working directory path (string, may contain expressions) or config object with optional directory + mode. */
+  workspace?: string | { directory?: string; [key: string]: unknown };
   needs?: string[];
   optional_needs?: string[];
   activation?: string;
@@ -466,6 +483,18 @@ function validateExpressions(workflow: WorkflowDefinition): void {
           inputDef.default,
           `on.manual.inputs.${inputName}.default`,
         );
+      }
+    }
+  }
+
+  // Job workspace paths (Issue #178)
+  for (const [jobName, job] of Object.entries(workflow.jobs)) {
+    const ws = job.workspace;
+    if (ws !== undefined) {
+      if (typeof ws === "string") {
+        checkForbiddenExpressions(ws, `jobs.${jobName}.workspace`);
+      } else if (typeof ws === "object" && typeof ws.directory === "string") {
+        checkForbiddenExpressions(ws.directory, `jobs.${jobName}.workspace.directory`);
       }
     }
   }

@@ -54,6 +54,12 @@ export interface ExecuteCheckStepOpts {
   clock: Clock;
   /** Injectable CheckRunner; defaults to LocalCheckRunner in production. */
   runner: CheckRunner;
+  /**
+   * Job-level working directory resolved from `jobs.<id>.workspace`.
+   * Forwarded to the CheckRunner so that check implementations can resolve
+   * relative file paths against the configured workspace. (Issue #178)
+   */
+  jobCwd?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,6 +235,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     stepId,
     runDir,
     ...(checkRunWith !== undefined ? { with: checkRunWith } : {}),
+    // Forward job-level working directory for filesystem-dependent checks
+    // such as file-exists, json-parse, and forbidden-paths.
+    ...(opts.jobCwd !== undefined ? { cwd: opts.jobCwd } : {}),
   });
 
   // ── 7. Write check-result.json artifact ──────────────────────────────────

@@ -41,7 +41,7 @@ import {
   StateError,
   ValidationError,
 } from "../utils/index.js";
-import { advanceJob, createRun, executeCurrentStep } from "./index.js";
+import { advanceJob, createRun, executeCurrentStep, resolveJobWorkingDirectory } from "./index.js";
 import { validateReportShape } from "./accept.js";
 import { enterHumanGate } from "./humanGate.js";
 import { recordAgentFailure } from "./recordAgentFailure.js";
@@ -219,7 +219,7 @@ function getJobMode(
   const jobDef = workflow.jobs[jobId];
   if (!jobDef) return "writable";
   const workspace = jobDef.workspace;
-  if (!workspace) return "writable";
+  if (!workspace || typeof workspace === "string") return "writable";
   return workspace.mode === "read-only" ? "read-only" : "writable";
 }
 
@@ -868,12 +868,41 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     return { jobId, success: false, action: "blocked", detail: `Job status is "${currentJobState?.status}", not "ready" or "running"` };
   }
 
+  // Resolve job workspace directory (Issue #178).
+  // NOTE: The workspace is re-resolved on every step execution rather than
+  // cached. This is intentional — it re-validates that the directory still
+  // exists, guarding against directory deletion mid-job. The overhead of
+  // a single stat() call per step is negligible compared to step execution time.
+  const jobDef = wf.jobs[jobId];
+  let jobCwd: string | undefined;
+  if (jobDef !== undefined) {
+    try {
+      jobCwd = await resolveJobWorkingDirectory(jobDef, state);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      await recordAgentFailure({
+        runDir,
+        runId,
+        jobId,
+        stepId,
+        attempt: currentJobState.attempt ?? 1,
+        reason: `Workspace resolution failed: ${errorMsg}`,
+        errorType: "config",
+        clock,
+        stateStore,
+        eventWriter,
+      });
+      return { jobId, success: false, action: "failed", detail: `Workspace resolution failed: ${errorMsg}` };
+    }
+  }
+
   await executeCurrentStep({
     runDir,
     zigmaflowDir,
     runId,
     jobId,
     clock,
+    ...(jobCwd !== undefined ? { jobCwd } : {}),
   });
 
   // Check if job needs advancing (multi-step jobs)

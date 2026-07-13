@@ -51,6 +51,7 @@ export { applyContextPatch } from "./applyContextPatch.js";
 export type { ApplyContextPatchOpts, ContextPatch, ContextPatchKind } from "./applyContextPatch.js";
 export { enterHumanGate, recordHumanDecision } from "./humanGate.js";
 export type { EnterHumanGateOpts, RecordHumanDecisionOpts } from "./humanGate.js";
+export { resolveJobWorkingDirectory, extractWorkspacePath } from "./workspace.js";
 
 export interface CreateRunInputs {
   workflowPath: string;
@@ -228,10 +229,12 @@ export interface ExecuteCurrentStepOpts {
   jobId: string;
   runner?: ProcessRunner | CheckRunner;
   clock: Clock;
+  /** Job-level working directory (Issue #178). Passed through to step executors. */
+  jobCwd?: string;
 }
 
 export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<void> {
-  const { runDir, zigmaflowDir, runId, jobId, clock } = opts;
+  const { runDir, zigmaflowDir, runId, jobId, clock, jobCwd } = opts;
 
   // Read current state to validate job exists
   const stateStore = new LocalStateStore();
@@ -273,6 +276,7 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       jobId,
       clock,
       runner: actualRunner,
+      ...(jobCwd !== undefined ? { jobCwd } : {}),
     });
   } else if (stepDef.type === "check") {
     const actualRunner = (opts.runner as CheckRunner | undefined) ?? new LocalCheckRunner();
@@ -283,6 +287,9 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       jobId,
       clock,
       runner: actualRunner,
+      // Forward job-level working directory so check implementations can
+      // resolve relative file paths against the configured workspace.
+      ...(jobCwd !== undefined ? { jobCwd } : {}),
     });
   } else if (stepDef.type === "router") {
     await executeRouterStep({
@@ -291,7 +298,14 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       runId,
       jobId,
       clock,
+      // Forward job-level working directory for consistency across step types.
+      // Router steps are primarily control-flow and less filesystem-dependent,
+      // but accepting the parameter keeps the executor interface uniform.
+      ...(jobCwd !== undefined ? { jobCwd } : {}),
     });
+    // NOTE: Agent steps are intentionally excluded from jobCwd forwarding.
+    // They run in their own subprocess with a backend-managed working directory,
+    // and their projectRoot is set to the zigmaflowDir (project root).
   } else {
     throw new WorkflowError(
       `Step "${stepId}" in job "${jobId}" is type "${stepDef.type}", not a script, check, or router step (P8 scope)`,

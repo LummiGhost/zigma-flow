@@ -37,6 +37,8 @@ export interface CheckRunnerRunOpts {
   stepId: string;
   runDir: string;
   with?: Record<string, unknown>;
+  /** Job-level working directory resolved from `jobs.<id>.workspace`. */
+  cwd?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -97,22 +99,23 @@ export class LocalCheckRunner implements CheckRunner {
   async run(opts: CheckRunnerRunOpts): Promise<CheckResult> {
     const w = opts.with ?? {};
     const runDir = opts.runDir;
+    const cwd = opts.cwd;
 
     switch (opts.checkId) {
       case "zigma/file-exists":
-        return checkFileExists({ with: w, runDir });
+        return checkFileExists({ with: w, runDir, ...(cwd !== undefined ? { cwd } : {}) });
       case "zigma/json-parse":
-        return checkJsonParse({ with: w, runDir });
+        return checkJsonParse({ with: w, runDir, ...(cwd !== undefined ? { cwd } : {}) });
       case "zigma/json-schema":
-        return checkJsonSchema({ with: w, runDir });
+        return checkJsonSchema({ with: w, runDir, ...(cwd !== undefined ? { cwd } : {}) });
       case "zigma/required-fields":
-        return checkRequiredFields({ with: w, runDir });
+        return checkRequiredFields({ with: w, runDir, ...(cwd !== undefined ? { cwd } : {}) });
       case "zigma/git-diff-exists":
-        return checkGitDiffExists({ with: w, runDir });
+        return checkGitDiffExists({ with: w, runDir, ...(cwd !== undefined ? { cwd } : {}) });
       case "zigma/forbidden-paths":
-        return checkForbiddenPaths({ with: w, runDir });
+        return checkForbiddenPaths({ with: w, runDir, ...(cwd !== undefined ? { cwd } : {}) });
       case "zigma/protected-runtime-files":
-        return checkProtectedRuntimeFiles({ with: w, runDir });
+        return checkProtectedRuntimeFiles({ with: w, runDir, ...(cwd !== undefined ? { cwd } : {}) });
       default:
         throw new CheckError(`Unknown check kind: ${opts.checkId}`, {
           details: { checkId: opts.checkId },

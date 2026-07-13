@@ -17,11 +17,13 @@ import { CheckError } from "../../utils/errors.js";
 export async function checkGitDiffExists(opts: {
   with: Record<string, unknown>;
   runDir: string;
+  /** Job-level workspace directory; used as default cwd (lower priority than with.cwd). */
+  cwd?: string;
   git?: GitInspector;
 }): Promise<CheckResult> {
   const w = opts.with;
 
-  // Resolve cwd: with.cwd overrides runDir when provided as a string.
+  // Resolve cwd: with.cwd > job-level cwd > runDir
   let cwd: string;
   if ("cwd" in w) {
     if (typeof w["cwd"] !== "string") {
@@ -31,7 +33,7 @@ export async function checkGitDiffExists(opts: {
     }
     cwd = w["cwd"];
   } else {
-    cwd = opts.runDir;
+    cwd = opts.cwd ?? opts.runDir;
   }
 
   const git = opts.git ?? new SimpleGitInspector();

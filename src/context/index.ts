@@ -703,7 +703,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
   };
 
   const repositoryWorkspace: RepositoryWorkspacePermissions = {};
-  if (typeof jobDef.workspace?.["mode"] === "string") {
+  if (typeof jobDef.workspace === "object" && jobDef.workspace !== null && typeof jobDef.workspace["mode"] === "string") {
     repositoryWorkspace.mode = jobDef.workspace["mode"];
   }
 

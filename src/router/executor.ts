@@ -51,6 +51,13 @@ export interface ExecuteRouterStepOpts {
   jobId: string;
   /** Clock for timestamping events. */
   clock: Clock;
+  /**
+   * Job-level working directory resolved from `jobs.<id>.workspace`.
+   * Router steps are primarily control-flow and less filesystem-dependent,
+   * but the parameter is accepted for interface consistency across step
+   * executor types. (Issue #178)
+   */
+  jobCwd?: string;
 }
 
 // ---------------------------------------------------------------------------

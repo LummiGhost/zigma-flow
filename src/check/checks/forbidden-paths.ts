@@ -29,6 +29,8 @@ const micromatch = _require("micromatch") as {
 export async function checkForbiddenPaths(opts: {
   with: Record<string, unknown>;
   runDir: string;
+  /** Job-level workspace directory; used as default cwd (lower priority than with.cwd). */
+  cwd?: string;
   git?: GitInspector;
 }): Promise<CheckResult> {
   const w = opts.with;
@@ -45,7 +47,7 @@ export async function checkForbiddenPaths(opts: {
   }
   const patterns = w["paths"] as string[];
 
-  // Resolve cwd.
+  // Resolve cwd: with.cwd > job-level cwd > runDir
   let cwd: string;
   if ("cwd" in w) {
     if (typeof w["cwd"] !== "string") {
@@ -55,7 +57,7 @@ export async function checkForbiddenPaths(opts: {
     }
     cwd = w["cwd"];
   } else {
-    cwd = opts.runDir;
+    cwd = opts.cwd ?? opts.runDir;
   }
 
   const git = opts.git ?? new SimpleGitInspector();

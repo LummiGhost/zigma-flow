@@ -25,6 +25,8 @@ const AjvCtor = _require("ajv") as {
 export async function checkJsonSchema(opts: {
   with: Record<string, unknown>;
   runDir: string;
+  /** Job-level workspace directory; used as base for resolving relative file paths. */
+  cwd?: string;
 }): Promise<CheckResult> {
   const w = opts.with;
 
@@ -39,15 +41,16 @@ export async function checkJsonSchema(opts: {
     });
   }
 
+  const baseDir = opts.cwd ?? opts.runDir;
   const dataFile = w["file"];
   const schemaFile = w["schema"];
 
   const dataPath = path.isAbsolute(dataFile)
     ? dataFile
-    : path.join(opts.runDir, dataFile);
+    : path.join(baseDir, dataFile);
   const schemaPath = path.isAbsolute(schemaFile)
     ? schemaFile
-    : path.join(opts.runDir, schemaFile);
+    : path.join(baseDir, schemaFile);
 
   // Read and parse both files — errors here are input errors, not semantic failures.
   let data: unknown;

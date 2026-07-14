@@ -26,7 +26,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadWorkflow } from "../workflow/index.js";
-import { loadSkillPack } from "../skill-pack/index.js";
+import { loadSkillPack, discoverSkillPacks } from "../skill-pack/index.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -154,10 +154,13 @@ export function checkNodeVersion(): CheckResult {
 /**
  * Check that config.json exists, is valid JSON, and has the required
  * fields: tool_version and agent.
+ *
+ * Also warns if the deprecated "version" field is present.
  */
 export async function checkConfigJson(
   zigmaflowDir: string,
-): Promise<CheckResult> {
+): Promise<CheckResult[]> {
+  const results: CheckResult[] = [];
   const configPath = join(zigmaflowDir, "config.json");
 
   let text: string;
@@ -165,26 +168,26 @@ export async function checkConfigJson(
     text = await readFile(configPath, "utf-8");
   } catch (e: unknown) {
     if (isEnoent(e)) {
-      return { level: "FAIL", message: "config.json: file not found" };
+      return [{ level: "FAIL", message: "config.json: file not found" }];
     }
-    return {
+    return [{
       level: "FAIL",
       message: `config.json: cannot read file (${String(e)})`,
-    };
+    }];
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch (e: unknown) {
-    return {
+    return [{
       level: "FAIL",
       message: `config.json: invalid JSON (${e instanceof Error ? e.message : String(e)})`,
-    };
+    }];
   }
 
   if (typeof parsed !== "object" || parsed === null) {
-    return { level: "FAIL", message: "config.json: must be a JSON object" };
+    return [{ level: "FAIL", message: "config.json: must be a JSON object" }];
   }
 
   const obj = parsed as Record<string, unknown>;
@@ -198,13 +201,25 @@ export async function checkConfigJson(
   }
 
   if (missing.length > 0) {
-    return {
+    results.push({
       level: "FAIL",
       message: `config.json: missing required field(s): ${missing.join(", ")}`,
-    };
+    });
+  } else {
+    results.push({ level: "PASS", message: "config.json valid" });
   }
 
-  return { level: "PASS", message: "config.json valid" };
+  // Warn about deprecated "version" field
+  if (typeof obj["version"] === "string") {
+    results.push({
+      level: "WARN",
+      message:
+        "config.json: 'version' field is deprecated. Project history is tracked by git. " +
+        "This will be removed in v1.0.",
+    });
+  }
+
+  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,8 +242,8 @@ export async function checkSkillLockJson(
   } catch (e: unknown) {
     if (isEnoent(e)) {
       results.push({
-        level: "FAIL",
-        message: "skill-lock.json: file not found",
+        level: "WARN",
+        message: "skill-lock.json: file not found (deprecated, skill discovery is preferred)",
       });
       return results;
     }
@@ -310,6 +325,16 @@ export async function checkSkillLockJson(
 
   // Structural validation passed
   results.push({ level: "PASS", message: "skill-lock.json valid" });
+
+  // Deprecation warning for skill-lock.json
+  results.push({
+    level: "WARN",
+    message:
+      "[DEPRECATED] skill-lock.json is deprecated. Skill version management will move to " +
+      "zigma-skill. Place skill packs directly in skill search paths instead. " +
+      "This will be removed in v1.0.",
+  });
+
   return results;
 }
 
@@ -493,6 +518,93 @@ export async function checkSkillPacks(
 }
 
 // ---------------------------------------------------------------------------
+// checkSkillDiscovery — scan skill search paths (v0.6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan all skill search paths and report:
+ *   - Which search paths exist and are scanned
+ *   - Which skills were discovered from each path
+ *   - Name conflicts (same skill id found in multiple paths)
+ *
+ * Uses the new discovery mechanism: direct path scanning with deterministic
+ * priority ordering. skill-lock.json is deprecated; skill resolution should
+ * use direct discovery instead.
+ */
+export async function checkSkillDiscovery(
+  zigmaflowDir: string,
+): Promise<CheckResult[]> {
+  const results: CheckResult[] = [];
+
+  const projectRoot = resolve(zigmaflowDir, "..");
+  const discovery = await discoverSkillPacks(projectRoot);
+
+  // Report search paths
+  results.push({
+    level: "PASS",
+    message: `skill discovery: scanning ${discovery.searchPaths.length} search path(s)`,
+  });
+
+  for (const sp of discovery.searchPaths) {
+    let dirExists = false;
+    try {
+      await access(sp.path);
+      dirExists = true;
+    } catch {
+      // Directory does not exist
+    }
+
+    if (dirExists) {
+      results.push({
+        level: "PASS",
+        message: `  [priority ${sp.priority}] ${sp.source} → ${sp.path}`,
+      });
+    } else {
+      results.push({
+        level: "WARN",
+        message: `  [priority ${sp.priority}] ${sp.source} → ${sp.path} (not found)`,
+      });
+    }
+  }
+
+  // Report discovered skills
+  if (discovery.skills.length === 0) {
+    results.push({
+      level: "WARN",
+      message: "skill discovery: no skill packs found in any search path",
+    });
+  } else {
+    results.push({
+      level: "PASS",
+      message: `skill discovery: ${discovery.skills.length} skill pack(s) found`,
+    });
+
+    for (const skill of discovery.skills) {
+      const conflictNote = skill.conflict
+        ? ` (CONFLICT: also found at ${skill.conflictPaths.join(", ")})`
+        : "";
+      const level = skill.conflict ? "WARN" as const : "PASS" as const;
+      results.push({
+        level,
+        message: `  ${skill.skillId} → ${skill.packRoot} [${skill.source}]${conflictNote}`,
+      });
+    }
+  }
+
+  // Report lock file status
+  if (discovery.usedLockFile) {
+    results.push({
+      level: "WARN",
+      message:
+        "[DEPRECATED] skill discovery also used skill-lock.json. " +
+        "Prefer direct skill discovery. This will be removed in v1.0.",
+    });
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // doctorAction -- orchestrator
 // ---------------------------------------------------------------------------
 
@@ -536,10 +648,11 @@ export async function doctorAction(
         "Project directory .zigma-flow/ not found. Did you run `zigma-flow init`?",
     });
   } else {
-    // Check 2: config.json validity
-    allResults.push(await checkConfigJson(zigmaflowDir));
+    // Check 2: config.json validity (returns array now for v0.6 deprecation warnings)
+    const configResults = await checkConfigJson(zigmaflowDir);
+    allResults.push(...configResults);
 
-    // Check 3: skill-lock.json validity
+    // Check 3: skill-lock.json validity (with deprecation warning)
     const lockResults = await checkSkillLockJson(zigmaflowDir);
     allResults.push(...lockResults);
 
@@ -547,7 +660,11 @@ export async function doctorAction(
     const workflowResults = await checkWorkflowYaml(zigmaflowDir);
     allResults.push(...workflowResults);
 
-    // Check 5: skill pack manifest validity
+    // Check 5: skill pack discovery (v0.6 — scan search paths, show sources and conflicts)
+    const skillDiscoveryResults = await checkSkillDiscovery(zigmaflowDir);
+    allResults.push(...skillDiscoveryResults);
+
+    // Check 5b: skill pack manifest validity (from lock file, if present)
     const skillPackResults = await checkSkillPacks(zigmaflowDir);
     allResults.push(...skillPackResults);
   }

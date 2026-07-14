@@ -15,7 +15,7 @@
  *                    path relative to .zigma-flow/.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -229,6 +229,42 @@ describe("skillAddAction — register a local skill pack (Issue #142 Problem 2)"
       const entry = lock.skills["zigma.test-skill"]!;
       // Fallback: local://skills/<basename>
       expect(entry.resolved).toBe("local://skills/test-skill");
+    },
+  );
+
+  it(
+    "emits deprecation warning when used (v0.6, Issue #207)",
+    async () => {
+      const packDir = await createSkillPack(
+        sandbox.skillsDir,
+        "test-skill",
+        MINIMAL_SKILL_YAML,
+      );
+
+      const warnCalls: string[] = [];
+      const warnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation((...args: unknown[]) => {
+          warnCalls.push(args.map(String).join(" "));
+        });
+
+      try {
+        await skillAddAction(packDir, { zigmaflowDir: sandbox.projectRoot });
+
+        // Deprecation warning should have been emitted
+        const deprecationCall = warnCalls.find((c) => c.includes("[DEPRECATED]"));
+        expect(deprecationCall).toBeDefined();
+        expect(deprecationCall!).toContain("skill add is deprecated");
+
+        // But the command still works — lock file should have been created
+        const raw = await readFile(sandbox.lockPath, "utf-8");
+        const lock = JSON.parse(raw) as {
+          skills: Record<string, { resolved: string; version: string }>;
+        };
+        expect(lock.skills).toHaveProperty("zigma.test-skill");
+      } finally {
+        warnSpy.mockRestore();
+      }
     },
   );
 });

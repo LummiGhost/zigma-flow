@@ -135,8 +135,8 @@ describe("zigma-flow CLI entry", () => {
     expect(stats.isDirectory()).toBe(true);
 
     const entries = await readdir(dotZigma);
-    // Minimum set per PRD §16 + FR-001.
-    for (const required of ["workflows", "skills", "runs", "config.json", "skill-lock.json"]) {
+    // Minimum set per PRD §16 + FR-001. skill-lock.json no longer generated (v0.6 deprecation).
+    for (const required of ["workflows", "skills", "runs", "config.json"]) {
       expect(entries).toContain(required);
     }
   });

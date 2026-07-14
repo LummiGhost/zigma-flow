@@ -11,7 +11,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { loadSkillPack, resolveSkillLock, SkillLockSchema } from "../skill-pack/index.js";
+import { discoverSkillPacks, loadSkillPack, resolveSkillLock, SkillLockSchema } from "../skill-pack/index.js";
 import { FilesystemError, WorkflowError } from "../utils/index.js";
 import { resolveExpression } from "../expression/index.js";
 import type { WorkflowDefinition } from "../workflow/index.js";
@@ -431,11 +431,29 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
       const skillValue = skillsMap[alias];
       const skillId = extractSkillId(alias, skillValue);
 
-      // Resolve pack root and load pack
-      const packRoot = await resolveSkillLock(zigmaflowDir, skillId);
+      // Resolve pack root and load pack.
+      // Try skill-lock first (deprecated), then fall back to direct discovery.
+      let packRoot: string;
+      try {
+        packRoot = await resolveSkillLock(zigmaflowDir, skillId);
+      } catch {
+        // skill-lock.json may not exist (v0.6 deprecation). Fall back to
+        // searching across all configured skill paths.
+        const result = await discoverSkillPacks(zigmaflowDir);
+        const found = result.skills.find((s) => s.skillId === skillId);
+        if (!found) {
+          throw new WorkflowError(
+            `Skill "${skillId}" not found: skill-lock.json is missing or deprecated, ` +
+              `and the skill was not discovered in any search path ` +
+              `(${result.searchPaths.map((p) => p.source).join(", ")}).`,
+            { details: { skillId, alias } },
+          );
+        }
+        packRoot = found.packRoot;
+      }
       const pack = await loadSkillPack(packRoot);
 
-      // Get version from skill-lock
+      // Get version from skill-lock (deprecated) or fall back to pack's own version
       const version = (await readSkillLockVersion(zigmaflowDir, skillId)) ?? pack.version;
 
       exposedSkills.push({ alias, skillId, version });

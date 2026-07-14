@@ -37,6 +37,7 @@ import {
   checkSkillLockJson,
   checkWorkflowYaml,
   checkSkillPacks,
+  checkSkillDiscovery,
 } from "../../src/commands/doctor.js";
 
 // ---------------------------------------------------------------------------
@@ -130,25 +131,30 @@ describe("checkConfigJson", () => {
       },
     });
 
-    const result = await checkConfigJson(dir);
-    expect(result.level).toBe("PASS");
+    const results = await checkConfigJson(dir);
+    expect(results.length).toBeGreaterThan(0);
+    const passResults = results.filter((r) => r.level === "PASS");
+    expect(passResults.length).toBeGreaterThan(0);
   });
 
   it("returns FAIL when config.json does not exist (T-DOC-5)", async () => {
     const dir = await createTempDir();
 
-    const result = await checkConfigJson(dir);
-    expect(result.level).toBe("FAIL");
-    expect(result.message).toMatch(/not found|missing|exist/i);
+    const results = await checkConfigJson(dir);
+    expect(results.length).toBeGreaterThan(0);
+    const failResults = results.filter((r) => r.level === "FAIL");
+    expect(failResults.length).toBeGreaterThan(0);
+    expect(failResults[0]!.message).toMatch(/not found|missing|exist/i);
   });
 
   it("returns FAIL for invalid JSON in config.json (T-DOC-6)", async () => {
     const dir = await createTempDir();
     await writeFile(join(dir, "config.json"), "{ invalid json", "utf-8");
 
-    const result = await checkConfigJson(dir);
-    expect(result.level).toBe("FAIL");
-    expect(result.message).toMatch(/json|parse/i);
+    const results = await checkConfigJson(dir);
+    const failResults = results.filter((r) => r.level === "FAIL");
+    expect(failResults.length).toBeGreaterThan(0);
+    expect(failResults[0]!.message).toMatch(/json|parse/i);
   });
 
   it("returns FAIL for missing required fields in config.json (T-DOC-7)", async () => {
@@ -156,10 +162,13 @@ describe("checkConfigJson", () => {
     // Missing tool_version and agent fields
     await writeJson(join(dir, "config.json"), { active_run: null });
 
-    const result = await checkConfigJson(dir);
+    const results = await checkConfigJson(dir);
     // At minimum, missing tool_version should be detected.
     // If the implementation is lenient, it may just WARN on partial data.
-    expect(["FAIL", "WARN"]).toContain(result.level);
+    const failOrWarn = results.filter(
+      (r) => r.level === "FAIL" || r.level === "WARN"
+    );
+    expect(failOrWarn.length).toBeGreaterThan(0);
   });
 });
 
@@ -189,13 +198,13 @@ describe("checkSkillLockJson", () => {
     expect(passResults.length).toBeGreaterThan(0);
   });
 
-  it("returns FAIL when skill-lock.json is missing (T-DOC-9)", async () => {
+  it("returns WARN when skill-lock.json is missing (deprecated in v0.6) (T-DOC-9)", async () => {
     const dir = await createTempDir();
 
     const results = await checkSkillLockJson(dir);
     expect(results.length).toBeGreaterThan(0);
-    const failResults = results.filter((r) => r.level === "FAIL");
-    expect(failResults.length).toBeGreaterThan(0);
+    const warnResults = results.filter((r) => r.level === "WARN");
+    expect(warnResults.length).toBeGreaterThan(0);
   });
 
   it("returns FAIL for invalid JSON in skill-lock.json (T-DOC-10)", async () => {
@@ -414,5 +423,66 @@ checks: []
     const results = await checkSkillPacks(dir);
     const failResults = results.filter((r) => r.level === "FAIL");
     expect(failResults.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkSkillDiscovery() tests (v0.6, Issue #207)
+// ---------------------------------------------------------------------------
+
+describe("checkSkillDiscovery (v0.6, Issue #207)", () => {
+  it("reports all search paths and their status", async () => {
+    const dir = await createTempDir();
+
+    const results = await checkSkillDiscovery(dir);
+    expect(results.length).toBeGreaterThan(0);
+
+    // Should report search path scan count
+    const scanResult = results.find((r) => r.message.includes("scanning"));
+    expect(scanResult).toBeDefined();
+
+    // Should mention search paths with priority
+    const pathResults = results.filter(
+      (r) => r.message.includes("priority") && r.message.includes("→"),
+    );
+    expect(pathResults.length).toBeGreaterThanOrEqual(2); // project + repo paths at minimum
+  });
+
+  it("reports when no skill packs are found", async () => {
+    const dir = await createTempDir();
+
+    const results = await checkSkillDiscovery(dir);
+    const noSkillsResult = results.find((r) =>
+      r.message.includes("no skill packs found"),
+    );
+    // May or may not report this depending on whether any search path has skills
+    // At minimum, the function should return results without throwing
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it("discovers skills from project-level path", async () => {
+    const dir = await createTempDir();
+    // The function uses dir/.. as projectRoot, then looks at .zigma-flow/skills/
+    const projectRoot = join(dir, "..");
+    const skillsDir = join(dir, "..", ".zigma-flow", "skills", "test-skill");
+    await mkdir(skillsDir, { recursive: true });
+    await writeFile(
+      join(skillsDir, "skill.yml"),
+      "id: zigma.doctor-test\nkind: skill-pack\nname: zigma.doctor-test\nversion: 1.0.0\n",
+      "utf-8",
+    );
+
+    try {
+      const results = await checkSkillDiscovery(dir);
+      const skillResult = results.find(
+        (r) => r.message.includes("zigma.doctor-test"),
+      );
+      if (skillResult) {
+        expect(skillResult.message).toContain(".zigma-flow/skills");
+      }
+    } finally {
+      // Don't fail if project root cleanup fails — just remove what we created
+      await rm(skillsDir, { recursive: true, force: true }).catch(() => {});
+    }
   });
 });

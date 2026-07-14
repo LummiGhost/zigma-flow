@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../../src/cli.js";
 import {
   loadSkillPack,
-  resolveSkillLock
+  resolveSkillLock,
+  resetSkillLockDeprecationWarning,
 } from "../../src/skill-pack/index.js";
 import {
   FilesystemError,
@@ -400,5 +401,232 @@ describe("validate CLI (skill pack)", () => {
     // With content-based dispatch (Issue #5), kind != "skill-pack" routes to workflow loader.
     // The workflow loader reports a validation error because the file lacks required workflow fields.
     expect(result.stderr.toLowerCase()).toContain("validation");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Skill discovery from multiple search paths (v0.6, Issue #207)
+// ---------------------------------------------------------------------------
+
+describe("skill discovery (v0.6, Issue #207)", () => {
+  let baseDir: string;
+  let projectSkillsDir: string;
+  let repoSettingsDir: string;
+
+  beforeEach(async () => {
+    baseDir = await mkdtemp(join(tmpdir(), "zigma-flow-discover-"));
+    projectSkillsDir = join(baseDir, ".zigma-flow", "skills");
+    repoSettingsDir = join(baseDir, ".zigma", "skills");
+  });
+
+  afterEach(async () => {
+    await rm(baseDir, { recursive: true, force: true });
+  });
+
+  async function createSkillPack(dir: string, id: string): Promise<void> {
+    const packRoot = join(dir, id.split(".").pop() ?? id);
+    await mkdir(packRoot, { recursive: true });
+    await writeFile(
+      join(packRoot, "skill.yml"),
+      `id: ${id}\nkind: skill-pack\nname: ${id}\nversion: 1.0.0\n`,
+      "utf-8",
+    );
+  }
+
+  it("discovers skills from project-level path (.zigma-flow/skills/)", async () => {
+    await createSkillPack(projectSkillsDir, "zigma.project-skill");
+
+    const { discoverSkillPacks } = await import("../../src/skill-pack/index.js");
+    const result = await discoverSkillPacks(baseDir);
+
+    const found = result.skills.filter((s) => s.skillId === "zigma.project-skill");
+    expect(found.length).toBe(1);
+    expect(found[0]!.source).toContain(".zigma-flow/skills");
+    expect(found[0]!.priority).toBe(10);
+  });
+
+  it("discovers skills from repository-level path (.zigma/skills/)", async () => {
+    await createSkillPack(repoSettingsDir, "zigma.repo-skill");
+
+    const { discoverSkillPacks } = await import("../../src/skill-pack/index.js");
+    const result = await discoverSkillPacks(baseDir);
+
+    const found = result.skills.filter((s) => s.skillId === "zigma.repo-skill");
+    expect(found.length).toBe(1);
+    expect(found[0]!.source).toContain(".zigma/skills");
+    expect(found[0]!.priority).toBe(20);
+  });
+
+  it("discovers skills from both paths simultaneously", async () => {
+    await createSkillPack(projectSkillsDir, "zigma.project-skill");
+    await createSkillPack(repoSettingsDir, "zigma.repo-skill");
+
+    const { discoverSkillPacks } = await import("../../src/skill-pack/index.js");
+    const result = await discoverSkillPacks(baseDir);
+
+    const ids = result.skills.map((s) => s.skillId).sort();
+    expect(ids).toContain("zigma.project-skill");
+    expect(ids).toContain("zigma.repo-skill");
+    expect(result.searchPaths.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("returns empty list when no skill packs exist", async () => {
+    const { discoverSkillPacks } = await import("../../src/skill-pack/index.js");
+    const result = await discoverSkillPacks(baseDir);
+
+    expect(result.skills.length).toBe(0);
+    expect(result.searchPaths.length).toBeGreaterThan(0);
+    expect(result.usedLockFile).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Name conflict resolution (v0.6, Issue #207)
+// ---------------------------------------------------------------------------
+
+describe("skill name conflict resolution (v0.6, Issue #207)", () => {
+  let baseDir: string;
+
+  beforeEach(async () => {
+    baseDir = await mkdtemp(join(tmpdir(), "zigma-flow-conflict-"));
+  });
+
+  afterEach(async () => {
+    await rm(baseDir, { recursive: true, force: true });
+  });
+
+  async function createSkillPack(dir: string, id: string, version: string): Promise<void> {
+    const packRoot = join(dir, id.split(".").pop() ?? id);
+    await mkdir(packRoot, { recursive: true });
+    await writeFile(
+      join(packRoot, "skill.yml"),
+      `id: ${id}\nkind: skill-pack\nname: ${id}\nversion: ${version}\n`,
+      "utf-8",
+    );
+  }
+
+  it("first path wins when same skill name in project and repo paths", async () => {
+    const projectSkillsDir = join(baseDir, ".zigma-flow", "skills");
+    const repoSettingsDir = join(baseDir, ".zigma", "skills");
+
+    // Same id in both paths — project path wins (higher priority)
+    await createSkillPack(projectSkillsDir, "zigma.shared", "1.0.0");
+    await createSkillPack(repoSettingsDir, "zigma.shared", "2.0.0");
+
+    const { discoverSkillPacks } = await import("../../src/skill-pack/index.js");
+    const result = await discoverSkillPacks(baseDir);
+
+    const found = result.skills.filter((s) => s.skillId === "zigma.shared");
+    expect(found.length).toBe(1);
+
+    // Project path has priority 10 (lower = higher priority), wins over repo (20)
+    expect(found[0]!.source).toContain(".zigma-flow/skills");
+
+    // Conflict should be reported
+    expect(found[0]!.conflict).toBe(true);
+    expect(found[0]!.conflictPaths.length).toBeGreaterThan(0);
+    expect(found[0]!.conflictPaths.some((p) => p.includes(".zigma"))).toBe(true);
+  });
+
+  it("reports no conflict when skills have different names", async () => {
+    const projectSkillsDir = join(baseDir, ".zigma-flow", "skills");
+    const repoSettingsDir = join(baseDir, ".zigma", "skills");
+
+    await createSkillPack(projectSkillsDir, "zigma.project-skill", "1.0.0");
+    await createSkillPack(repoSettingsDir, "zigma.repo-skill", "1.0.0");
+
+    const { discoverSkillPacks } = await import("../../src/skill-pack/index.js");
+    const result = await discoverSkillPacks(baseDir);
+
+    const projectSkill = result.skills.find((s) => s.skillId === "zigma.project-skill");
+    const repoSkill = result.skills.find((s) => s.skillId === "zigma.repo-skill");
+
+    expect(projectSkill).toBeDefined();
+    expect(repoSkill).toBeDefined();
+    expect(projectSkill!.conflict).toBe(false);
+    expect(repoSkill!.conflict).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deprecation warnings (v0.6, Issue #207)
+// ---------------------------------------------------------------------------
+
+describe("skill-lock deprecation warnings (v0.6, Issue #207)", () => {
+  let baseDir: string;
+
+  beforeEach(async () => {
+    baseDir = await mkdtemp(join(tmpdir(), "zigma-flow-deprecate-"));
+    await mkdir(join(baseDir, ".zigma-flow", "skills", "code-change"), { recursive: true });
+    // Reset the deprecation warning flag so each test gets a clean state
+    resetSkillLockDeprecationWarning();
+  });
+
+  afterEach(async () => {
+    await rm(baseDir, { recursive: true, force: true });
+  });
+
+  it("resolveSkillLock still works but emits deprecation warning", async () => {
+    const lockfile = join(baseDir, ".zigma-flow", "skill-lock.json");
+    await writeFile(
+      lockfile,
+      JSON.stringify({
+        skills: {
+          "zigma.code-change": {
+            version: "1.0.0",
+            resolved: "local://skills/code-change",
+            hash: "sha256:deadbeef",
+          },
+        },
+      }, null, 2),
+      "utf-8",
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const resolved = await resolveSkillLock(baseDir, "zigma.code-change");
+      expect(typeof resolved).toBe("string");
+
+      // Deprecation warning should have been emitted
+      const calls = warnSpy.mock.calls.map((c) => c.join(" "));
+      const deprecationLine = calls.find((c) => c.includes("[DEPRECATED]"));
+      expect(deprecationLine).toBeDefined();
+      expect(deprecationLine!).toContain("skill-lock.json");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("resolveSkillLock only emits deprecation warning once per process", async () => {
+    const lockfile = join(baseDir, ".zigma-flow", "skill-lock.json");
+    await writeFile(
+      lockfile,
+      JSON.stringify({
+        skills: {
+          "zigma.code-change": {
+            version: "1.0.0",
+            resolved: "local://skills/code-change",
+            hash: "sha256:deadbeef",
+          },
+        },
+      }, null, 2),
+      "utf-8",
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      // Call resolveSkillLock twice — deprecation warning should only appear once
+      await resolveSkillLock(baseDir, "zigma.code-change");
+      await resolveSkillLock(baseDir, "zigma.code-change");
+
+      const deprecationCalls = warnSpy.mock.calls.filter((c) =>
+        c.join(" ").includes("[DEPRECATED]"),
+      );
+      expect(deprecationCalls.length).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

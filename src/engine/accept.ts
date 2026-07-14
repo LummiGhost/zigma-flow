@@ -125,6 +125,13 @@ export function validateReportShape(parsed: unknown): AgentReport {
     errors.push('missing required field "summary" (must be a string)');
   }
 
+  // v0.6 deprecation: context_patches
+  if (!process.env.ZIGMA_SUPPRESS_DEPRECATION && obj["context_patches"] !== undefined) {
+    console.warn(
+      "[DEPRECATED] context_patches are deprecated, use outputs and artifacts instead. This will be removed in v1.0.",
+    );
+  }
+
   if (errors.length > 0) {
     throw new ValidationError(
       `report.json has ${errors.length} validation error(s):\n  - ${errors.join("\n  - ")}`,

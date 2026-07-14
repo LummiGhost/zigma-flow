@@ -45,6 +45,7 @@ import {
   UserInputError,
   ValidationError,
   WorkflowError,
+  deprecationWarn,
 } from "../utils/index.js";
 import { nextEventId } from "../events/index.js";
 
@@ -102,6 +103,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function promptAction(opts: PromptActionOpts): Promise<void> {
+  deprecationWarn("prompt", "zigma-flow invoke --pause-before <step>");
   const { zigmaflowDir, clock, runId } = opts;
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();

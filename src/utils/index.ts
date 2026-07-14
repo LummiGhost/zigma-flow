@@ -18,3 +18,4 @@ export {
   type ZigmaFlowErrorOptions
 } from "./errors.js";
 export { formatError } from "./error-format.js";
+export { deprecationWarn } from "./deprecation.js";

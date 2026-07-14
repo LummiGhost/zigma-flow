@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { AgentBackend } from "../agent/index.js";
 import { loadAgentConfig, resolveBackendForStep, createBackend } from "../agent/config.js";
 import { runAll, type RunAllOpts, type RunAllSummary } from "../engine/runAll.js";
+import { deprecationWarn } from "../utils/index.js";
 import { resolveWorkflowPath } from "./run.js";
 
 // ---------------------------------------------------------------------------
@@ -45,6 +46,7 @@ export async function runAllAction(
   workflowPath: string,
   options: RunAllOptions,
 ): Promise<void> {
+  deprecationWarn("run-all", "zigma-flow invoke");
   const projectRoot = options.projectRoot ?? process.cwd();
   const absWorkflowPath = await resolveWorkflowPath(workflowPath, projectRoot);
   const zigmaflowDir = projectRoot;

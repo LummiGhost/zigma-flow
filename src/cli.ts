@@ -358,6 +358,11 @@ async function runProgram(
     .action(async (options: { job: string; reason?: string; with?: string; force?: boolean; run?: string; latest?: boolean }) => {
       let retryInputs: Record<string, string> | undefined;
       if (options.with !== undefined) {
+        if (!process.env.ZIGMA_SUPPRESS_DEPRECATION) {
+          console.warn(
+            "[DEPRECATED] retry --with is deprecated. Review feedback should be passed as explicit upstream outputs. This will be removed in v1.0."
+          );
+        }
         try {
           const parsed = JSON.parse(options.with);
           if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {

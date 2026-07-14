@@ -320,6 +320,10 @@ describe("ZigmaFlowEvent", () => {
           return "traverse_item_failed";
         case "traverse_completed":
           return "traverse_completed";
+        case "execution_paused":
+          return "execution_paused";
+        case "execution_stopped":
+          return "execution_stopped";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;

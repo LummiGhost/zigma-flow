@@ -50,10 +50,12 @@ export type ZigmaFlowEventType =
   | "traverse_item_started"
   | "traverse_item_completed"
   | "traverse_item_failed"
-  | "traverse_completed";
+  | "traverse_completed"
+  | "execution_paused"
+  | "execution_stopped";
 
 /**
- * Runtime tuple of all 36 event type tags.
+ * Runtime tuple of all event type tags.
  * Length is statically checked by the test suite.
  */
 export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
@@ -98,6 +100,8 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "traverse_item_completed",
   "traverse_item_failed",
   "traverse_completed",
+  "execution_paused",
+  "execution_stopped",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -381,6 +385,20 @@ export interface TraverseCompletedPayload {
 }
 
 // ---------------------------------------------------------------------------
+// Debugging checkpoint payload interfaces (--pause-before, --stop-after)
+// ---------------------------------------------------------------------------
+
+export interface ExecutionPausedPayload {
+  reason: string;
+  instruction: string;
+}
+
+export interface ExecutionStoppedPayload {
+  reason: string;
+  instruction: string;
+}
+
+// ---------------------------------------------------------------------------
 // EventEnvelope — the common envelope wrapping every event
 // ---------------------------------------------------------------------------
 
@@ -442,7 +460,9 @@ export type ZigmaFlowEvent =
   | (EventEnvelope & { type: "traverse_item_started"; payload: TraverseItemStartedPayload })
   | (EventEnvelope & { type: "traverse_item_completed"; payload: TraverseItemCompletedPayload })
   | (EventEnvelope & { type: "traverse_item_failed"; payload: TraverseItemFailedPayload })
-  | (EventEnvelope & { type: "traverse_completed"; payload: TraverseCompletedPayload });
+  | (EventEnvelope & { type: "traverse_completed"; payload: TraverseCompletedPayload })
+  | (EventEnvelope & { type: "execution_paused"; payload: ExecutionPausedPayload })
+  | (EventEnvelope & { type: "execution_stopped"; payload: ExecutionStoppedPayload });
 
 // ---------------------------------------------------------------------------
 // nextEventId — sequential event id formatter

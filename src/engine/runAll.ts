@@ -263,9 +263,9 @@ interface ExecuteJobOnceCtx {
   batchId: string;
   onEvent: ((e: ZigmaFlowEvent) => void) | undefined;
   // Debugging flags (from RunAllOpts)
-  pauseBefore?: string; // "job.step" format
-  stopAfter?: string; // "job.step" format
-  saveAllPrompts?: boolean;
+  pauseBefore: string | undefined; // "job.step" format
+  stopAfter: string | undefined; // "job.step" format
+  saveAllPrompts: boolean | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +295,9 @@ async function executeJobOnce(
     signal,
     batchId,
     onEvent,
+    pauseBefore,
+    stopAfter,
+    saveAllPrompts,
   } = ctx;
 
   // Handle virtual traverse jobs: redirect to the target job definition (Issue #179)
@@ -390,6 +393,7 @@ async function executeJobOnce(
       runDir, runId, zigmaflowDir, jobId, wf, state,
       backendResolver, stateStore, eventWriter, clock,
       signal, batchId, onEvent, stepDef, stepId,
+      pauseBefore, stopAfter, saveAllPrompts,
     });
   }
 
@@ -403,6 +407,7 @@ async function executeJobOnce(
       backendResolver, stateStore, eventWriter, clock,
       signal, batchId, onEvent,
       stepDef, stepId,
+      pauseBefore, stopAfter, saveAllPrompts,
     });
   }
 

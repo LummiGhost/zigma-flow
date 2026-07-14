@@ -1299,19 +1299,31 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
     }
 
     if (jobsToRun.length === 0) {
-      // No ready or running jobs — check if there are pending (waiting/inactive) jobs
-      const hasPending = Object.values(state.jobs).some(
-        (js) => js.status === "waiting" || js.status === "inactive",
-      );
+      // The scheduler (or running-jobs/traverse fallback) returned empty.
+      // Before giving up, check for ready jobs that may have been skipped —
+      // e.g. jobs whose definitions are missing from workflow.jobs due to
+      // Zod stripping unknown fields (Issue #225).
+      const missedReady = Object.entries(state.jobs)
+        .filter(([, js]) => js.status === "ready")
+        .map(([id]) => id);
 
-      if (!hasPending) {
-        // All jobs accounted for — clean exit
+      if (missedReady.length > 0) {
+        console.warn(
+          `Scheduler returned empty batch but ${missedReady.length} ready job(s) found: ${missedReady.join(", ")}. Dispatching as writable.`,
+        );
+        for (const jid of missedReady) {
+          jobsToRun.push({ jobId: jid, mode: "writable" });
+        }
+      } else {
+        const hasPending = Object.values(state.jobs).some(
+          (js) => js.status === "waiting" || js.status === "inactive",
+        );
+        if (!hasPending) {
+          break; // All jobs accounted for — clean exit
+        }
+        // Pending jobs exist but none are ready — unsatisfied dependencies
         break;
       }
-
-      // Pending jobs exist but none are ready — may indicate unsatisfied
-      // dependencies or all-inactive workflows. Exit cleanly.
-      break;
     }
 
     // ── Create batch ID for event correlation (AD-P14-006) ───────────────
@@ -1384,6 +1396,17 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
     // Wait for all jobs in the batch to settle
     const settled = await Promise.allSettled(jobPromises);
+
+    // Log any rejections (these indicate bugs in executeJobOnce, not
+    // expected agent/script failures which are returned as structured
+    // JobStepResult values).
+    for (const result of settled) {
+      if (result.status === "rejected") {
+        console.error(
+          `Job promise rejected (unexpected error in executeJobOnce): ${String(result.reason)}`,
+        );
+      }
+    }
 
     // ── Post-batch: human gate check (WF-P15-ENGINE, AD-P15-007) ─────────
 

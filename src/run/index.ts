@@ -347,17 +347,63 @@ export async function snapshotSkillLock(runDir: string, skillLockPath: string): 
 // Active run pointer helpers — WF-P5-PROMPT
 // ---------------------------------------------------------------------------
 
+/** @deprecated This field is deprecated and will be removed in v1.0. */
+const DEPRECATED_ACTIVE_RUN_FIELD_MSG =
+  "[DEPRECATED] config.json \"active_run\" is deprecated. New runs no longer set it. Use --run <run-id> or --latest. This field will be removed in v1.0.";
+
+const DEPRECATED_RESOLUTION_MSG =
+  "[DEPRECATED] Implicit run resolution via deprecated config.json \"active_run\". Use --run <run-id> or --latest. This will be removed in v1.0.";
+
+const DEPRECATED_FALLBACK_MSG =
+  "[DEPRECATED] Falling back to latest run. Use --run <run-id> or --latest to be explicit. This fallback will be removed in v1.0.";
+
 /**
- * Resolve a run id from an optional explicit `--run` flag or the active run.
+ * Find the most recently created run ID by directory name (YYYYMMDD-NNNN
+ * lexicographic sort gives correct chronological order).
+ *
+ * Returns null if no run directories exist.
+ */
+export async function findLatestRunId(runsDir: string): Promise<string | null> {
+  let entries: string[];
+  try {
+    entries = await readdir(runsDir);
+  } catch {
+    return null;
+  }
+
+  const dirs: string[] = [];
+  for (const entry of entries) {
+    try {
+      await readdir(join(runsDir, entry));
+      dirs.push(entry);
+    } catch {
+      // Not a directory or unreadable — skip.
+    }
+  }
+
+  if (dirs.length === 0) return null;
+
+  dirs.sort((a, b) => b.localeCompare(a));
+  return dirs[0]!;
+}
+
+/**
+ * Resolve a run id from an optional explicit `--run` flag, `--latest`, or the
+ * deprecated active_run pointer.
  *
  * When `explicitRunId` is provided, verifies it exists in the runs directory
- * and returns it. Otherwise falls back to `readActiveRun`.
+ * and returns it. When `latest` is true, uses the most recently created run.
+ * Otherwise falls back to `readActiveRun` (deprecated) and then latest run
+ * (deprecated fallback).
+ *
+ * Prints a deprecation warning for any implicit resolution path.
  *
  * Throws ConfigError if no run can be resolved.
  */
 export async function resolveRunId(
   zigmaflowDir: string,
   explicitRunId?: string,
+  opts?: { latest?: boolean },
 ): Promise<string> {
   const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
 
@@ -367,25 +413,54 @@ export async function resolveRunId(
       await readdir(runDir);
       return explicitRunId;
     } catch (e: unknown) {
-      throw new FilesystemError(`Run directory not found: ${runDir}`, { cause: e });
+      throw new ConfigError(
+        `Run "${explicitRunId}" not found. Use "zigma-flow list-runs" to see available runs.`,
+        { details: { runId: explicitRunId, runsDir } }
+      );
     }
   }
 
-  const activeRunId = await readActiveRun(zigmaflowDir);
-  if (activeRunId === null) {
-    throw new ConfigError(
-      "No active run found. Run `zigma-flow run` first to create a run.",
-      { details: { zigmaflowDir } }
-    );
+  if (opts?.latest) {
+    const latestId = await findLatestRunId(runsDir);
+    if (latestId === null) {
+      throw new ConfigError(
+        "No runs found. Run `zigma-flow run` first to create a run.",
+        { details: { zigmaflowDir } }
+      );
+    }
+    return latestId;
   }
-  return activeRunId;
+
+  // Deprecated path: try active_run from config.json first.
+  const activeRunId = await readActiveRun(zigmaflowDir);
+  if (activeRunId !== null) {
+    console.warn(DEPRECATED_RESOLUTION_MSG);
+    return activeRunId;
+  }
+
+  // Deprecated fallback: find latest run by directory name.
+  const latestFallbackId = await findLatestRunId(runsDir);
+  if (latestFallbackId !== null) {
+    console.warn(DEPRECATED_FALLBACK_MSG);
+    return latestFallbackId;
+  }
+
+  throw new ConfigError(
+    "No run found. Use --run <run-id> or --latest to specify a run.",
+    { details: { zigmaflowDir } }
+  );
 }
 
 /**
  * Read the active run id from `.zigma-flow/config.json`.
+ *
  * Returns null if config.json is missing or `active_run` is null/absent.
+ * Prints a deprecation warning when an `active_run` value is found.
  *
  * Full implementation: WF-P5-PROMPT Step 2.
+ *
+ * @deprecated The `active_run` field in config.json is deprecated and will be
+ * removed in v1.0. Use `--run <run-id>` or `--latest` instead.
  */
 export async function readActiveRun(zigmaflowDir: string): Promise<string | null> {
   const configPath = join(zigmaflowDir, ".zigma-flow", "config.json");
@@ -409,7 +484,11 @@ export async function readActiveRun(zigmaflowDir: string): Promise<string | null
   if (typeof parsed !== "object" || parsed === null) return null;
   const cfg = parsed as Record<string, unknown>;
   const activeRun = cfg["active_run"];
-  return typeof activeRun === "string" ? activeRun : null;
+  if (typeof activeRun === "string") {
+    console.warn(DEPRECATED_ACTIVE_RUN_FIELD_MSG);
+    return activeRun;
+  }
+  return null;
 }
 
 /**
@@ -417,6 +496,10 @@ export async function readActiveRun(zigmaflowDir: string): Promise<string | null
  * Throws ConfigError if config.json does not exist.
  *
  * Full implementation: WF-P5-PROMPT Step 2.
+ *
+ * @deprecated Writing `active_run` to config.json is deprecated.
+ * New runs no longer set this field (the Engine no longer calls this function).
+ * The function is retained for backward compatibility in tests.
  */
 export async function writeActiveRun(zigmaflowDir: string, runId: string): Promise<void> {
   const configPath = join(zigmaflowDir, ".zigma-flow", "config.json");

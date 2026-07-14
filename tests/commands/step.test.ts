@@ -26,7 +26,7 @@
  * document above.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -177,6 +177,7 @@ interface StepActionOptsLocal {
   clock: Clock;
   job?: string;
   runner?: unknown;
+  latest?: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -185,6 +186,7 @@ function makeStepOpts(args: {
   job?: string;
   clock?: Clock;
   runner?: unknown;
+  latest?: boolean;
 }): any {
   const clock: Clock = args.clock ?? new FakeClock();
   const base: StepActionOptsLocal = {
@@ -197,7 +199,11 @@ function makeStepOpts(args: {
     args.runner === undefined
       ? withJob
       : { ...withJob, runner: args.runner };
-  return withRunner;
+  const withLatest: StepActionOptsLocal =
+    args.latest === undefined
+      ? withRunner
+      : { ...withRunner, latest: args.latest };
+  return withLatest;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,8 +227,8 @@ describe("stepAction (CLI integration) — happy path", () => {
   it(
     "dispatches a script step on a freshly created run and transitions the job out of ready (T-DISPATCH-1, UC-DISPATCH-1)",
     async () => {
-      // 1. createRun must populate active_run in config.json and place
-      //    the script job in the `ready` state.
+      // 1. createRun creates a run directory and places the script job in `ready`.
+      // v0.6: active_run is deprecated — createRun no longer updates config.json.
       const { runId } = await createRun({
         workflowPath,
         task: "compile sources",
@@ -230,11 +236,6 @@ describe("stepAction (CLI integration) — happy path", () => {
         skillLockPath: sandbox.skillLockPath,
         clock: new FakeClock(),
       });
-
-      const cfgAfterCreate = JSON.parse(
-        await readFile(sandbox.configPath, "utf-8")
-      ) as { active_run: string | null };
-      expect(cfgAfterCreate.active_run).toBe(runId);
 
       const runDir = join(sandbox.runsDir, runId);
       const stateBefore = JSON.parse(
@@ -501,3 +502,69 @@ describe("stepAction (CLI integration) — auto-detect: zero ready jobs", () => 
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const _stateErrorTypeAnchor: typeof StateError = StateError;
+
+// ---------------------------------------------------------------------------
+// --latest flag resolution
+// ---------------------------------------------------------------------------
+
+describe("stepAction with --latest flag", () => {
+  let sandbox: Sandbox;
+  let workflowPath: string;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+    workflowPath = join(sandbox.projectRoot, "code-change.yml");
+    await writeFile(workflowPath, SCRIPT_WORKFLOW_YAML, "utf-8");
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it("resolves latest run when --latest is passed, without deprecation warning (T-LATEST-1)", async () => {
+    // Create a run
+    const { runId } = await createRun({
+      workflowPath,
+      task: "compile sources",
+      runsDir: sandbox.runsDir,
+      skillLockPath: sandbox.skillLockPath,
+      clock: new FakeClock(),
+    });
+
+    // Verify that stepAction with --latest resolves to the correct run
+    // without printing deprecation warnings.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fakeRunner = new FakeRunner();
+      await stepAction(
+        makeStepOpts({
+          zigmaflowDir: sandbox.zigmaflowDir,
+          job: "build",
+          runner: fakeRunner,
+          latest: true,
+        })
+      );
+
+      // No deprecation warning when --latest is used explicitly
+      const deprecationCalls = warnSpy.mock.calls.filter(
+        (call: unknown[]) => String(call[0]).includes("[DEPRECATED]")
+      );
+      expect(deprecationCalls).toHaveLength(0);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    void runId;
+  });
+
+  it("throws ConfigError when --latest is passed but no runs exist (T-LATEST-2)", async () => {
+    await expect(
+      stepAction(
+        makeStepOpts({
+          zigmaflowDir: sandbox.zigmaflowDir,
+          latest: true,
+        })
+      )
+    ).rejects.toBeInstanceOf(ConfigError);
+  });
+});

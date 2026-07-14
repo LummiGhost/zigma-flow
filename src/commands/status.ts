@@ -23,6 +23,7 @@ import { loadWorkflowFile } from "../workflow/index.js";
 
 export interface StatusOptions {
   run?: string;      // specific run_id, or undefined for "latest"
+  latest?: boolean;  // use most recently created run (explicit, no deprecation warning)
   verbose?: boolean; // enable verbose output (step-level details)
 }
 
@@ -251,6 +252,11 @@ export function renderRunStatus(
  */
 export async function statusAction(options: StatusOptions, runsDir?: string): Promise<void> {
   const dir = runsDir ?? join(process.cwd(), ".zigma-flow", "runs");
+
+  // Deprecation warning: implicit run fallback without --run or --latest
+  if (options.run === undefined && options.latest !== true) {
+    console.warn("[DEPRECATED] Implicit run fallback to latest. Use --run <run-id> or --latest. This will be removed in v1.0.");
+  }
 
   const runDir = await findRun(dir, options.run);
 

@@ -52,6 +52,7 @@ export interface ResolvedBackend {
 
 interface ZigmaConfig {
   tool_version?: string;
+  /** @deprecated This field is deprecated and will be removed in v1.0. Use --run <run-id> or --latest. */
   active_run?: string | null;
   agent?: AgentConfig;
 }

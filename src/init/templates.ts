@@ -17,7 +17,6 @@ export function configJsonTemplate(version: string): string {
   return JSON.stringify(
     {
       tool_version: version,
-      active_run: null,
       agent: {
         backend: "claude-code",
         backends: {

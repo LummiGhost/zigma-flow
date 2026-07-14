@@ -32,6 +32,8 @@ export interface AbortActionOpts {
   reason?: string;
   /** Optional explicit run id (from --run flag). */
   runId?: string;
+  /** Use the most recently created run (from --latest flag, explicit). */
+  latest?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,8 +43,8 @@ export interface AbortActionOpts {
 export async function abortAction(opts: AbortActionOpts): Promise<void> {
   const { zigmaflowDir, clock, reason, runId } = opts;
 
-  // 1. Resolve run id (explicit --run or active_run from config)
-  const activeRunId = await resolveRunId(zigmaflowDir, runId);
+  // 1. Resolve run id (explicit --run, --latest, or deprecated fallback from config)
+  const activeRunId = await resolveRunId(zigmaflowDir, runId, opts.latest !== undefined ? { latest: opts.latest } : undefined);
 
   const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
   const runDir = join(runsDir, activeRunId);

@@ -13,14 +13,39 @@
 >
 > 设计目的与权衡详见 `docs/phases/p13-agent-adapter-hardening/02-development-plan.md §1 §3 §4`。
 >
-> **v0.6 修订总览（2026-07-14）：** 控制流收敛（Issue #209）。废弃分散的控制流机制（signals、goto_step/goto_job、max_visits、optional_needs、retry_with、独立 check Step 类型、activation: manual），统一收敛到 DAG + 顺序步骤 + 显式 `if` 条件 + 有界重试 + 可选 Job 激活 + 结构化 `returns/on_return`：
+> **v0.6 修订总览（2026-07-14）：** 数据流与 API 收敛。
 >
-> - 信号系统（signals、signal priority/severity/allowed_from）改为非致命废弃警告，推荐使用 `returns/on_return` 进行 Agent 流控。
-> - 任意跳转和有界循环（goto_step、goto_job、goto_with、max_visits）改为废弃警告，推荐使用 Job 级重试（max_attempts）和可选 Job 激活。
-> - `retry --with` 动态输入替换和 `retry_with` 字段改为废弃警告。
-> - `optional_needs` 改为废弃警告；`needs` 中的非活跃可选 Job 视为已满足依赖。`activation: manual` 视为 `optional` 并废弃。
-> - 独立 check Step 类型（`type: check`）改为废弃警告，推荐使用 `type: script` 进行确定性检查。
-> - 所有废弃特性在 v0.6 中正常工作（仅 stderr 警告），v1.0 将移除。设置 `ZIGMA_SUPPRESS_DEPRECATION` 环境变量可抑制警告。
+> **数据模型迁移（#206）：** 将工作流数据模型从可变共享状态迁移到函数式数据流。Step 和 Job 读取输入和上游 outputs，生成新的 outputs 和 artifacts，不再原地修改共享状态。
+>
+> **Deprecation notice** — The following are deprecated in v0.6 and will be removed in v1.0:
+> - Workflow top-level `variables` — use job outputs (`jobs.<id>.outputs.*`) instead
+> - Workflow top-level `context_blocks` — use artifacts for large data and job outputs for structured data
+> - Agent Report `context_patches` — use `outputs` and `artifacts` instead
+> - Step `permissions.context_edit`, `permissions.variables`, `permissions.context_blocks` — no replacement; tied to the mutable context model
+> - `allowed_writers` on variables and context_blocks — no replacement; output ownership determined by the producing step
+> - `${{ variables.* }}` expressions — use `${{ jobs.<id>.outputs.* }}` or `${{ steps.<id>.outputs.* }}` instead
+>
+> **控制流收敛（#209）：** 废弃分散的控制流机制，统一收敛到 DAG + 顺序步骤 + 显式 `if` 条件 + 有界重试 + 可选 Job 激活 + 结构化 `returns/on_return`：
+> - 信号系统（signals、signal priority/severity/allowed_from）→ deprecated，推荐 `returns/on_return`
+> - 任意跳转和有界循环（goto_step、goto_job、goto_with、max_visits）→ deprecated
+> - `retry --with` 动态输入替换和 `retry_with` 字段 → deprecated
+> - `optional_needs` → deprecated；`needs` 中的非活跃可选 Job 视为已满足
+> - `activation: manual` → deprecated，视为 `optional`
+> - 独立 check Step 类型（`type: check`）→ deprecated，推荐 `type: script`
+>
+> **Human Step 暂停/恢复协议（#210）：** Human Step 收敛为 pause-and-resume 协议。新增 `resume` 命令和 `awaiting_input` 状态。`approve`/`reject` 命令 deprecated。
+>
+> **CLI 收敛（#204）：** 新增 `invoke` 统一执行命令和 `inspect` 统一查询命令。旧命令（`run`、`run-all`、`prompt`、`step`、`next`、`check`）标记 deprecated。
+>
+> **触发器声明（#211）：** `on` 改为可选字段。顶层 `inputs` 提升为输入声明位置。`on.manual.inputs` deprecated。`--task` CLI flag deprecated，使用 `--input task=...`。
+>
+> **Schema 清理（#212）：** 废弃未实现占位字段（`type: workflow`、`workspace.branch`、`workspace.mode`、Job 级 permissions）。
+>
+> **Skill 发现简化（#207）：** 基于目录的 Skill 发现。`skill-lock.json`、`skill add`、config `version` deprecated。
+>
+> **显式 Run 寻址（#205）：** 移除 `active-run` 配置。命令支持 `--latest` 标志。旧配置仍可读取但忽略。
+>
+> **兼容性：** 所有废弃特性在 v0.6 中正常工作（仅 stderr 警告），v1.0 将移除。设置 `ZIGMA_SUPPRESS_DEPRECATION` 环境变量可抑制警告。
 
 ## 1. 设计结论
 

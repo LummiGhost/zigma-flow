@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { acceptAgentReport } from "../engine/accept.js";
 import { resolveRunId } from "../run/index.js";
 import type { Clock } from "../run/index.js";
+import { deprecationWarn } from "../utils/index.js";
 
 // ---------------------------------------------------------------------------
 // nextAction options
@@ -43,6 +44,7 @@ export interface NextActionOpts {
 // ---------------------------------------------------------------------------
 
 export async function nextAction(opts: NextActionOpts): Promise<void> {
+  deprecationWarn("next", "zigma-flow invoke");
   const { zigmaflowDir, jobId, clock, runId } = opts;
 
   // 1. Resolve run id (explicit --run, --latest, or deprecated fallback from config)

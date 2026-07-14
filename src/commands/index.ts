@@ -11,3 +11,7 @@ export { showAction } from "./show.js";
 export type { ShowActionOpts } from "./show.js";
 export { runAllAction } from "./run-all.js";
 export type { RunAllOptions } from "./run-all.js";
+export { invokeAction } from "./invoke.js";
+export type { InvokeOptions, InvokeSummary } from "./invoke.js";
+export { inspectAction } from "./inspect.js";
+export type { InspectOptions, InspectResult } from "./inspect.js";

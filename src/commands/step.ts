@@ -35,6 +35,7 @@ import {
   StateError,
   UserInputError,
   WorkflowError,
+  deprecationWarn,
 } from "../utils/index.js";
 import { artifactStepDir } from "../artifact/index.js";
 
@@ -94,6 +95,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function stepAction(opts: StepActionOpts): Promise<void> {
+  deprecationWarn("step", "zigma-flow invoke");
   const { zigmaflowDir, clock, runId } = opts;
   const stateStore = new LocalStateStore();
 

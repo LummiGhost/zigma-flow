@@ -46,7 +46,7 @@ A local, single-process TypeScript CLI that orchestrates multi-job workflows for
 5. **Try a fully automated run:**
 
    ```bash
-   zigma-flow run-all code-change --task "Add null check to parse function"
+   zigma-flow invoke code-change --task "Add null check to parse function"
    ```
 
    The engine drives every job -- agent steps, script steps, and checks --
@@ -83,17 +83,25 @@ For a visual walkthrough, see the [getting-started tutorial](docs/getting-starte
 
 ## CLI Commands
 
+### Primary Commands
+
 | Command | Purpose |
 |---------|---------|
 | `init` | Initialize `.zigma-flow/` scaffold in the current directory |
 | `validate <path>` | Validate a workflow YAML or Skill Pack manifest |
-| `run <workflow> --task <description>` | Create a new workflow run |
-| `run-all <workflow> --task <description>` | Fully automated execution (create run, loop through jobs) |
-| `run-all <workflow> --resume <run-id>` | Resume an interrupted run |
+| `invoke <workflow> --task <description>` | Create and execute a workflow run to completion (unified lifecycle) |
+| `invoke <workflow> --resume <run-id>` | Resume an interrupted run |
+| `invoke <workflow> --dry-run` | Validate and plan without executing |
+| `invoke <workflow> --trace` | Verbose event-by-event output |
+| `inspect [run-id]` | Inspect a run: summary (default), --jobs, --events, --artifacts, --json |
+| `inspect --latest` | Inspect the most recent run |
 | `status` | Show current run status (latest run by default) |
-| `prompt --job <id>` | Generate the agent prompt for a job's current step |
-| `step --job <id>` | Execute a script, check, or router step automatically |
-| `next --job <id>` | Accept the agent report and advance the run to the next step |
+| `doctor` | Diagnose common environment and configuration issues |
+
+### Advanced Commands
+
+| Command | Purpose |
+|---------|---------|
 | `retry --job <id>` | Retry a failed job |
 | `abort` | Abort the current run |
 | `approve --job <id>` | Approve a manual gate (e.g., `gate-merge`) |
@@ -102,9 +110,21 @@ For a visual walkthrough, see the [getting-started tutorial](docs/getting-starte
 | `show <run-id>` | Show detailed run information |
 | `artifacts <run-id>` | List artifacts produced by a run |
 | `events <run-id>` | List events recorded during a run |
-| `doctor` | Diagnose common environment and configuration issues |
-| `check` | Run Skill Pack checks against the project |
+| `verify-run [run-id]` | Check run data integrity |
 | `skill-add <name> [source]` | Add a Skill Pack to the project |
+
+### Deprecated Commands
+
+These commands still work but will be removed in v1.0. Use `invoke` instead.
+
+| Command | Replacement |
+|---------|-------------|
+| `run <workflow>` | `invoke <workflow> --task <description>` |
+| `run-all <workflow>` | `invoke <workflow>` |
+| `prompt --job <id>` | `invoke --pause-before <step>` |
+| `step --job <id>` | `invoke` (automatic execution) |
+| `next --job <id>` | `invoke` (automatic advancement) |
+| `check` | `invoke` (automatic check execution) |
 
 For a complete reference of every subcommand and its options, see the
 workflow language reference at [docs/workflow-language.md](./docs/workflow-language.md)
@@ -172,7 +192,7 @@ The agent backend (default: `claude-code`) is configured in `.zigma-flow/config.
 ```
 
 Parallelism controls how many read-only jobs run concurrently during
-`run-all`. Set `agent.parallelism` in the config or pass `--parallelism <N>`
+`invoke`. Set `agent.parallelism` in the config or pass `--parallelism <N>`
 on the command line. The default is 4. Use `--parallelism 1` for strictly
 sequential execution.
 

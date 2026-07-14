@@ -545,11 +545,15 @@ describe("stepAction with --latest flag", () => {
         })
       );
 
-      // No deprecation warning when --latest is used explicitly
+      // The step command itself is deprecated (v0.6), so one deprecation
+      // warning is expected. What matters is that --latest does NOT trigger
+      // an additional active_run deprecation warning.
       const deprecationCalls = warnSpy.mock.calls.filter(
         (call: unknown[]) => String(call[0]).includes("[DEPRECATED]")
       );
-      expect(deprecationCalls).toHaveLength(0);
+      expect(deprecationCalls).toHaveLength(1);
+      expect(String(deprecationCalls[0]?.[0])).toContain("zigma-flow step");
+      expect(String(deprecationCalls[0]?.[0])).not.toContain("active_run");
     } finally {
       warnSpy.mockRestore();
     }

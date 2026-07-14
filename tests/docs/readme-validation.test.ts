@@ -38,6 +38,8 @@ const SLICE_B_FORWARD_REFS = new Set([
 const KNOWN_SUBCOMMANDS = new Set([
   "init",
   "validate",
+  "invoke",
+  "inspect",
   "run",
   "run-all",
   "status",

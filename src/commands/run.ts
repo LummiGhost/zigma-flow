@@ -8,11 +8,12 @@
  * WF-P3-RUN Step 2.
  */
 
-import { access, readFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { resolve, join } from "node:path";
 
+import { deprecationWarn } from "../utils/index.js";
 import { createRun } from "../engine/index.js";
-import { LocalStateStore } from "../run/index.js";
+import { readActiveRun, LocalStateStore } from "../run/index.js";
 
 export interface RunOptions {
   task: string;
@@ -62,39 +63,21 @@ export async function resolveWorkflowPath(
 }
 
 export async function runAction(workflowPath: string, options: RunOptions): Promise<void> {
+  deprecationWarn("run", "zigma-flow invoke");
   const projectRoot = options.projectRoot ?? process.cwd();
   const absWorkflowPath = await resolveWorkflowPath(workflowPath, projectRoot);
   const runsDir = join(projectRoot, ".zigma-flow", "runs");
   const skillLockPath = join(projectRoot, ".zigma-flow", "skill-lock.json");
 
-  // v0.6: active_run is deprecated and new runs no longer update it.
-  // Check legacy active_run silently (without triggering deprecation warnings)
-  // to warn users about stale config pointers.
-  let legacyActiveRun: string | null = null;
-  try {
-    const configPath = join(projectRoot, ".zigma-flow", "config.json");
-    const configRaw = await readFile(configPath, "utf-8");
-    const config = JSON.parse(configRaw) as Record<string, unknown>;
-    if (typeof config["active_run"] === "string") {
-      legacyActiveRun = config["active_run"];
-    }
-  } catch {
-    // Config missing or unparseable — no legacy pointer to check.
-  }
-  if (legacyActiveRun !== null) {
+  // Warn if overwriting an active run that is not yet completed
+  const existingActive = await readActiveRun(projectRoot);
+  if (existingActive !== null) {
     const stateStore = new LocalStateStore();
-    const existingRunDir = join(runsDir, legacyActiveRun);
+    const existingRunDir = join(runsDir, existingActive);
     const existingState = await stateStore.readSnapshot(existingRunDir);
     if (existingState !== null && existingState.status !== "completed" && existingState.status !== "cancelled") {
-      console.warn(
-        `Note: config.json "active_run" ("${legacyActiveRun}", status: ${existingState.status ?? "unknown"}) ` +
-        "is deprecated and will NOT be updated by this command. " +
-        "Use --run <run-id> or --latest to target runs explicitly. " +
-        "This field will be removed in v1.0."
-      );
-      console.warn(
-        `Use 'zigma-flow list-runs' to see all runs, or 'zigma-flow status --run ${legacyActiveRun}' to check its status.`
-      );
+      console.warn(`Warning: active_run (${existingActive}, status: ${existingState.status ?? "running"}) will be replaced.`);
+      console.warn(`Use 'zigma-flow list-runs' to see all runs, or 'zigma-flow status --run ${existingActive}' to check its status.`);
     }
   }
 

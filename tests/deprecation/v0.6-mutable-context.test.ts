@@ -7,7 +7,7 @@
  * Reference: GitHub Issue #206
  */
 
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 
 import { loadWorkflow } from "../../src/workflow/index.js";
 import { validateReportShape } from "../../src/engine/accept.js";
@@ -398,5 +398,128 @@ change_summary:
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("[DEPRECATED] Context blocks are deprecated"),
     );
+  });
+});
+
+// ===========================================================================
+// Suppression via ZIGMA_SUPPRESS_DEPRECATION env var
+// ===========================================================================
+
+describe("v0.6 deprecation — suppression via ZIGMA_SUPPRESS_DEPRECATION", () => {
+  let originalEnv: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    vi.restoreAllMocks();
+  });
+
+  // ── Workflow loader suppression ───────────────────────────────────────────
+
+  it("suppresses variables deprecation warning when ZIGMA_SUPPRESS_DEPRECATION is set", () => {
+    process.env.ZIGMA_SUPPRESS_DEPRECATION = "1";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const yaml = makeWorkflow({ variables: VALID_VARIABLES });
+    const wf = loadWorkflow(yaml);
+
+    expect(wf).toBeDefined();
+    expect(wf.variables).toBeDefined();
+
+    const deprecationCalls = warnSpy.mock.calls.filter((c) =>
+      (c[0] as string).includes("[DEPRECATED]")
+    );
+    expect(deprecationCalls).toHaveLength(0);
+  });
+
+  it("suppresses context_blocks deprecation warning when ZIGMA_SUPPRESS_DEPRECATION is set", () => {
+    process.env.ZIGMA_SUPPRESS_DEPRECATION = "1";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const yaml = makeWorkflow({ contextBlocks: VALID_CONTEXT_BLOCKS });
+    const wf = loadWorkflow(yaml);
+
+    expect(wf).toBeDefined();
+    expect(wf.context_blocks).toBeDefined();
+
+    const deprecationCalls = warnSpy.mock.calls.filter((c) =>
+      (c[0] as string).includes("[DEPRECATED]")
+    );
+    expect(deprecationCalls).toHaveLength(0);
+  });
+
+  it("suppresses context_patches deprecation warning when ZIGMA_SUPPRESS_DEPRECATION is set", () => {
+    process.env.ZIGMA_SUPPRESS_DEPRECATION = "1";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const report = {
+      outputs: { key: "value" },
+      artifacts: [],
+      signals: [],
+      summary: "test summary",
+      context_patches: [
+        { variable: "plan_status", operation: "set", value: "approved" },
+      ],
+    };
+
+    const validated = validateReportShape(report);
+    expect(validated).toBeDefined();
+
+    const deprecationCalls = warnSpy.mock.calls.filter((c) =>
+      (c[0] as string).includes("[DEPRECATED]")
+    );
+    expect(deprecationCalls).toHaveLength(0);
+  });
+
+  it("suppresses variables.* expression warning when ZIGMA_SUPPRESS_DEPRECATION is set", () => {
+    process.env.ZIGMA_SUPPRESS_DEPRECATION = "1";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const ctx = makeExprCtx({
+      variables: { plan_status: "approved" },
+    });
+    const result = resolveExpression("Status: ${{ variables.plan_status }}", ctx);
+
+    expect(result).toBe("Status: approved");
+
+    const deprecationCalls = warnSpy.mock.calls.filter((c) =>
+      (c[0] as string).includes("[DEPRECATED]")
+    );
+    expect(deprecationCalls).toHaveLength(0);
+  });
+
+  it("still emits warnings when ZIGMA_SUPPRESS_DEPRECATION is NOT set", () => {
+    // Explicitly remove the env var if present
+    delete process.env.ZIGMA_SUPPRESS_DEPRECATION;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const yaml = makeWorkflow({ variables: VALID_VARIABLES });
+    const wf = loadWorkflow(yaml);
+
+    expect(wf).toBeDefined();
+
+    const deprecationCalls = warnSpy.mock.calls.filter((c) =>
+      (c[0] as string).includes("[DEPRECATED]")
+    );
+    expect(deprecationCalls.length).toBeGreaterThan(0);
+  });
+
+  it("still emits warnings when ZIGMA_SUPPRESS_DEPRECATION is set to 0 or empty", () => {
+    process.env.ZIGMA_SUPPRESS_DEPRECATION = "0";
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const yaml = makeWorkflow({ variables: VALID_VARIABLES });
+    const wf = loadWorkflow(yaml);
+
+    expect(wf).toBeDefined();
+
+    const deprecationCalls = warnSpy.mock.calls.filter((c) =>
+      (c[0] as string).includes("[DEPRECATED]")
+    );
+    // "0" is truthy in JS strings, so suppress
+    expect(deprecationCalls).toHaveLength(0);
   });
 });

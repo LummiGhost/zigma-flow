@@ -126,7 +126,7 @@ export function validateReportShape(parsed: unknown): AgentReport {
   }
 
   // v0.6 deprecation: context_patches
-  if (obj["context_patches"] !== undefined) {
+  if (!process.env.ZIGMA_SUPPRESS_DEPRECATION && obj["context_patches"] !== undefined) {
     console.warn(
       "[DEPRECATED] context_patches are deprecated, use outputs and artifacts instead. This will be removed in v1.0.",
     );

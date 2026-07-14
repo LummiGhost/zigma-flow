@@ -698,12 +698,20 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
   const wf = result.data as WorkflowDefinition;
 
   // 5b. Deprecation warnings (v0.6 — mutable context)
-  if (wf.variables && Object.keys(wf.variables).length > 0) {
+  if (
+    !process.env.ZIGMA_SUPPRESS_DEPRECATION &&
+    wf.variables &&
+    Object.keys(wf.variables).length > 0
+  ) {
     console.warn(
       "[DEPRECATED] Workflow variables are deprecated, use job outputs and artifacts instead. This will be removed in v1.0.",
     );
   }
-  if (wf.context_blocks && Object.keys(wf.context_blocks).length > 0) {
+  if (
+    !process.env.ZIGMA_SUPPRESS_DEPRECATION &&
+    wf.context_blocks &&
+    Object.keys(wf.context_blocks).length > 0
+  ) {
     console.warn(
       "[DEPRECATED] Context blocks are deprecated, use artifacts for large data and job outputs for structured data. This will be removed in v1.0.",
     );

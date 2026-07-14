@@ -262,7 +262,16 @@ async function runProgram(
         console.error("Error: --task and --resume are mutually exclusive.");
         process.exit(2);
       }
+      if (options.task !== undefined && !process.env.ZIGMA_SUPPRESS_DEPRECATION) {
+        console.warn(
+          "[DEPRECATED] --task is deprecated. Use --input task='...' instead. This will be removed in v1.0.",
+        );
+      }
       const inputs = parseInputs(options.input);
+      // Map --task to inputs.task internally so task is treated as a regular input
+      const mergedInputs: Record<string, string> | undefined = (options.task !== undefined || inputs !== undefined)
+        ? { ...(options.task !== undefined ? { task: options.task } : {}), ...(inputs ?? {}) }
+        : undefined;
       await runAllAction(workflowPath, {
         projectRoot: cwd(),
         ...(options.task !== undefined ? { task: options.task } : {}),
@@ -270,7 +279,7 @@ async function runProgram(
         ...(options.backend !== undefined ? { backend: options.backend } : {}),
         ...(options.parallelism !== undefined ? { parallelism: options.parallelism } : {}),
         ...(options.failFast !== undefined ? { failFast: options.failFast } : {}),
-        ...(inputs !== undefined ? { inputs } : {}),
+        ...(mergedInputs !== undefined ? { inputs: mergedInputs } : {}),
       });
     });
 

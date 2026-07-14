@@ -104,6 +104,13 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
   }
 
   // RC-R03: Write run.yml
+  // Map task into inputs so it is treated as a regular input channel.
+  // task is still stored at the top level for backward compatibility with
+  // existing tooling, consumers, and state.json format.
+  const mergedRunInputs: Record<string, string> = {
+    task: inputs.task,
+    ...(inputs.inputs ?? {}),
+  };
   await writeRunYaml(runDir, {
     task: inputs.task,
     workflow: {
@@ -112,7 +119,7 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     },
     created_at: createdAt,
     skill_lock_snapshot: "skill-lock.snapshot.json",
-    ...(inputs.inputs !== undefined ? { inputs: inputs.inputs } : {}),
+    inputs: mergedRunInputs,
     ...(callerContextSnapshotPath !== undefined
       ? { caller_context_snapshot: callerContextSnapshotPath }
       : {}),

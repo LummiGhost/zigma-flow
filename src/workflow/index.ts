@@ -813,6 +813,100 @@ export function loadWorkflow(yamlText: string, options?: LoadWorkflowOptions): W
     );
   }
 
+  // 5c. Deprecation warnings (v0.6 — schema cleanup, Issue #212)
+
+  const suppress = Boolean(process.env.ZIGMA_SUPPRESS_DEPRECATION);
+
+  // 5c.i. Reserved step type: "workflow"
+  for (const [jobName, job] of Object.entries(wf.jobs)) {
+    for (const step of job.steps) {
+      if (step.type === "workflow" && !suppress) {
+        console.warn(
+          "[DEPRECATED] type: workflow is reserved for future use. It has no runtime behavior and will be removed from the schema in v1.0. Use type: agent, script, check, router, or human instead.",
+        );
+      }
+    }
+  }
+
+  // 5c.ii. workspace.branch (unimplemented)
+  for (const [jobName, job] of Object.entries(wf.jobs)) {
+    const ws = job.workspace;
+    if (ws !== undefined && typeof ws === "object" && ws !== null && "branch" in (ws as Record<string, unknown>)) {
+      if (!suppress) {
+        console.warn(
+          "[DEPRECATED] workspace.branch is not implemented and will be removed in v1.0.",
+        );
+      }
+    }
+  }
+
+  // 5c.iii. workspace.mode — deprecated at Job level
+  for (const [jobName, job] of Object.entries(wf.jobs)) {
+    const ws = job.workspace;
+    if (ws !== undefined && typeof ws === "object" && ws !== null && typeof (ws as Record<string, unknown>)["mode"] === "string") {
+      if (!suppress) {
+        console.warn(
+          "[DEPRECATED] workspace.mode is deprecated. Use invocation-level execution strategy instead. This will be removed in v1.0.",
+        );
+      }
+    }
+  }
+
+  // 5c.iv. Job-level permissions
+  for (const [jobName, job] of Object.entries(wf.jobs)) {
+    if (job.permissions !== undefined && Object.keys(job.permissions).length > 0) {
+      if (!suppress) {
+        console.warn(
+          "[DEPRECATED] Job-level permissions are deprecated. Use Workflow-level defaults with Step-level overrides. Per-step permissions tighten (restrict), never escalate. This will be removed in v1.0.",
+        );
+      }
+    }
+  }
+
+  // 5c.v. Step-level permission sub-fields: variables, context_edit, context_blocks
+  for (const [jobName, job] of Object.entries(wf.jobs)) {
+    for (const step of job.steps) {
+      const perms = step.permissions;
+      if (perms === undefined) continue;
+
+      if (perms.variables !== undefined && !suppress) {
+        console.warn(
+          "[DEPRECATED] Step permission field 'variables' is deprecated (see #206). Use Step-level outputs for structured data and artifacts for large data. This will be removed in v1.0.",
+        );
+      }
+      if (perms.context_edit !== undefined && !suppress) {
+        console.warn(
+          "[DEPRECATED] Step permission field 'context_edit' is deprecated (see #206). Use Step-level outputs for structured data and artifacts for large data. This will be removed in v1.0.",
+        );
+      }
+      if (perms.context_blocks !== undefined && !suppress) {
+        console.warn(
+          "[DEPRECATED] Step permission field 'context_blocks' is deprecated (see #206). Use artifacts for large data and job outputs for structured data. This will be removed in v1.0.",
+        );
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // FIELDS REMOVED/CHANGED IN v0.6 (Issue #212):
+  //
+  // - type: workflow (reserved) → DEPRECATED — warns; no runtime behavior
+  // - workspace.branch → DEPRECATED — unimplemented; never had runtime effect
+  // - workspace.mode → DEPRECATED — use invocation-level execution strategy
+  // - Job-level permissions → DEPRECATED — use workflow-level defaults with
+  //   step-level overrides (step can only restrict, never escalate)
+  // - permissions.variables, permissions.context_edit, permissions.context_blocks
+  //   → DEPRECATED — covered by #206 (mutable context removal)
+  // - capture.stdout / capture.stderr → no-op — these fields never existed in
+  //   the Step schema; agent-level capture is handled internally
+  // - --task CLI flag → DEPRECATED — use --input task='...' instead
+  //   (src/cli.ts maps --task to inputs.task internally)
+  // - active_run → DEPRECATED — see #205; use --latest flag
+  //
+  // All deprecated features continue to parse and function normally in v0.6.
+  // They will be removed in v1.0.
+  // -------------------------------------------------------------------------
+
   // 6. Semantic checks
 
   // 6a. Duplicate step ids within each job

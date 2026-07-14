@@ -19,7 +19,61 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
-## [v0.4.6] — Patch Release (2026-07-13)
+## [v0.6.2] — Run Directory Expression (2026-07-14)
+
+### DSL
+
+- [DSL] Add `${{ run.dir }}` expression resolving to the absolute path of the current run directory, usable in `workspace.directory` and step-level `cwd` fields (#221, #224).
+
+---
+
+## [v0.6.1] — Prompt Debugging Flags (2026-07-14)
+
+### CLI
+
+- [CLI] Add `--pause-before <job.step>` flag to `invoke`: pauses execution before the specified agent step, saves the prompt, and sets the run to `blocked` (#222, #223).
+- [CLI] Add `--stop-after <job.step>` flag to `invoke`: stops execution after the specified step completes (#223).
+- [CLI] Add `--save-all-prompts` flag to `invoke`: saves every agent prompt to the run artifact directory without pausing execution (#223).
+
+### Runtime
+
+- [runtime] Add `execution_paused` and `execution_stopped` event types to the event log for debugging checkpoints (#223).
+
+---
+
+## [v0.6.0] — CLI Convergence & Deprecation Sweep (2026-07-14)
+
+### CLI
+
+- [CLI] [breaking] Converge workflow lifecycle into `invoke <workflow>` (create + execute) and `inspect [run-id]` (all inspection views). Old `run`, `run-all`, `prompt`, `step`, `next`, `check` commands deprecated (#204).
+- [CLI] Add `resume [run-id] --job <id> --input key=value` command: replaces `approve`/`reject` for human step interaction with structured key-value input (#210).
+- [CLI] Remove `active_run` from `.zigma-flow/config.json`; all run-targeting now uses explicit `--run <id>` or `--latest` (#205).
+
+### DSL
+
+- [DSL] [breaking] Deprecate mutable shared context (`variables`, `context_blocks`, `context_patches`); prefer job outputs and `${{ jobs.<id>.outputs.<key> }}` (#206).
+- [DSL] [breaking] Deprecate overlapping control flow mechanisms; converge to DAG `needs:` + `returns`/`on_return` (#209).
+- [DSL] [breaking] Deprecate unimplemented fields, simplify permissions and workspace schema (#212).
+- [DSL] Simplify skill discovery; deprecate `skill-lock.json` and `config_version` field (#207).
+- [DSL] Make `step.on` optional; promote `inputs` to top-level workflow field (#211).
+
+### Runtime
+
+- [runtime] Unify deprecation warning utility for CLI and workflow-level deprecations.
+
+---
+
+## [v0.5.0] — Host Integration (2026-07-14)
+
+### Runtime
+
+- [runtime] Add Host API TypeScript interfaces (`HostContext`, `HostPermissions`, `HostEvent`) for embedding zigma-flow in host applications (#201).
+- [runtime] Add caller context and permission snapshot attached to each run, enabling host-level access control (#202).
+- [runtime] Add human gate remote channel and evidence export: human steps can receive structured input from external systems and export evidence artifacts (#203).
+
+---
+
+## [v0.4.6] — Workspace & Built-in Workflows (2026-07-13)
 
 ### Runtime
 
@@ -34,6 +88,31 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 ### Tests
 
 - [tests] Add regression coverage for built-in workflows, workspace resolution, traverse schema, traverse execution, and CLI `--cwd` handling (#180, #181, #182, #183).
+
+---
+
+## [v0.4.5] — On-Output Routing & Report Hardening (2026-07-12)
+
+### Runtime
+
+- [runtime] Add `on_output` routing: validate agent output values and conditionally activate downstream jobs based on output content (#172, #173).
+- [runtime] Validate required artifacts and typed outputs in the agent report acceptance path (#170).
+- [runtime] Add non-interactive environment setup and dependency install step for script gates (#171).
+
+---
+
+## [v0.4.3] — Template Expressions & CLI Flags (2026-07-10)
+
+### Runtime
+
+- [runtime] Resolve `${{ }}` template expressions in script step `run:` and `cwd:` fields (#164).
+- [runtime] Resolve template expressions in check step `with:` fields (#169).
+- [runtime] Report all validation errors in `report.json` at once instead of stopping on the first (#168).
+
+### CLI
+
+- [CLI] Add `--run <run_id>` flag to `next`, `step`, `prompt`, `abort`, `retry` commands for explicit run targeting (#166).
+- [CLI] Add `--input key=value` flag to `run` and `run-all` commands for named workflow inputs (#167).
 
 ---
 

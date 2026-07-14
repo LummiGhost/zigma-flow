@@ -55,14 +55,11 @@ A local, single-process TypeScript CLI that orchestrates multi-job workflows for
 6. **Check the run status:**
 
    ```bash
-   zigma-flow status
+   zigma-flow inspect --latest
    ```
 
-   Shows the current state of the latest run (completed, running, or failed).
-
-7. **Explore the example project** in [`examples/basic-code-change/`](./examples/basic-code-change/).
-   It includes a pre-initialized `.zigma-flow/` directory, a TypeScript source
-   file, and matching tests -- a concrete reference for your own project setup.
+   Shows the status summary of the most recent run. Add `--jobs` for per-job
+   detail, `--events` for the event log, or `--artifacts` to list outputs.
 
 > **Package managers:** This project uses **pnpm** for its own development (see
 > [Development](#development)). The `init` command auto-detects your project's
@@ -77,7 +74,7 @@ A **workflow** is a DAG of **jobs**. Each job contains one or more **steps**, wh
 
 The Engine owns all state transitions. Agents cannot directly modify workflow state; they can only emit **signals** in their `report.json`. The Engine evaluates signals against declared rules and decides whether to activate an optional job, retry a previous job, or continue normally. All state changes are written to an event log under `.zigma-flow/runs/`, making every run auditable and replayable.
 
-For a visual walkthrough, see the [getting-started tutorial](docs/getting-started.md) (coming soon).
+For the language specification, see [docs/workflow-language.md](./docs/workflow-language.md).
 
 ---
 
@@ -93,9 +90,12 @@ For a visual walkthrough, see the [getting-started tutorial](docs/getting-starte
 | `invoke <workflow> --resume <run-id>` | Resume an interrupted run |
 | `invoke <workflow> --dry-run` | Validate and plan without executing |
 | `invoke <workflow> --trace` | Verbose event-by-event output |
-| `inspect [run-id]` | Inspect a run: summary (default), --jobs, --events, --artifacts, --json |
+| `invoke <workflow> --pause-before <job.step>` | Pause execution before a specific step (debugging) |
+| `invoke <workflow> --stop-after <job.step>` | Stop execution after a specific step (debugging) |
+| `invoke <workflow> --save-all-prompts` | Save every agent prompt to artifacts without pausing |
+| `inspect [run-id]` | Inspect a run: summary (default), `--jobs`, `--events`, `--artifacts`, `--json` |
 | `inspect --latest` | Inspect the most recent run |
-| `status` | Show current run status (latest run by default) |
+| `resume [run-id] --job <id> --input key=value` | Submit human input to resume a paused human step |
 | `doctor` | Diagnose common environment and configuration issues |
 
 ### Advanced Commands
@@ -104,27 +104,28 @@ For a visual walkthrough, see the [getting-started tutorial](docs/getting-starte
 |---------|---------|
 | `retry --job <id>` | Retry a failed job |
 | `abort` | Abort the current run |
-| `approve --job <id>` | Approve a manual gate (e.g., `gate-merge`) |
-| `reject --job <id> --comment <msg>` | Reject a manual gate with a reason |
 | `list-runs` | List all runs |
 | `show <run-id>` | Show detailed run information |
-| `artifacts <run-id>` | List artifacts produced by a run |
-| `events <run-id>` | List events recorded during a run |
+| `artifacts [run-id]` | List artifacts produced by a run |
+| `events [run-id]` | List events recorded during a run |
 | `verify-run [run-id]` | Check run data integrity |
-| `skill-add <name> [source]` | Add a Skill Pack to the project |
+| `skill add <pack-path>` | Register a local skill pack |
+| `status` | Show current run status (use `inspect` for richer output) |
 
 ### Deprecated Commands
 
-These commands still work but will be removed in v1.0. Use `invoke` instead.
+These commands still work but will be removed in v1.0.
 
 | Command | Replacement |
 |---------|-------------|
 | `run <workflow>` | `invoke <workflow> --task <description>` |
 | `run-all <workflow>` | `invoke <workflow>` |
-| `prompt --job <id>` | `invoke --pause-before <step>` |
+| `prompt --job <id>` | `invoke --pause-before <job.step>` |
 | `step --job <id>` | `invoke` (automatic execution) |
 | `next --job <id>` | `invoke` (automatic advancement) |
 | `check` | `invoke` (automatic check execution) |
+| `approve --job <id>` | `resume --job <id> --input decision=approve` |
+| `reject --job <id> --comment <msg>` | `resume --job <id> --input decision=reject --input comment="<msg>"` |
 
 For a complete reference of every subcommand and its options, see the
 workflow language reference at [docs/workflow-language.md](./docs/workflow-language.md)
@@ -175,8 +176,6 @@ The agent backend (default: `claude-code`) is configured in `.zigma-flow/config.
 
 ```json
 {
-  "tool_version": "0.3.6",
-  "active_run": null,
   "agent": {
     "backend": "claude-code",
     "backends": {
@@ -215,9 +214,8 @@ After `zigma-flow init`, edit `.zigma-flow/workflows/code-change.yml` to:
 
 Skill Pack prompts and knowledge files live in `.zigma-flow/skills/code-change/`
 and can be edited to match your project's conventions. See
-[custom-workflow tutorial](docs/custom-workflow.md) and
-[skill-pack-authoring tutorial](docs/skill-pack-authoring.md) (both coming
-soon) for detailed guidance.
+[docs/workflow-language.md](./docs/workflow-language.md) for the complete
+workflow schema reference.
 
 ---
 

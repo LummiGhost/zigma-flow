@@ -467,6 +467,13 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
   }
 
   if (signalsArray.length > 0) {
+    // v0.6 deprecation warning (Issue #209) — signals still processed normally
+    if (!process.env.ZIGMA_SUPPRESS_DEPRECATION) {
+      console.warn(
+        "[DEPRECATED] Agent report signals are deprecated. Use status returns instead. This will be removed in v1.0."
+      );
+    }
+
     // Validate each signal before any disk mutation
     for (const sig of signalsArray) {
       const decl = wf.signals?.[sig.type];

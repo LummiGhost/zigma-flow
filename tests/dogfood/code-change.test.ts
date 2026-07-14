@@ -374,7 +374,7 @@ describe("TC-DOGFOOD-2: workflow YAML validity", () => {
 
     expect(wf.name).toBe("code-change");
 
-    // All 11 jobs present (10 active + architecture-design manual + gate-merge manual)
+    // All 11 jobs present (10 active + architecture-design optional + gate-merge optional)
     const jobIds = Object.keys(wf.jobs).sort();
     expect(jobIds).toEqual(
       [
@@ -392,12 +392,21 @@ describe("TC-DOGFOOD-2: workflow YAML validity", () => {
       ].sort()
     );
 
-    // Signals declared
-    expect(wf.signals?.["review_rejected"]).toBeDefined();
-    expect(wf.signals?.["needs_architecture_design"]).toBeDefined();
+    // v0.6: signals are deprecated; verify returns/on_return is used instead
+    expect(wf.signals).toBeUndefined();
 
-    // architecture-design is manual activation
-    expect(wf.jobs["architecture-design"]?.activation).toBe("manual");
+    // architecture-design is optional activation (v0.6: manual deprecated)
+    expect(wf.jobs["architecture-design"]?.activation).toBe("optional");
+
+    // plan step has returns/on_return for needs_architecture_design
+    const planStep = wf.jobs["plan"]?.steps.find((s) => s.id === "plan");
+    expect(planStep?.returns?.status?.values).toContain("needs_architecture_design");
+    expect(planStep?.on_return?.["needs_architecture_design"]).toEqual({ activate_job: "architecture-design" });
+
+    // review step has returns/on_return for rejected
+    const reviewStep = wf.jobs["review"]?.steps.find((s) => s.id === "review");
+    expect(reviewStep?.returns?.status?.values).toContain("rejected");
+    expect(reviewStep?.on_return?.["rejected"]).toEqual({ retry_job: "implement" });
 
     // implement has retry config
     const retry = wf.jobs["implement"]?.retry as Record<string, unknown> | undefined;
@@ -466,21 +475,22 @@ describe("TC-DOGFOOD-3: full happy-path run", () => {
       await runAgentJob(runDir, runId, "code-map", "map", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["code-map"]!.status).toBe("completed");
 
-      // 3. risk-scan (needs: code-map) — check step id: "validate"
-      //    Uses real MockCheckRunner returning passed=true
-      await runExecutedJob(runDir, runId, "risk-scan", wfJobs, sandbox.projectDir, clock, mockCheckRunner);
+      // 3. risk-scan (needs: code-map) — v0.6: 2 script steps (validate-report, validate-outputs)
+      //    Uses MockProcessRunner (script runner) returning exit code 0
+      await runExecutedJob(runDir, runId, "risk-scan", wfJobs, sandbox.projectDir, clock, mockRunner);
+      await runExecutedJob(runDir, runId, "risk-scan", wfJobs, sandbox.projectDir, clock, mockRunner);
       expect((await readStateSnapshot(runDir)).jobs["risk-scan"]!.status).toBe("completed");
 
       // 4. plan (needs: risk-scan) — agent step id: "plan"
       await runAgentJob(runDir, runId, "plan", "plan", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["plan"]!.status).toBe("completed");
 
-      // 5. architecture-design stays inactive (activation: "manual", not triggered)
+      // 5. architecture-design stays inactive (activation: optional, not triggered)
       expect((await readStateSnapshot(runDir)).jobs["architecture-design"]!.status).toBe("inactive");
 
-      // 6. implement (needs: plan; optional_needs: architecture-design)
-      //    architecture-design is inactive → implement can proceed once plan completes
-      //    P11: implement has 3 steps: agent (implement), script (collect-diff), check (check-diff)
+      // 6. implement (needs: plan, architecture-design)
+      //    v0.6: architecture-design is in needs but is an inactive optional job;
+      //    inactive optional deps are treated as satisfied.
       //    After agent step, engine advances to collect-diff; running script step completes the job.
       await runAgentJob(runDir, runId, "implement", "implement", wfJobs, clock, [], [], wf);
       await runExecutedJob(runDir, runId, "implement", wfJobs, sandbox.projectDir, clock, mockRunner);
@@ -548,6 +558,30 @@ describe("TC-DOGFOOD-5: needs_architecture_design signal activates architecture-
       // Step 1: runInit
       await runInit({ cwd: sandbox.projectDir });
 
+      // v0.6: template no longer includes signals; inject them for this signal-path test
+      let yml = await readFile(sandbox.workflowPath, "utf-8");
+      const signalsBlock = `signals:
+  needs_architecture_design:
+    severity: info
+    priority: 50
+    allowed_from:
+      - plan
+      - review
+    action:
+      activate_job: architecture-design
+
+  review_rejected:
+    severity: high
+    priority: 100
+    allowed_from:
+      - review
+    action:
+      retry_job: implement
+
+`;
+      yml = yml.replace(/^jobs:/m, signalsBlock + "jobs:");
+      await writeFile(sandbox.workflowPath, yml);
+
       const clock = new FakeClock();
 
       // Step 2: createRun
@@ -560,9 +594,8 @@ describe("TC-DOGFOOD-5: needs_architecture_design signal activates architecture-
       });
       const runDir = join(sandbox.runsDir, runId);
 
-      const yml = await readFile(sandbox.workflowPath, "utf-8");
       const wf = loadWorkflow(yml);
-      // wfJobs: architecture-design has activation: "manual" so promoteReadyJobs
+      // wfJobs: architecture-design has activation: optional so promoteReadyJobs
       // skips it (already activated by signal before we run it)
       const wfJobs: Record<string, WfJobDesc> = Object.fromEntries(
         Object.entries(wf.jobs).map(([id, def]) => [
@@ -572,7 +605,6 @@ describe("TC-DOGFOOD-5: needs_architecture_design signal activates architecture-
       );
 
       const mockRunner = new MockProcessRunner();
-      const mockCheckRunner = new MockCheckRunner();
 
       // Verify initial state
       const initialState = await readStateSnapshot(runDir);
@@ -587,8 +619,9 @@ describe("TC-DOGFOOD-5: needs_architecture_design signal activates architecture-
       await runAgentJob(runDir, runId, "code-map", "map", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["code-map"]!.status).toBe("completed");
 
-      // 3. risk-scan — check step "validate"
-      await runExecutedJob(runDir, runId, "risk-scan", wfJobs, sandbox.projectDir, clock, mockCheckRunner);
+      // 3. risk-scan — v0.6: 2 script steps (not check)
+      await runExecutedJob(runDir, runId, "risk-scan", wfJobs, sandbox.projectDir, clock, mockRunner);
+      await runExecutedJob(runDir, runId, "risk-scan", wfJobs, sandbox.projectDir, clock, mockRunner);
       expect((await readStateSnapshot(runDir)).jobs["risk-scan"]!.status).toBe("completed");
 
       // 4. plan — agent step "plan" — emits needs_architecture_design signal
@@ -626,17 +659,17 @@ describe("TC-DOGFOOD-5: needs_architecture_design signal activates architecture-
       expect(activatedEvent?.payload?.["job_id"]).toBe("architecture-design");
 
       // Promote architecture-design to "ready" now that plan is completed.
-      // architecture-design has activation: "manual", so promoteReadyJobs skips it
+      // architecture-design has activation: optional, so promoteReadyJobs skips it
       // (activation !== null). We patch it directly to "ready" since the signal
       // already activated it and plan (its only needed dep) is now completed.
       await patchJobState(runDir, "architecture-design", { status: "ready" });
       expect((await readStateSnapshot(runDir)).jobs["architecture-design"]!.status).toBe("ready");
 
       // 5. architecture-design — agent step "design"
-      //    wfJobs has architecture-design activation: "manual" → promoteReadyJobs skips it.
+      //    wfJobs has architecture-design activation: optional → promoteReadyJobs skips it.
       //    We already patched it to "ready" above, so we call acceptAgentReport directly
       //    (via runAgentJob which also calls promoteReadyJobs — fine since it won't re-touch it).
-      //    promoteReadyJobs will also promote implement (needs: [plan], plan is completed).
+      //    promoteReadyJobs will also promote implement (needs: [plan, architecture-design], plan is completed).
       await runAgentJob(runDir, runId, "architecture-design", "design", wfJobs, clock, [], [], wf);
       expect((await readStateSnapshot(runDir)).jobs["architecture-design"]!.status).toBe("completed");
 
@@ -708,6 +741,30 @@ describe("TC-DOGFOOD-4: review_rejected signal path", () => {
       // Step 1: runInit
       await runInit({ cwd: sandbox.projectDir });
 
+      // v0.6: template no longer includes signals; inject them for this signal-path test
+      let yml = await readFile(sandbox.workflowPath, "utf-8");
+      const signalsBlock2 = `signals:
+  needs_architecture_design:
+    severity: info
+    priority: 50
+    allowed_from:
+      - plan
+      - review
+    action:
+      activate_job: architecture-design
+
+  review_rejected:
+    severity: high
+    priority: 100
+    allowed_from:
+      - review
+    action:
+      retry_job: implement
+
+`;
+      yml = yml.replace(/^jobs:/m, signalsBlock2 + "jobs:");
+      await writeFile(sandbox.workflowPath, yml);
+
       const clock = new FakeClock();
 
       // Step 2: createRun
@@ -720,7 +777,6 @@ describe("TC-DOGFOOD-4: review_rejected signal path", () => {
       });
       const runDir = join(sandbox.runsDir, runId);
 
-      const yml = await readFile(sandbox.workflowPath, "utf-8");
       const wf = loadWorkflow(yml);
       const wfJobs: Record<string, WfJobDesc> = Object.fromEntries(
         Object.entries(wf.jobs).map(([id, def]) => [
@@ -730,7 +786,6 @@ describe("TC-DOGFOOD-4: review_rejected signal path", () => {
       );
 
       const mockRunner = new MockProcessRunner();
-      const mockCheckRunner = new MockCheckRunner();
 
       // Run through the DAG until review
 
@@ -738,11 +793,12 @@ describe("TC-DOGFOOD-4: review_rejected signal path", () => {
       await runAgentJob(runDir, runId, "intake", "analyze", wfJobs, clock, [], [], wf);
       // 2. code-map
       await runAgentJob(runDir, runId, "code-map", "map", wfJobs, clock, [], [], wf);
-      // 3. risk-scan
-      await runExecutedJob(runDir, runId, "risk-scan", wfJobs, sandbox.projectDir, clock, mockCheckRunner);
+      // 3. risk-scan — v0.6: 2 script steps (not check)
+      await runExecutedJob(runDir, runId, "risk-scan", wfJobs, sandbox.projectDir, clock, mockRunner);
+      await runExecutedJob(runDir, runId, "risk-scan", wfJobs, sandbox.projectDir, clock, mockRunner);
       // 4. plan
       await runAgentJob(runDir, runId, "plan", "plan", wfJobs, clock, [], [], wf);
-      // 5. implement (attempt 1) — 3 steps: agent, script, check
+      // 5. implement (attempt 1) — 2 steps: agent (implement), script (collect-diff)
       //    After agent step, engine advances to collect-diff; running script step completes the job.
       await runAgentJob(runDir, runId, "implement", "implement", wfJobs, clock, [], [], wf);
       await runExecutedJob(runDir, runId, "implement", wfJobs, sandbox.projectDir, clock, mockRunner);

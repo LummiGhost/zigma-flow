@@ -14,6 +14,23 @@ import { detectCycles, validateNeedsReferences } from "../dag/index.js";
 import { FilesystemError, ValidationError, WorkflowError } from "../utils/index.js";
 
 // ---------------------------------------------------------------------------
+// Deprecation warning helper (v0.6 control-flow convergence, Issue #209)
+// ---------------------------------------------------------------------------
+
+/**
+ * Issue a deprecation warning to stderr.
+ * Suppressed when `ZIGMA_SUPPRESS_DEPRECATION` env var is set.
+ */
+function deprecationWarn(message: string, alternative?: string): void {
+  if (process.env.ZIGMA_SUPPRESS_DEPRECATION) return;
+  if (alternative) {
+    console.warn(`[DEPRECATED] ${message}. Use ${alternative}. This will be removed in v1.0.`);
+  } else {
+    console.warn(message);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // RouterAction schema
 // ---------------------------------------------------------------------------
 
@@ -666,14 +683,6 @@ function validateExpressions(workflow: WorkflowDefinition): void {
  * Emit a deprecation warning to stderr.
  *
  * Format: [DEPRECATED] <message>. Use <alternative>. This will be removed in v1.0.
- *
- * Suppressed when the ZIGMA_SUPPRESS_DEPRECATION environment variable is set.
- */
-function deprecationWarn(message: string, alternative: string): void {
-  if (process.env.ZIGMA_SUPPRESS_DEPRECATION) return;
-  console.warn(`[DEPRECATED] ${message}. Use ${alternative}. This will be removed in v1.0.`);
-}
-
 // ---------------------------------------------------------------------------
 // Known trigger types per host
 // ---------------------------------------------------------------------------
@@ -1212,7 +1221,169 @@ export function loadWorkflow(yamlText: string, options?: LoadWorkflowOptions): W
     }
   }
 
+  // 12. v0.6 deprecation warnings (Issue #209) — non-fatal, stderr only
+  validateDeprecations(wf);
+
   return wf;
+}
+
+// ---------------------------------------------------------------------------
+// validateDeprecations — v0.6 control-flow convergence warnings (Issue #209)
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan a parsed workflow definition and emit deprecation warnings for
+ * features that will be removed in v1.0. All features continue to work
+ * normally; this is purely a non-fatal notification path.
+ */
+function validateDeprecations(wf: WorkflowDefinition): void {
+  // ── Top-level signals ──────────────────────────────────────────────────
+  if (wf.signals !== undefined && Object.keys(wf.signals).length > 0) {
+    deprecationWarn(
+      "[DEPRECATED] The signals system is deprecated. Use returns/on_return for agent flow control. This will be removed in v1.0."
+    );
+    for (const [sigName, sigDecl] of Object.entries(wf.signals)) {
+      if (sigDecl.priority !== undefined) {
+        deprecationWarn(
+          `[DEPRECATED] signal "${sigName}" priority is deprecated. Use status returns instead. This will be removed in v1.0.`
+        );
+      }
+      if (sigDecl.severity !== undefined) {
+        deprecationWarn(
+          `[DEPRECATED] signal "${sigName}" severity is deprecated. Use status returns instead. This will be removed in v1.0.`
+        );
+      }
+      if (sigDecl.allowed_from !== undefined) {
+        deprecationWarn(
+          `[DEPRECATED] signal "${sigName}" allowed_from is deprecated. Use status returns instead. This will be removed in v1.0.`
+        );
+      }
+    }
+  }
+
+  // ── Job-level deprecations ─────────────────────────────────────────────
+  for (const [jobName, job] of Object.entries(wf.jobs)) {
+    // optional_needs
+    if (job.optional_needs !== undefined && job.optional_needs.length > 0) {
+      deprecationWarn(
+        `[DEPRECATED] Job "${jobName}" uses optional_needs. Use needs with optional job activation instead. This will be removed in v1.0.`
+      );
+    }
+
+    // activation: manual
+    if (job.activation === "manual") {
+      deprecationWarn(
+        `[DEPRECATED] Job "${jobName}" uses activation: manual. Use activation: optional instead. This will be removed in v1.0.`
+      );
+    }
+
+    // retry_with on job-level retry config
+    if (job.retry !== undefined && "retry_with" in job.retry) {
+      deprecationWarn(
+        `[DEPRECATED] Job "${jobName}" uses retry_with. Use explicit upstream outputs instead. This will be removed in v1.0.`
+      );
+    }
+
+    // ── Step-level deprecations ────────────────────────────────────────
+    for (const step of job.steps) {
+      // type: check
+      if (step.type === "check") {
+        deprecationWarn(
+          `[DEPRECATED] Step "${step.id}" in job "${jobName}" uses type: check. Use type: script with exit code checks instead. This will be removed in v1.0.`
+        );
+      }
+
+      // max_visits
+      if (step.max_visits !== undefined) {
+        deprecationWarn(
+          `[DEPRECATED] Step "${step.id}" in job "${jobName}" uses max_visits. Use Job retry with max_attempts instead. This will be removed in v1.0.`
+        );
+      }
+
+      // Scan RouterAction references in step cases
+      if (step.cases) {
+        for (const [caseName, action] of Object.entries(step.cases)) {
+          warnDeprecatedRouterAction(action, `step "${step.id}" case "${caseName}" in job "${jobName}"`);
+        }
+      }
+
+      // Scan on_return actions
+      if (step.on_return) {
+        for (const [status, action] of Object.entries(step.on_return)) {
+          warnDeprecatedRouterAction(action, `step "${step.id}" on_return["${status}"] in job "${jobName}"`);
+        }
+      }
+
+      // Scan on_pass / on_fail actions
+      if (step.on_pass) {
+        warnDeprecatedRouterAction(step.on_pass, `step "${step.id}" on_pass in job "${jobName}"`);
+      }
+      if (step.on_fail) {
+        warnDeprecatedRouterAction(step.on_fail, `step "${step.id}" on_fail in job "${jobName}"`);
+      }
+      if (step.on_failure) {
+        warnDeprecatedRouterAction(step.on_failure, `step "${step.id}" on_failure in job "${jobName}"`);
+      }
+
+      // Scan on_output actions
+      if (step.on_output) {
+        for (const [outputKey, valueMap] of Object.entries(step.on_output)) {
+          for (const [value, action] of Object.entries(valueMap)) {
+            warnDeprecatedRouterAction(action, `step "${step.id}" on_output["${outputKey}"]["${value}"] in job "${jobName}"`);
+          }
+        }
+      }
+
+      // Scan outputs_schema on_value actions
+      if (step.outputs_schema) {
+        for (const [key, schema] of Object.entries(step.outputs_schema)) {
+          if (schema.on_value) {
+            for (const [value, action] of Object.entries(schema.on_value)) {
+              warnDeprecatedRouterAction(action, `step "${step.id}" outputs_schema.${key}.on_value["${value}"] in job "${jobName}"`);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Emit deprecation warnings for RouterAction values that use deprecated
+ * mechanisms (goto_step, goto_job, goto_with, retry_with).
+ */
+function warnDeprecatedRouterAction(
+  action: RouterAction,
+  location: string
+): void {
+  if (typeof action !== "object" || action === null) return;
+
+  if ("goto_step" in action) {
+    deprecationWarn(
+      `goto_step used at ${location}`,
+      "Job retry for rework loops"
+    );
+    if (action.goto_with !== undefined) {
+      deprecationWarn(
+        `goto_with used at ${location}`,
+        "explicit upstream outputs"
+      );
+    }
+  }
+
+  if ("goto_job" in action) {
+    deprecationWarn(
+      `goto_job used at ${location}`,
+      "optional job activation"
+    );
+  }
+
+  if ("retry_with" in action && action.retry_with !== undefined) {
+    deprecationWarn(
+      `retry_with used at ${location}`,
+      "explicit upstream outputs"
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

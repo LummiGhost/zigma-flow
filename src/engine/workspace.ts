@@ -52,6 +52,7 @@ export function extractWorkspacePath(
 export async function resolveJobWorkingDirectory(
   jobDef: JobDefinition,
   state: RunState,
+  runDir?: string,
 ): Promise<string | undefined> {
   const raw = extractWorkspacePath(jobDef);
   if (raw === undefined) return undefined;
@@ -59,7 +60,11 @@ export async function resolveJobWorkingDirectory(
   // Build expression context from current run state
   const exprCtx: ExpressionContext = {
     inputs: {},
-    run: { id: state.run_id, workflow: state.workflow },
+    run: {
+      id: state.run_id,
+      workflow: state.workflow,
+      ...(runDir !== undefined ? { dir: runDir } : {}),
+    },
     jobs: Object.fromEntries(
       Object.entries(state.jobs).map(([id, js]) => [
         id,

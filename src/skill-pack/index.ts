@@ -9,7 +9,7 @@
  * skill-lock.json is deprecated and will be removed in v1.0.
  */
 
-import { access, readFile, readdir, stat } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
@@ -260,11 +260,20 @@ export async function discoverSkillPacks(
     }
   }
 
-  // Update conflict info on entries that had collisions
+  // Update conflict info on entries that had collisions.
+  // Deduplicate conflict paths and filter out self-references (same path as
+  // the winning entry's own packRoot).
   for (const { skillId, conflictingPath } of conflicts) {
     const entry = seen.get(skillId);
     if (entry) {
-      // entry is read-only in the interface, but we can mutate the map value
+      // Ignore self-references (conflicting path equals the entry's own root)
+      if (conflictingPath === entry.packRoot) {
+        continue;
+      }
+      // Skip if this conflicting path is already recorded
+      if (entry.conflictPaths.includes(conflictingPath)) {
+        continue;
+      }
       const updatedPaths = [...entry.conflictPaths, conflictingPath];
       seen.set(skillId, {
         ...entry,

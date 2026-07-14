@@ -11,7 +11,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { loadSkillPack, resolveSkillLock, SkillLockSchema } from "../skill-pack/index.js";
+import { discoverSkillPacks, loadSkillPack, resolveSkillLock, SkillLockSchema } from "../skill-pack/index.js";
 import { FilesystemError, WorkflowError } from "../utils/index.js";
 import { resolveExpression } from "../expression/index.js";
 import type { WorkflowDefinition } from "../workflow/index.js";
@@ -436,14 +436,18 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
       let packRoot: string;
       try {
         packRoot = await resolveSkillLock(zigmaflowDir, skillId);
-      } catch (e: unknown) {
+      } catch {
         // skill-lock.json may not exist (v0.6 deprecation). Fall back to
-        // searching in the project-level skill path.
-        const { discoverSkillPacks: discover } = await import("../skill-pack/index.js");
-        const result = await discover(zigmaflowDir);
+        // searching across all configured skill paths.
+        const result = await discoverSkillPacks(zigmaflowDir);
         const found = result.skills.find((s) => s.skillId === skillId);
         if (!found) {
-          throw e; // Re-throw original error if not found in any search path
+          throw new WorkflowError(
+            `Skill "${skillId}" not found: skill-lock.json is missing or deprecated, ` +
+              `and the skill was not discovered in any search path ` +
+              `(${result.searchPaths.map((p) => p.source).join(", ")}).`,
+            { details: { skillId, alias } },
+          );
         }
         packRoot = found.packRoot;
       }

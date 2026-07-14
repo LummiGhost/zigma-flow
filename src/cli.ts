@@ -36,20 +36,7 @@ import { doctorAction } from "./commands/doctor.js";
 import { eventsAction } from "./commands/events.js";
 import { artifactsAction } from "./commands/artifacts.js";
 import { skillAddAction } from "./commands/skill-add.js";
-import { deprecationWarn } from "./utils/index.js";
 import { SystemClock } from "./run/index.js";
-
-/**
- * Emit a deprecation warning to stderr.
- *
- * Format: [DEPRECATED] <message>. Use <alternative>. This will be removed in v1.0.
- *
- * Suppressed when the ZIGMA_SUPPRESS_DEPRECATION environment variable is set.
- */
-function cliDeprecationWarn(message: string, alternative: string): void {
-  if (process.env.ZIGMA_SUPPRESS_DEPRECATION) return;
-  console.warn(`[DEPRECATED] ${message}. Use ${alternative}. This will be removed in v1.0.`);
-}
 
 function collectInputs(value: string, previous: string[]): string[] {
   return previous.concat([value]);
@@ -304,7 +291,6 @@ async function runProgram(
     .option("--input <key=value>", "Named input for the workflow (repeatable).", collectInputs, [] as string[])
     .exitOverride()
     .action(async (workflowPath: string, options: { task: string; input?: string[] }) => {
-      cliDeprecationWarn("--task", "--input task='...'");
       const inputs = parseInputs(options.input);
       await runAction(workflowPath, { task: options.task, projectRoot: cwd(), ...(inputs !== undefined ? { inputs } : {}) });
     });
@@ -320,9 +306,6 @@ async function runProgram(
     .option("--input <key=value>", "Named input for the workflow (repeatable).", collectInputs, [] as string[])
     .exitOverride()
     .action(async (workflowPath: string, options: { task?: string; resume?: string; backend?: string; parallelism?: number; failFast?: boolean; input?: string[] }) => {
-      if (options.task !== undefined) {
-        cliDeprecationWarn("--task", "--input task='...'");
-      }
       if (options.task === undefined && options.resume === undefined) {
         console.error("Error: Either --task <description> or --resume <run-id> is required.");
         process.exit(2);
@@ -330,11 +313,6 @@ async function runProgram(
       if (options.task !== undefined && options.resume !== undefined) {
         console.error("Error: --task and --resume are mutually exclusive.");
         process.exit(2);
-      }
-      if (options.task !== undefined && !process.env.ZIGMA_SUPPRESS_DEPRECATION) {
-        console.warn(
-          "[DEPRECATED] --task is deprecated. Use --input task='...' instead. This will be removed in v1.0.",
-        );
       }
       const inputs = parseInputs(options.input);
       // Map --task to inputs.task internally so task is treated as a regular input
@@ -499,7 +477,6 @@ async function runProgram(
     .option("--job <job>", "Job id to execute (defaults to the single ready job).")
     .exitOverride()
     .action(async (options: { job?: string }) => {
-      deprecationWarn("check", "zigma-flow invoke");
       await stepAction({
         zigmaflowDir: cwd(),
         ...(options.job !== undefined ? { job: options.job } : {}),

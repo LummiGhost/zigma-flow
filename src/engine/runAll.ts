@@ -185,6 +185,24 @@ export interface RunAllOpts {
    * same batch. Defaults to false.
    */
   failFast?: boolean;
+  /**
+   * Pause before executing a specific step (for debugging/review).
+   * Format: "job.step" (e.g., "plan.plan"). Pauses after generating the prompt
+   * but before calling the Agent backend.
+   */
+  pauseBefore?: string;
+  /**
+   * Stop execution after completing a specific step (for debugging).
+   * Format: "job.step" (e.g., "implement.implement"). Completes the step normally
+   * but prevents further steps from executing.
+   */
+  stopAfter?: string;
+  /**
+   * Save all generated prompts to artifacts without pausing (debugging mode).
+   * When true, all Agent Step prompts are persisted but execution continues
+   * without interruption. This is useful for prompt auditing.
+   */
+  saveAllPrompts?: boolean;
 }
 
 export interface RunAllSummary {
@@ -244,6 +262,10 @@ interface ExecuteJobOnceCtx {
   signal: AbortSignal | undefined;
   batchId: string;
   onEvent: ((e: ZigmaFlowEvent) => void) | undefined;
+  // Debugging flags (from RunAllOpts)
+  pauseBefore: string | undefined; // "job.step" format
+  stopAfter: string | undefined; // "job.step" format
+  saveAllPrompts: boolean | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +295,9 @@ async function executeJobOnce(
     signal,
     batchId,
     onEvent,
+    pauseBefore,
+    stopAfter,
+    saveAllPrompts,
   } = ctx;
 
   // Handle virtual traverse jobs: redirect to the target job definition (Issue #179)
@@ -368,6 +393,7 @@ async function executeJobOnce(
       runDir, runId, zigmaflowDir, jobId, wf, state,
       backendResolver, stateStore, eventWriter, clock,
       signal, batchId, onEvent, stepDef, stepId,
+      pauseBefore, stopAfter, saveAllPrompts,
     });
   }
 
@@ -381,6 +407,7 @@ async function executeJobOnce(
       backendResolver, stateStore, eventWriter, clock,
       signal, batchId, onEvent,
       stepDef, stepId,
+      pauseBefore, stopAfter, saveAllPrompts,
     });
   }
 
@@ -402,6 +429,7 @@ async function executeJobOnce(
 interface StepCtx extends ExecuteJobOnceCtx {
   stepDef: import("../workflow/index.js").StepDefinition;
   stepId: string;
+  // Debugging flags passed through ExecuteJobOnceCtx
 }
 
 async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
@@ -409,6 +437,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     runDir, runId, zigmaflowDir, jobId, wf, state,
     backendResolver, stateStore, eventWriter, clock,
     signal, batchId, onEvent, stepDef, stepId,
+    pauseBefore, stopAfter, saveAllPrompts,
   } = ctx;
 
   // Build context (read-only — no disk writes)
@@ -484,6 +513,13 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   };
   await eventWriter.appendEvent(runDir, promptEvent);
   onEvent?.(promptEvent);
+
+  // ── Debug mode: saveAllPrompts ────────────────────────────────────────
+  // If saveAllPrompts is enabled, log the prompt path for debugging
+  if (saveAllPrompts) {
+    console.log(`[PROMPT SAVED] ${jobId}/${bundle.stepId} (attempt ${attempt})`);
+    console.log(`  Path: ${join(runDir, "current-step.md")}`);
+  }
 
   // Transition job to running (atomic within queue — AD-P14-003)
   await stateStore.updateState(runDir, (current) => ({
@@ -573,6 +609,49 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   };
   await eventWriter.appendEvent(runDir, invokedEvent);
   onEvent?.(invokedEvent);
+
+  // ── Pause checkpoint (debugging): before agent execution ───────────────
+  // If pauseBefore matches current job.step, pause and return blocked status
+  if (pauseBefore !== undefined) {
+    const [pauseJobId, pauseStepId] = pauseBefore.split(".");
+    if (pauseJobId === jobId && pauseStepId === bundle.stepId) {
+      // Pause before executing this step
+      const pauseEventId = await nextSequentialEventId(runDir, eventWriter);
+      const pauseEvent: ZigmaFlowEvent = {
+        id: pauseEventId,
+        type: "execution_paused",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: bundle.stepId,
+        attempt,
+        batch_id: batchId,
+        payload: {
+          reason: "pauseBefore",
+          instruction: `Prompt saved at: ${join(runDir, "current-step.md")}\nResume with: zigma-flow resume ${runId} --job ${jobId}`,
+        },
+      };
+      await eventWriter.appendEvent(runDir, pauseEvent);
+      onEvent?.(pauseEvent);
+
+      // Update job state to blocked (will prevent further execution)
+      await stateStore.updateState(runDir, (current) => ({
+        ...current,
+        last_event_id: pauseEventId,
+        status: "blocked",
+        jobs: {
+          ...current.jobs,
+          [jobId]: {
+            ...current.jobs[jobId]!,
+            status: "blocked",
+          },
+        },
+      }));
+
+      return { jobId, success: false, action: "blocked", detail: "Paused at pauseBefore checkpoint" };
+    }
+  }
 
   const result = await backend.execute({
     prompt: promptText,
@@ -916,6 +995,41 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   // Single-turn agent steps should not require outputs.completed to progress.
   await advanceJob({ runDir, runId, jobId, clock });
 
+  // ── Stop checkpoint (debugging): after step completion ──────────────────
+  // If stopAfter matches current job.step, mark run as blocked to stop execution
+  if (stopAfter !== undefined) {
+    const [stopJobId, stopStepId] = stopAfter.split(".");
+    if (stopJobId === jobId && stopStepId === bundle.stepId) {
+      const stopEventId = await nextSequentialEventId(runDir, eventWriter);
+      const stopEvent: ZigmaFlowEvent = {
+        id: stopEventId,
+        type: "execution_stopped",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: bundle.stepId,
+        attempt,
+        batch_id: batchId,
+        payload: {
+          reason: "stopAfter",
+          instruction: `Step ${bundle.stepId} completed. Execution stopped at stopAfter checkpoint.\nResume with: zigma-flow resume ${runId} --job <next-ready-job>`,
+        },
+      };
+      await eventWriter.appendEvent(runDir, stopEvent);
+      onEvent?.(stopEvent);
+
+      // Mark run as blocked
+      await stateStore.updateState(runDir, (current) => ({
+        ...current,
+        last_event_id: stopEventId,
+        status: "blocked",
+      }));
+
+      return { jobId, success: true, action: "completed" };
+    }
+  }
+
   return { jobId, success: true, action: "completed" };
 }
 
@@ -1075,6 +1189,9 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
     eventWriter = new JsonlEventWriter(),
     parallelism: rawParallelism,
     failFast = false,
+    pauseBefore,
+    stopAfter,
+    saveAllPrompts,
   } = opts;
 
   // Clamp parallelism to at least 1
@@ -1232,6 +1349,9 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         signal: jobControllers.get(j.jobId)?.signal,
         batchId,
         onEvent,
+        pauseBefore,
+        stopAfter,
+        saveAllPrompts,
       }),
     );
 

@@ -125,6 +125,13 @@ export function validateReportShape(parsed: unknown): AgentReport {
     errors.push('missing required field "summary" (must be a string)');
   }
 
+  // v0.6 deprecation: context_patches
+  if (!process.env.ZIGMA_SUPPRESS_DEPRECATION && obj["context_patches"] !== undefined) {
+    console.warn(
+      "[DEPRECATED] context_patches are deprecated, use outputs and artifacts instead. This will be removed in v1.0.",
+    );
+  }
+
   if (errors.length > 0) {
     throw new ValidationError(
       `report.json has ${errors.length} validation error(s):\n  - ${errors.join("\n  - ")}`,
@@ -460,6 +467,13 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
   }
 
   if (signalsArray.length > 0) {
+    // v0.6 deprecation warning (Issue #209) — signals still processed normally
+    if (!process.env.ZIGMA_SUPPRESS_DEPRECATION) {
+      console.warn(
+        "[DEPRECATED] Agent report signals are deprecated. Use status returns instead. This will be removed in v1.0."
+      );
+    }
+
     // Validate each signal before any disk mutation
     for (const sig of signalsArray) {
       const decl = wf.signals?.[sig.type];

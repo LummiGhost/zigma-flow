@@ -31,7 +31,7 @@
  *     this workflow.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -42,6 +42,7 @@ import type { ContextBundle } from "../../src/context/index.js";
 import type { Clock, RunState } from "../../src/run/index.js";
 import {
   LocalStateStore,
+  findLatestRunId,
   readActiveRun,
   writeActiveRun,
 } from "../../src/run/index.js";
@@ -1194,7 +1195,7 @@ describe("createRun extension — active_run pointer", () => {
     await rm(sandbox.projectRoot, { recursive: true, force: true });
   });
 
-  it("createRun sets active_run in .zigma-flow/config.json to the new runId (T-CREATE-1, UC-CREATE-ACTIVE-1)", async () => {
+  it("createRun no longer sets deprecated active_run in .zigma-flow/config.json (T-CREATE-1, UC-CREATE-ACTIVE-1)", async () => {
     const { runId } = await createRun({
       workflowPath,
       task: "fix the bug",
@@ -1203,8 +1204,51 @@ describe("createRun extension — active_run pointer", () => {
       clock: new FakeClock(),
     });
 
+    // v0.6: active_run is deprecated — createRun no longer updates config.json
     const got = await readActiveRun(sandbox.zigmaflowDir);
-    expect(got).toBe(runId);
+    expect(got).toBeNull();
+    // But the run was still created successfully
+    expect(runId).toBeTruthy();
+  });
+
+  it("old config with active_run still parses but prints deprecation warning (T-DEPR-ACTIVE-1)", async () => {
+    // Write a config that has active_run set (simulating old project)
+    await writeFile(
+      sandbox.configPath,
+      JSON.stringify({ tool_version: "0.4.0", active_run: "20260101-0001" }, null, 2),
+      "utf-8",
+    );
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await readActiveRun(sandbox.zigmaflowDir);
+      // Still returns the value for backward compat
+      expect(result).toBe("20260101-0001");
+      // But prints deprecation warning
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[DEPRECATED]"),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("active_run"),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("findLatestRunId returns the most recent run by directory name (T-DEPR-FIND-LATEST-1)", async () => {
+    // Create two run directories with different dates
+    await mkdir(join(sandbox.runsDir, "20260101-0001"), { recursive: true });
+    await mkdir(join(sandbox.runsDir, "20260102-0001"), { recursive: true });
+    await mkdir(join(sandbox.runsDir, "20260101-0002"), { recursive: true });
+
+    const latest = await findLatestRunId(sandbox.runsDir);
+    expect(latest).toBe("20260102-0001");
+  });
+
+  it("findLatestRunId returns null when no runs exist (T-DEPR-FIND-LATEST-2)", async () => {
+    const result = await findLatestRunId(sandbox.runsDir);
+    expect(result).toBeNull();
   });
 });
 

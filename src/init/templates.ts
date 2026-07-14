@@ -17,7 +17,6 @@ export function configJsonTemplate(version: string): string {
   return JSON.stringify(
     {
       tool_version: version,
-      active_run: null,
       agent: {
         backend: "claude-code",
         backends: {
@@ -133,14 +132,15 @@ export function codeChangeWorkflowYml(detection?: DetectionResult): string {
 
   // --- Header (through implement job) ---
   const header = `name: code-change
-version: 0.3.0
+version: 0.6.0
 
 on:
   manual:
-    inputs:
-      task:
-        type: string
-        required: true
+
+inputs:
+  task:
+    type: string
+    required: true
 
 skills:
   code:
@@ -151,24 +151,6 @@ permissions:
   edits: write
   commands: none
   workflow_state: none
-
-signals:
-  needs_architecture_design:
-    severity: info
-    priority: 50
-    allowed_from:
-      - plan
-      - review
-    action:
-      activate_job: architecture-design
-
-  review_rejected:
-    severity: high
-    priority: 100
-    allowed_from:
-      - review
-    action:
-      retry_job: implement
 
 jobs:
   intake:
@@ -217,20 +199,15 @@ jobs:
       mode: read-only
     steps:
       - id: validate-report
-        type: check
-        uses: zigma/file-exists
-        with:
-          file: "jobs/code-map/attempts/1/steps/map/report.json"
-        on_fail: fail
+        type: script
+        run: |
+          node -e "process.exit(require('fs').existsSync(process.argv[1])?0:1)" -- jobs/code-map/attempts/1/steps/map/report.json
+        on_failure: fail
       - id: validate-outputs
-        type: check
-        uses: zigma/required-fields
-        with:
-          file: "jobs/code-map/attempts/1/steps/map/report.json"
-          fields:
-            - outputs
-            - summary
-        on_fail: fail
+        type: script
+        run: |
+          node -e "const fs=require('fs');const d=JSON.parse(fs.readFileSync(process.argv[1],'utf-8'));const m=['outputs','summary'].filter(f=>!(f in d));if(m.length){console.error('Missing:',m);process.exit(1)}" -- jobs/code-map/attempts/1/steps/map/report.json
+        on_failure: fail
 
   plan:
     needs:
@@ -250,12 +227,21 @@ jobs:
           validation_commands: {}
           contracts_to_preserve: {}
           out_of_scope: {}
+        returns:
+          status:
+            values:
+              - ready
+              - needs_architecture_design
+              - blocked
+        on_return:
+          needs_architecture_design:
+            activate_job: architecture-design
         expose:
           skills:
             - code
 
   architecture-design:
-    activation: "manual"
+    activation: optional
     needs:
       - plan
     workspace:
@@ -273,7 +259,6 @@ jobs:
   implement:
     needs:
       - plan
-    optional_needs:
       - architecture-design
     retry:
       max_attempts: 3
@@ -406,12 +391,23 @@ ${unitTestNeeds}
           findings: {}
           accepted_risks: {}
           non_blocking_improvements: {}
+        returns:
+          status:
+            values:
+              - approved
+              - rejected
+              - needs_architecture_design
+        on_return:
+          rejected:
+            retry_job: implement
+          needs_architecture_design:
+            activate_job: architecture-design
         expose:
           skills:
             - code
 
   gate-merge:
-    activation: "manual"
+    activation: optional
     needs:
       - review
     steps:
@@ -430,7 +426,6 @@ ${unitTestNeeds}
   summarize:
     needs:
       - review
-    optional_needs:
       - gate-merge
     workspace:
       mode: read-only
@@ -464,10 +459,11 @@ version: 0.1.0
 
 on:
   manual:
-    inputs:
-      task:
-        type: string
-        required: true
+
+inputs:
+  task:
+    type: string
+    required: true
 
 skills:
   code:
@@ -786,11 +782,12 @@ intake
   └── code-map
         └── risk-scan
               └── plan
-                    ├── architecture-design [optional, activation: manual]
-                    └── implement (optional_needs: architecture-design)
+                    ├── architecture-design [activation: optional]
+                    └── implement (needs: plan + architecture-design)
                           ├── static-check
                           ├── unit-test
                           └── review
+                                ├── gate-merge [activation: optional]
                                 └── summarize
 \`\`\`
 
@@ -801,10 +798,12 @@ The report must include the following fields:
 
 - \`outputs\`: key-value pairs of step outputs.
 - \`artifacts\`: list of artifact file paths produced during this step.
-- \`signals\`: list of signal names to emit (e.g. \`review_rejected\`).
+- \`signals\`: always an empty array (v0.6: signals are deprecated; use status returns instead).
 - \`summary\`: a short human-readable summary of what was done.
+- \`status\` (for steps with \`returns\`): a structured return status from the
+  step's declared \`returns.status.values\`. Used with \`on_return\` for flow control.
 
-Example:
+Example (simple step):
 \`\`\`json
 {
   "outputs": { "key": "value" },
@@ -814,28 +813,45 @@ Example:
 }
 \`\`\`
 
+Example (step with status return):
+\`\`\`json
+{
+  "outputs": { "verdict": "approved", "checked_files": ["src/index.ts"] },
+  "artifacts": ["path/to/review-notes.md"],
+  "signals": [],
+  "summary": "Review completed. All checks passed.",
+  "status": "approved"
+}
+\`\`\`
+
 ## Job Expectations
 
 - **intake**: Analyze the task description. Output an intake-summary artifact.
 - **code-map**: Map the relevant code areas. Output a code-map artifact.
-- **risk-scan**: Automated check that code-map artifact exists and is valid.
-- **plan**: Create an implementation plan. Output a plan artifact. May emit
-  \`needs_architecture_design\` signal to activate the architecture-design job.
+- **risk-scan**: Automated script checks that code-map artifact exists and is valid.
+- **plan**: Create an implementation plan. Output a plan artifact. Uses
+  \`returns/on_return\` with statuses \`ready\`, \`needs_architecture_design\`,
+  \`blocked\`. \`needs_architecture_design\` activates the optional
+  architecture-design job.
 - **architecture-design** (optional): Produce an architecture design artifact
-  when activated by signal.
+  when activated. Job has \`activation: optional\`.
 - **implement**: Implement the change. Has retry support (max 3 attempts).
+  Depends on plan and architecture-design (inactive optional deps are satisfied).
 - **static-check**: Automated typecheck and lint (script step).
 - **unit-test**: Automated test run (script step).
-- **review**: Review the implementation. May emit \`review_rejected\` signal to
-  retry the implement job.
+- **review**: Review the implementation. Uses \`returns/on_return\` with
+  statuses \`approved\`, \`rejected\`, \`needs_architecture_design\`.
+  \`rejected\` retries the implement job; \`needs_architecture_design\`
+  activates architecture-design.
+- **gate-merge** (optional): Human approval gate. Has \`activation: optional\`.
 - **summarize**: Summarize the completed change. Output a summary artifact.
 
-## Signals
+## Flow Control (v0.6)
 
-- \`needs_architecture_design\`: Emitted by plan or review. Activates the
-  optional architecture-design job.
-- \`review_rejected\`: Emitted by review. Retries the implement job (up to 3
-  total attempts).
+Agent steps use \`returns/on_return\` for structured flow control instead of
+signals. Each step declares allowed return statuses via \`returns.status.values\`
+and maps them to routing actions via \`on_return\`. Optional jobs use
+\`activation: optional\` instead of \`activation: manual\`.
 
 ## Stop After Completing
 

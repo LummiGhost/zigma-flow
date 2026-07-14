@@ -129,7 +129,7 @@ describe("enterHumanGate", () => {
     const state = await stateStore.readSnapshot(t.runDir);
     expect(state).not.toBeNull();
     const job = state!.jobs["gate"]!;
-    expect(job.step_status).toBe("awaiting_human");
+    expect(job.step_status).toBe("awaiting_input");
     expect(job.status).toBe("running");
 
     // Verify event was written

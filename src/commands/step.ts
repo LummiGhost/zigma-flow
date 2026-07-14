@@ -35,6 +35,7 @@ import {
   StateError,
   UserInputError,
   WorkflowError,
+  deprecationWarn,
 } from "../utils/index.js";
 import { artifactStepDir } from "../artifact/index.js";
 
@@ -53,6 +54,8 @@ export interface StepActionOpts {
   runner?: ProcessRunner;
   /** Optional explicit run id (from --run flag). */
   runId?: string;
+  /** Use the most recently created run (from --latest flag, explicit). */
+  latest?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,11 +95,12 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function stepAction(opts: StepActionOpts): Promise<void> {
+  deprecationWarn("'zigma-flow step' is deprecated", "zigma-flow invoke");
   const { zigmaflowDir, clock, runId } = opts;
   const stateStore = new LocalStateStore();
 
-  // 1. Resolve run id (explicit --run or active_run from config)
-  const activeRunId = await resolveRunId(zigmaflowDir, runId);
+  // 1. Resolve run id (explicit --run, --latest, or deprecated fallback from config)
+  const activeRunId = await resolveRunId(zigmaflowDir, runId, opts.latest !== undefined ? { latest: opts.latest } : undefined);
 
   const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
   const runDir = join(runsDir, activeRunId);

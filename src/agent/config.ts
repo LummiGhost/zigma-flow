@@ -52,8 +52,7 @@ export interface ResolvedBackend {
 
 interface ZigmaConfig {
   tool_version?: string;
-  /** @deprecated Project version field — ignored, tracked by git instead. Will be removed in v1.0. */
-  version?: string;
+  /** @deprecated This field is deprecated and will be removed in v1.0. Use --run <run-id> or --latest. */
   active_run?: string | null;
   agent?: AgentConfig;
 }
@@ -102,13 +101,6 @@ export async function loadAgentConfig(zigmaflowDir: string): Promise<AgentConfig
     parsed = JSON.parse(raw) as ZigmaConfig;
   } catch {
     return DEFAULT_AGENT_CONFIG;
-  }
-
-  if (parsed.version !== undefined) {
-    console.warn(
-      "[DEPRECATED] config version field is deprecated. Project history is tracked by git. " +
-        "This field is ignored and will be removed in v1.0.",
-    );
   }
 
   return parsed.agent ?? DEFAULT_AGENT_CONFIG;

@@ -1,9 +1,18 @@
 # Zigma Flow MVP Architecture
 
-文档版本：v0.1（含 v0.2 修订增量，2026-06-27）
+文档版本：v0.6（含 v0.2、v0.6 修订增量，2026-07-14）
 日期：2026-06-06
-适用范围：Zigma Flow PRD v0.3 + v0.2 修订增量；v0.2 修订集中在 §5.2、§6.2、§7.1、§7.2
+适用范围：Zigma Flow PRD v0.3 + v0.2/v0.6 修订增量；v0.2 修订集中在 §5.2、§6.2、§7.1、§7.2
 
+> **v0.6 修订总览（2026-07-14）：** Human Step 从 approve/reject 双命令模式简化为统一的 pause-and-resume 协议：
+>
+> - §7.1 Engine 入口清单：追加 `resumeWithInput` 统一入口。
+> - §7.2 状态转换规则：Step `awaiting_human` 更名为 `awaiting_input`；新增 `paused` run status。
+> - Human Step 支持 `inputs` schema 定义结构化输入，Engine 验证输入后记录决策。
+> - `approve`/`reject` CLI 命令标记为 deprecated，改为 `resume` 命令的薄包装。
+> - `approvers` 字段标记为 deprecated（身份/角色管理移至 Host 层）。
+> - 详见 GitHub Issue #210。
+>
 > **v0.2 修订总览（2026-06-27）：** 为承载 P13 引入的三类 Agent 主动控制流能力（结构化返回状态、workflow 变量与上下文块、条件/跳转/有界循环），架构在以下位置扩展：
 >
 > - §5.2 模块边界：补充 `engine` 中的三个新入口（applyContextPatch、applyStatusReturn、evaluateStepCondition），并扩展 `context` 与 `expression` 的责任面。
@@ -329,6 +338,13 @@ enterHumanGate(runId, jobId, stepId)
 recordHumanDecision(runId, jobId, stepId, decision, ...)
 ```
 
+v0.6 追加统一 resume 入口（#210）：
+
+```text
+resumeWithInput(runId, jobId, stepId, input, actor, ...)  # 统一暂停-恢复协议：验证 input schema → 记录决策 → 推进状态
+```
+`resumeWithInput` 取代 `recordHumanDecision` 作为主入口；后者保留为内部实现细节。
+
 所有新入口仍遵守 §7.1 既有约束：CLI 不直接改 state，所有写入走 StateStore + EventWriter；patch 类入口拒绝触及保留字段。
 
 ### 7.2 状态转换规则
@@ -375,7 +391,26 @@ awaiting_human -> failed            # 新增（P15）：reject 且无后续 rout
 awaiting_human -> cancelled         # 新增（P15）：Ctrl-C / abort
 ```
 
+【v0.6 修订】Human Step 状态转换更新（#210）：
+
+```text
+running -> awaiting_input           # 重命名（v0.6）：awaiting_human → awaiting_input，语义扩展为通用暂停-输入
+awaiting_input -> completed         # 通过 resumeWithInput 提交有效输入（approve 类决策）
+awaiting_input -> failed            # 通过 resumeWithInput 提交拒绝决策
+awaiting_human -> *  (兼容)         # v0.6 仍识别旧状态名，与 awaiting_input 等价
+```
+
 非法转换必须返回明确错误，并且不得写入 snapshot。
+
+【v0.6 修订】Run status 新增：
+
+```text
+running -> paused                   # 新增（v0.6）：当 human step 进入 awaiting_input 时，run 标记为 paused
+paused -> running                   # 新增（v0.6）：当 human input 被提交且决策推进后恢复
+running -> cancelled                # 增强：经 cancelRun 触发，写 run_cancelled 事件
+```
+
+`cancelled` 和 `paused` 是独立终态/中态；`paused` 表示 run 正在等待外部输入但未终止。
 
 【v0.2 修订】Run status 新增：
 

@@ -5,7 +5,7 @@
  * WF-P3-RUN Step 2 / WF-P6-DISPATCH Step 2.
  */
 
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 
 import { parse as parseYaml } from "yaml";
@@ -13,7 +13,7 @@ import { parse as parseYaml } from "yaml";
 import { computeReadyJobs } from "../dag/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { Clock, RunState } from "../run/index.js";
-import { ConfigError, StateError, WorkflowError } from "../utils/index.js";
+import { StateError, WorkflowError } from "../utils/index.js";
 import type { ProcessRunner } from "../script/index.js";
 import { ExecaProcessRunner } from "../script/index.js";
 import { executeScriptStep } from "../script/executor.js";
@@ -28,7 +28,6 @@ import {
   SystemClock,
   createRunDirectory,
   snapshotSkillLock,
-  writeActiveRun,
   writeRunYaml,
 } from "../run/index.js";
 import { nextEventId as formatEventId, nextSequentialEventId } from "../events/index.js";
@@ -51,8 +50,18 @@ export { applyStatusReturn } from "./applyStatusReturn.js";
 export type { ApplyStatusReturnOpts } from "./applyStatusReturn.js";
 export { applyContextPatch } from "./applyContextPatch.js";
 export type { ApplyContextPatchOpts, ContextPatch, ContextPatchKind } from "./applyContextPatch.js";
-export { enterHumanGate, recordHumanDecision } from "./humanGate.js";
-export type { EnterHumanGateOpts, RecordHumanDecisionOpts, DecisionSource, DecisionActor } from "./humanGate.js";
+export { enterHumanGate, recordHumanDecision, resumeWithInput } from "./humanGate.js";
+export type {
+  EnterHumanGateOpts,
+  RecordHumanDecisionOpts,
+  RecordHumanDecisionResult,
+  ResumeWithInputOpts,
+  ResumeWithInputResult,
+  DecisionSource,
+  DecisionActor,
+  HumanInputSchema,
+  HumanInput,
+} from "./humanGate.js";
 export { checkAndExecuteTraverses, resolveTraverseInput, getTraverseInputJob, parseVirtualJobId } from "./traverse.js";
 export type { ExecuteTraverseOpts, ExecuteTraverseResult } from "./traverse.js";
 export { resolveJobWorkingDirectory, extractWorkspacePath } from "./workspace.js";
@@ -105,6 +114,13 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
   }
 
   // RC-R03: Write run.yml
+  // Map task into inputs so it is treated as a regular input channel.
+  // task is still stored at the top level for backward compatibility with
+  // existing tooling, consumers, and state.json format.
+  const mergedRunInputs: Record<string, string> = {
+    task: inputs.task,
+    ...(inputs.inputs ?? {}),
+  };
   await writeRunYaml(runDir, {
     task: inputs.task,
     workflow: {
@@ -113,7 +129,7 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     },
     created_at: createdAt,
     skill_lock_snapshot: "skill-lock.snapshot.json",
-    ...(inputs.inputs !== undefined ? { inputs: inputs.inputs } : {}),
+    inputs: mergedRunInputs,
     ...(callerContextSnapshotPath !== undefined
       ? { caller_context_snapshot: callerContextSnapshotPath }
       : {}),
@@ -226,16 +242,8 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
   // RC-R07/R11: Atomically write state.json via StateStore (Engine is sole writer)
   await stateStore.writeSnapshot(runDir, state);
 
-  // WF-P5-PROMPT: Write active_run pointer to config.json.
-  // runsDir = <project>/.zigma-flow/runs → zigmaflowDir = <project>
-  const zigmaflowDir = dirname(dirname(inputs.runsDir));
-  try {
-    await writeActiveRun(zigmaflowDir, runId);
-  } catch (e: unknown) {
-    // Suppress ConfigError (config.json not yet created — first run / test setups).
-    // Re-throw all other errors (permission denied, disk full, etc.).
-    if (!(e instanceof ConfigError)) throw e;
-  }
+  // v0.6: active_run is deprecated — new runs no longer update config.json.
+  // The run ID is returned to the caller for explicit use with --run <run-id>.
 
   return { runId };
 }

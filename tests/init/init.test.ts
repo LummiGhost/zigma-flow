@@ -239,7 +239,7 @@ describe("runInit integration", () => {
     expect(result?.alreadyInitialized).toBe(true);
   });
 
-  it("config.json contains tool_version and active_run placeholder (T-INIT-7)", async () => {
+  it("config.json does not contain deprecated active_run placeholder (T-INIT-7)", async () => {
     const { error } = await safeRunInit(tempDir);
     expect(error).toBeUndefined();
 
@@ -247,8 +247,8 @@ describe("runInit integration", () => {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
 
     expect(parsed["tool_version"]).toBe(getPackageInfo().version);
-    expect("active_run" in parsed).toBe(true);
-    expect(parsed["active_run"]).toBeNull();
+    // v0.6: active_run is deprecated — init no longer includes it in the template
+    expect("active_run" in parsed).toBe(false);
   });
 
   it("does NOT generate skill-lock.json (deprecated in v0.6) (T-INIT-8)", async () => {
@@ -260,7 +260,7 @@ describe("runInit integration", () => {
     expect(await pathExists(lockPath)).toBe(false);
   });
 
-  it("code-change.yml contains skills, signals, agent/script/check job (T-INIT-9)", async () => {
+  it("code-change.yml contains skills, jobs, agent/script/human steps (T-INIT-9)", async () => {
     const { error } = await safeRunInit(tempDir);
     expect(error).toBeUndefined();
 
@@ -270,12 +270,13 @@ describe("runInit integration", () => {
     );
 
     // Substring assertions (avoids depending on a YAML parser in P1).
+    // v0.6: signals and type:check are deprecated; templates use returns/on_return and type:script
     expect(yml).toMatch(/^skills:/m);
-    expect(yml).toMatch(/^signals:/m);
     expect(yml).toMatch(/^jobs:/m);
     expect(yml).toMatch(/type:\s*agent/);
     expect(yml).toMatch(/type:\s*script/);
-    expect(yml).toMatch(/type:\s*check/);
+    expect(yml).toMatch(/type:\s*human/);
+    expect(yml).toMatch(/activation:\s*optional/);
   });
 
   it("skill.yml declares knowledge, prompts, scripts, checks, functions, policies (T-INIT-10)", async () => {
@@ -522,39 +523,43 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
       return (job?.needs ?? []).slice().sort();
     };
 
+    // v0.6: implement now uses needs (not optional_needs) for architecture-design;
+    // summarize now uses needs (not optional_needs) for gate-merge
     expect(needsOf("intake")).toEqual([]);
     expect(needsOf("code-map")).toEqual(["intake"]);
     expect(needsOf("risk-scan")).toEqual(["code-map"]);
     expect(needsOf("plan")).toEqual(["risk-scan"]);
     expect(needsOf("architecture-design")).toEqual(["plan"]);
-    expect(needsOf("implement")).toEqual(["plan"]);
+    expect(needsOf("implement")).toEqual(["architecture-design", "plan"]);
     expect(needsOf("static-check")).toEqual(["implement"]);
     expect(needsOf("unit-test")).toEqual(["implement"]);
     expect(needsOf("review")).toEqual(["static-check", "unit-test"]);
-    expect(needsOf("summarize")).toEqual(["review"]);
+    expect(needsOf("summarize")).toEqual(["gate-merge", "review"]);
     expect(needsOf("gate-merge")).toEqual(["review"]);
   });
 
   // ---------- TC-WORKFLOW-6 ----------
-  it("architecture-design declares activation: 'manual' (TC-WORKFLOW-6)", async () => {
+  it("architecture-design declares activation: optional (TC-WORKFLOW-6)", async () => {
     const { error } = await safeRunInit(tempDir);
     expect(error).toBeUndefined();
 
     const wf = await loadGeneratedWorkflow();
     const job = wf.jobs["architecture-design"];
     expect(job).toBeDefined();
-    expect(job?.activation).toBe("manual");
+    // v0.6: activation: manual is deprecated; template uses optional
+    expect(job?.activation).toBe("optional");
   });
 
   // ---------- TC-WORKFLOW-7 ----------
-  it("implement has optional_needs and retry config (TC-WORKFLOW-7)", async () => {
+  it("implement has needs (architecture-design) and retry config (TC-WORKFLOW-7)", async () => {
     const { error } = await safeRunInit(tempDir);
     expect(error).toBeUndefined();
 
     const wf = await loadGeneratedWorkflow();
     const job = wf.jobs["implement"];
     expect(job).toBeDefined();
-    expect(job?.optional_needs).toEqual(["architecture-design"]);
+    // v0.6: optional_needs deprecated; architecture-design is now in needs
+    expect(job?.needs).toContain("architecture-design");
 
     const retry = job?.retry as Record<string, unknown> | undefined;
     expect(retry).toBeDefined();
@@ -566,22 +571,25 @@ describe("code-change template (WF-P10-WORKFLOW)", () => {
   });
 
   // ---------- TC-WORKFLOW-8 ----------
-  it("signals review_rejected and needs_architecture_design are declared (TC-WORKFLOW-8)", async () => {
+  it("plan and review declare returns/on_return for flow control (TC-WORKFLOW-8)", async () => {
     const { error } = await safeRunInit(tempDir);
     expect(error).toBeUndefined();
 
     const wf = await loadGeneratedWorkflow();
-    expect(wf.signals).toBeDefined();
+    // v0.6: signals are deprecated; template uses returns/on_return instead
 
-    const reviewRejected = wf.signals?.["review_rejected"];
-    expect(reviewRejected, "review_rejected signal missing").toBeDefined();
-    expect(reviewRejected?.allowed_from).toEqual(["review"]);
-    expect(reviewRejected?.action).toEqual({ retry_job: "implement" });
+    // plan step uses returns/on_return for needs_architecture_design
+    const planStep = wf.jobs["plan"]?.steps.find((s) => s.id === "plan");
+    expect(planStep, "plan step missing").toBeDefined();
+    expect(planStep?.returns?.status?.values).toContain("needs_architecture_design");
+    expect(planStep?.on_return?.["needs_architecture_design"]).toEqual({ activate_job: "architecture-design" });
 
-    const needsArch = wf.signals?.["needs_architecture_design"];
-    expect(needsArch, "needs_architecture_design signal missing").toBeDefined();
-    expect((needsArch?.allowed_from ?? []).slice().sort()).toEqual(["plan", "review"]);
-    expect(needsArch?.action).toEqual({ activate_job: "architecture-design" });
+    // review step uses returns/on_return for rejected and needs_architecture_design
+    const reviewStep = wf.jobs["review"]?.steps.find((s) => s.id === "review");
+    expect(reviewStep, "review step missing").toBeDefined();
+    expect(reviewStep?.returns?.status?.values).toContain("rejected");
+    expect(reviewStep?.on_return?.["rejected"]).toEqual({ retry_job: "implement" });
+    expect(reviewStep?.on_return?.["needs_architecture_design"]).toEqual({ activate_job: "architecture-design" });
   });
 
   // ---------- TC-WORKFLOW-9 ----------

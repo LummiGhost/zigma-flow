@@ -11,6 +11,7 @@
 import { access } from "node:fs/promises";
 import { resolve, join } from "node:path";
 
+import { deprecationWarn } from "../utils/index.js";
 import { createRun } from "../engine/index.js";
 import { readActiveRun, LocalStateStore } from "../run/index.js";
 
@@ -62,6 +63,7 @@ export async function resolveWorkflowPath(
 }
 
 export async function runAction(workflowPath: string, options: RunOptions): Promise<void> {
+  deprecationWarn("'zigma-flow run' is deprecated", "zigma-flow invoke");
   const projectRoot = options.projectRoot ?? process.cwd();
   const absWorkflowPath = await resolveWorkflowPath(workflowPath, projectRoot);
   const runsDir = join(projectRoot, ".zigma-flow", "runs");

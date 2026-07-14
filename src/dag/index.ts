@@ -19,6 +19,12 @@ export interface DagJobs {
   [jobId: string]: {
     needs?: string[];
     optional_needs?: string[];
+    /**
+     * Job activation mode. Jobs with `activation: optional` or
+     * `activation: manual` (v0.6: manual is treated as optional)
+     * start as inactive and can be activated at runtime.
+     */
+    activation?: string;
   };
 }
 
@@ -135,7 +141,9 @@ export function detectCycles(jobs: DagJobs): string[][] | null {
  * Returns the ids of jobs that are currently eligible to start:
  *   1. Not in `completedJobIds`
  *   2. Not in `activeJobIds`
- *   3. Every id in `needs` is in `completedJobIds`
+ *   3. Every id in `needs` is in `completedJobIds`, OR is an inactive
+ *      optional job (activation: optional | manual) that has not been
+ *      activated yet.
  *   4. `optional_needs` are ignored for readiness (they never block)
  *
  * Order of the returned array is not guaranteed.
@@ -152,7 +160,16 @@ export function computeReadyJobs(
     if (activeJobIds.has(jobId)) continue;
 
     const needs = jobDef.needs ?? [];
-    const allNeedsMet = needs.every((dep) => completedJobIds.has(dep));
+    const allNeedsMet = needs.every((dep) => {
+      if (completedJobIds.has(dep)) return true;
+      // v0.6: inactive optional jobs (activation: optional or manual) are
+      // treated as satisfied dependencies so they don't block readiness.
+      const depDef = jobs[dep];
+      if (depDef?.activation === "optional" || depDef?.activation === "manual") {
+        return true;
+      }
+      return false;
+    });
 
     if (allNeedsMet) {
       ready.push(jobId);

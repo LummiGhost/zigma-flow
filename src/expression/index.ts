@@ -91,7 +91,13 @@ export function resolveExpression(template: string, ctx: ExpressionContext): str
     // ${{ variables.<name> }}  (WF-P13-VARIABLES)
     // Also handles ${{ variables.<name> <rest> }} patterns where additional
     // expression content follows the variable name (e.g. ${{ variables.x == 'ready' }}).
+    // DEPRECATED in v0.6 — use jobs.<id>.outputs.* or steps.<id>.outputs.* instead
     if (expr.startsWith("variables.")) {
+      if (!process.env.ZIGMA_SUPPRESS_DEPRECATION) {
+        console.warn(
+          "[DEPRECATED] variables.* expressions are deprecated, use jobs.<id>.outputs.* or steps.<id>.outputs.* instead. This will be removed in v1.0.",
+        );
+      }
       const afterVar = expr.slice("variables.".length);
       // Split on whitespace to extract variable name and any remaining expression
       const parts = afterVar.split(/\s+/);

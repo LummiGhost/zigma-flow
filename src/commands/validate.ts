@@ -18,7 +18,22 @@ import { loadSkillPack } from "../skill-pack/index.js";
 import { FilesystemError } from "../utils/index.js";
 import { loadWorkflow } from "../workflow/index.js";
 
-export async function validateAction(filePath: string): Promise<void> {
+export interface ValidateOptions {
+  /**
+   * Host name for trigger validation.
+   *
+   * - When omitted, unknown trigger types produce warnings (the local runtime
+   *   ignores triggers).
+   * - When set (e.g. "zigma-server"), unknown trigger types cause validation
+   *   errors (strict mode for server-side consumption).
+   */
+  host?: string | undefined;
+}
+
+export async function validateAction(
+  filePath: string,
+  options?: ValidateOptions,
+): Promise<void> {
   const text = await readFile(filePath, "utf-8").catch((e: unknown) => {
     throw new FilesystemError(`Cannot read file: ${filePath}`, { cause: e });
   });
@@ -36,7 +51,9 @@ export async function validateAction(filePath: string): Promise<void> {
     await loadSkillPack(packRoot);
     console.log(`valid: ${filePath}`);
   } else {
-    loadWorkflow(text);            // synchronous; reuses already-read text
+    const loadOpts: { host?: string } = {};
+    if (options?.host !== undefined) loadOpts.host = options.host;
+    loadWorkflow(text, loadOpts);            // synchronous; reuses already-read text
     console.log(`valid: ${filePath}`);
   }
 }

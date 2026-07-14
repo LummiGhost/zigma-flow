@@ -24,6 +24,7 @@ export interface EventsOptions {
   runDir?: string;     // absolute path to run dir, OR:
   runsDir?: string;    // absolute path to runs dir
   runId?: string;      // optional — latest if omitted
+  latest?: boolean;    // explicit --latest flag (no deprecation warning)
   limit?: number;      // default 20
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -41,6 +42,11 @@ export async function eventsAction(opts: EventsOptions): Promise<void> {
   const print = opts.stdout ?? ((line: string) => { console.log(line); });
   const printErr = opts.stderr ?? ((line: string) => { console.error(line); });
   const limit = opts.limit ?? 20;
+
+  // Deprecation warning: implicit run fallback without --run or --latest
+  if (opts.runDir === undefined && opts.runId === undefined && opts.latest !== true) {
+    console.warn("[DEPRECATED] Implicit run fallback to latest. Use --run <run-id> or --latest. This will be removed in v1.0.");
+  }
 
   // Resolve run directory.
   let runDir: string;

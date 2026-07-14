@@ -288,13 +288,21 @@ export interface HostApiGetRunStatusResult {
 
 // ---------------------------------------------------------------------------
 // 4. approveHumanGate (#187)
+//
+// @deprecated since v0.6 — use resumeRun (#210) instead for a more general
+//   pause-and-resume protocol with structured input. approveHumanGate is kept
+//   for backward compatibility. It will be removed in v1.0.
 // ---------------------------------------------------------------------------
 
 /**
  * Input for {@link approveHumanGate}.
  *
+ * @deprecated since v0.6 — use {@link HostApiResumeRunWithInputInput} instead.
+ *   The resumeRun protocol accepts arbitrary structured input and is not
+ *   limited to approve/reject decisions.
+ *
  * @precondition The referenced run, job, and step must exist and the step
- *   must be in `step_status: "awaiting_human"`.
+ *   must be in `step_status: "awaiting_human"` or `"awaiting_input"`.
  * @precondition The caller must hold `run:decide` permission.
  *
  * @returns HostApiApproveHumanGateResult describing the outcome.
@@ -341,6 +349,76 @@ export interface HostApiApproveHumanGateResult {
    * - `"continue"` — decision was "approve" / "request_changes"; job is still running.
    * - `"blocked"` — decision was "reject"; job moved to failed, run may be blocked.
    * - `"completed"` — decision was "approve" on the final step; job completed.
+   */
+  nextAction: "continue" | "blocked" | "completed";
+}
+
+// ---------------------------------------------------------------------------
+// 4b. resumeRunWithInput (v0.6, Issue #210)
+// ---------------------------------------------------------------------------
+
+/**
+ * Input for submitting structured human input to resume a paused run.
+ *
+ * This is the v0.6+ preferred mechanism for human gate resolution. Unlike
+ * {@link approveHumanGate}, which only accepts approve/reject decisions,
+ * `resumeRunWithInput` accepts arbitrary structured input defined by the
+ * step's `inputs` schema.
+ *
+ * @precondition The referenced run, job, and step must exist and the step
+ *   must be in `step_status: "awaiting_input"` or `"awaiting_human"`.
+ * @precondition The caller must hold `run:resume` permission.
+ *
+ * @returns HostApiResumeRunWithInputResult describing the outcome.
+ *
+ * @error HostApiError with code `RUN_NOT_FOUND` if the run ID is unknown.
+ * @error HostApiError with code `JOB_NOT_FOUND` if the job ID is unknown.
+ * @error HostApiError with code `STEP_NOT_FOUND` if the step ID is unknown.
+ * @error HostApiError with code `NOT_AWAITING_INPUT` if the step is not
+ *   awaiting human input.
+ * @error HostApiError with code `INPUT_VALIDATION_FAILED` if the submitted
+ *   input does not match the step's input schema.
+ * @error HostApiError with code `ALREADY_DECIDED` if a different decision
+ *   has already been recorded for this step.
+ * @error HostApiError with code `PERMISSION_DENIED` if the caller lacks
+ *   required permissions.
+ */
+export interface HostApiResumeRunWithInputInput {
+  /** Run identifier. */
+  runId: string;
+  /** Job containing the human gate step. */
+  jobId: string;
+  /** Step awaiting human input. */
+  stepId: string;
+  /** Structured input key-value pairs matching the step's input schema. */
+  input: Record<string, string>;
+  /** Optional comment explaining the input. */
+  comment?: string;
+  /** The actor submitting the input (recorded in the audit trail). */
+  actor: Actor;
+}
+
+/**
+ * Result returned by `resumeRunWithInput`.
+ */
+export interface HostApiResumeRunWithInputResult {
+  /** Run identifier. */
+  runId: string;
+  /** Job identifier. */
+  jobId: string;
+  /** Step identifier. */
+  stepId: string;
+  /** The resolved outcome (e.g. "approved", "rejected"). */
+  outcome: string;
+  /** Whether this was a new submission or a duplicate. */
+  status: "recorded" | "duplicate" | "already_decided";
+  /** ISO 8601 timestamp when the input was recorded. */
+  recordedAt: string;
+  /**
+   * Next action hint:
+   * - `"continue"` — the step was resolved; job is still running.
+   * - `"blocked"` — the step was rejected; job moved to failed.
+   * - `"completed"` — the resolved step was the final step; job completed.
    */
   nextAction: "continue" | "blocked" | "completed";
 }

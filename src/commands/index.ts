@@ -11,3 +11,5 @@ export { showAction } from "./show.js";
 export type { ShowActionOpts } from "./show.js";
 export { runAllAction } from "./run-all.js";
 export type { RunAllOptions } from "./run-all.js";
+export { resumeAction } from "./resume.js";
+export type { ResumeActionOpts } from "./resume.js";

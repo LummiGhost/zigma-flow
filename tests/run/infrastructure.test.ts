@@ -328,7 +328,9 @@ describe("snapshotSkillLock", () => {
     expect(snapContent).toBe(lockContent);
   });
 
-  it("throws FilesystemError when skill-lock.json does not exist (T-LOCK-2, UC-LOCK-2)", async () => {
-    await expect(snapshotSkillLock(runDir, skillLockPath)).rejects.toBeInstanceOf(FilesystemError);
+  it("gracefully skips when skill-lock.json does not exist (v0.6 deprecation) (T-LOCK-2, UC-LOCK-2)", async () => {
+    // skill-lock.json is deprecated in v0.6 — snapshotSkillLock now gracefully
+    // skips instead of throwing when the lock file is not found.
+    await expect(snapshotSkillLock(runDir, skillLockPath)).resolves.toBeUndefined();
   });
 });

@@ -431,11 +431,25 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
       const skillValue = skillsMap[alias];
       const skillId = extractSkillId(alias, skillValue);
 
-      // Resolve pack root and load pack
-      const packRoot = await resolveSkillLock(zigmaflowDir, skillId);
+      // Resolve pack root and load pack.
+      // Try skill-lock first (deprecated), then fall back to direct discovery.
+      let packRoot: string;
+      try {
+        packRoot = await resolveSkillLock(zigmaflowDir, skillId);
+      } catch (e: unknown) {
+        // skill-lock.json may not exist (v0.6 deprecation). Fall back to
+        // searching in the project-level skill path.
+        const { discoverSkillPacks: discover } = await import("../skill-pack/index.js");
+        const result = await discover(zigmaflowDir);
+        const found = result.skills.find((s) => s.skillId === skillId);
+        if (!found) {
+          throw e; // Re-throw original error if not found in any search path
+        }
+        packRoot = found.packRoot;
+      }
       const pack = await loadSkillPack(packRoot);
 
-      // Get version from skill-lock
+      // Get version from skill-lock (deprecated) or fall back to pack's own version
       const version = (await readSkillLockVersion(zigmaflowDir, skillId)) ?? pack.version;
 
       exposedSkills.push({ alias, skillId, version });

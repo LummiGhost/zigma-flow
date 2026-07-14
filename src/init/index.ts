@@ -25,7 +25,6 @@ import {
   planMd,
   reportSchemaJson,
   reviewMd,
-  skillLockJsonTemplate,
   skillYml,
   summarizeMd,
   workflowGuideMd
@@ -143,10 +142,9 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
   const version = getPackageInfo().version;
   const skillYmlContent = skillYml();
 
-  // Files to write (in order)
+  // Files to write (in order) — skill-lock.json is no longer generated (v0.6 deprecation)
   const fileEntries: Array<[string, string]> = [
     [configJsonPath, configJsonTemplate(version)],
-    [join(dotZigma, "skill-lock.json"), skillLockJsonTemplate(skillYmlContent)],
     [join(dotZigma, "workflows", "code-change.yml"), codeChangeWorkflowYml(detection)],
     [join(dotZigma, "workflows", "code-change-fast.yml"), codeChangeFastWorkflowYml()],
     [join(dotZigma, "skills", "code-change", "skill.yml"), skillYmlContent],

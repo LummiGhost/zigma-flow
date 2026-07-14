@@ -334,10 +334,9 @@ describe("TC-DOGFOOD-1: runInit scaffold", () => {
       expect(f.status).toBe("created");
     }
 
-    // Spot-check key files
+    // Spot-check key files — skill-lock.json no longer generated (v0.6 deprecation)
     const expectedFiles = [
       join(sandbox.dotZigma, "config.json"),
-      join(sandbox.dotZigma, "skill-lock.json"),
       join(sandbox.dotZigma, "workflows", "code-change.yml"),
       join(sandbox.dotZigma, "skills", "code-change", "skill.yml"),
       join(sandbox.dotZigma, "skills", "code-change", "prompts", "intake.md"),

@@ -337,7 +337,9 @@ export async function snapshotSkillLock(runDir: string, skillLockPath: string): 
     await copyFile(skillLockPath, destPath);
   } catch (e: unknown) {
     if (isEnoent(e)) {
-      throw new FilesystemError(`Skill lock file not found: ${skillLockPath}`, { cause: e });
+      // skill-lock.json is deprecated (v0.6). Gracefully skip the snapshot
+      // when the lock file is not found.
+      return;
     }
     throw new FilesystemError(`Cannot copy skill lock file: ${skillLockPath}`, { cause: e });
   }

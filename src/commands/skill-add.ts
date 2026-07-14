@@ -20,6 +20,12 @@ export async function skillAddAction(
   packPath: string,
   options: SkillAddOptions = {},
 ): Promise<void> {
+  console.warn(
+    "[DEPRECATED] skill add is deprecated. Skill version management will move to zigma-skill. " +
+      "Place skill packs directly in a skill search path (.zigma-flow/skills/, .zigma/skills/, " +
+      "etc.) instead. This command will be removed in v1.0.",
+  );
+
   const projectRoot = options.zigmaflowDir ?? process.cwd();
   const absPackPath = resolve(projectRoot, packPath);
 

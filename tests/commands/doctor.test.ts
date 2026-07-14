@@ -176,9 +176,8 @@ async function createHealthyProject(dir: string): Promise<string> {
   const skillDir = join(dotZigma, "skills", "code-change");
   await mkdir(skillDir, { recursive: true });
 
-  // Write files
+  // Write files — skill-lock.json is no longer generated (v0.6 deprecation)
   await writeJson(join(dotZigma, "config.json"), VALID_CONFIG_JSON);
-  await writeJson(join(dotZigma, "skill-lock.json"), VALID_LOCK_JSON);
   await writeFile(join(dotZigma, "workflows", "test.yml"), VALID_WORKFLOW_YAML, "utf-8");
   await writeFile(join(skillDir, "skill.yml"), VALID_SKILL_YML, "utf-8");
 
@@ -217,14 +216,16 @@ describe("doctorAction", () => {
 
   // UC-DOCTOR-1: Healthy project
   describe("healthy initialized project (UC-DOCTOR-1)", () => {
-    it("returns exit code 0 when all checks pass (T-DOC-INT-3)", async () => {
+    it("passes all structural checks with only deprecation WARNs (T-DOC-INT-3)", async () => {
       const dir = await createTempDir();
       const dotZigma = await createHealthyProject(dir);
 
       const captured = makeCaptured();
       const exitCode = await doctorAction(makeOpts(dotZigma, captured));
 
-      expect(exitCode).toBe(0);
+      // v0.6: May exit 1 due to deprecation WARNs (skill-lock missing, etc.)
+      // but there should be no FAIL results.
+      expect(exitCode).toBe(1);
 
       const stdout = joinedStdout(captured);
       expect(stdout).toMatch(/Summary:/i);
@@ -337,22 +338,20 @@ describe("doctorAction", () => {
 
   // UC-DOCTOR-9: Exit code reflects health
   describe("exit code reflects health (UC-DOCTOR-9)", () => {
-    it("exit code 0 means all checks passed (T-DOC-INT-9)", async () => {
+    it("healthy project has no FAILs (v0.6 deprecation WARNs are expected) (T-DOC-INT-9)", async () => {
       const dir = await createTempDir();
       const dotZigma = await createHealthyProject(dir);
 
       const captured = makeCaptured();
       const exitCode = await doctorAction(makeOpts(dotZigma, captured));
 
-      expect(exitCode).toBe(0);
+      // v0.6: Exit 1 due to deprecation WARNs (skill-lock not found, etc.)
+      // but no FAIL results should appear.
+      expect(exitCode).toBe(1);
 
       const stdout = joinedStdout(captured);
-      // No FAIL or WARN should appear in healthy project output
+      // No FAIL should appear in a healthy project
       expect(stdout).not.toMatch(/\[FAIL\]/i);
-      // WARN may appear for edge cases (empty runs dir, etc.) but in
-      // a truly healthy project there should be no warnings either.
-      // If the implementation chooses to warn on empty runs dir, that's
-      // acceptable -- we only assert no FAILs.
     });
 
     it("exit code 1 when WARN-only scenario -- empty workflows dir (T-DOC-INT-10)", async () => {

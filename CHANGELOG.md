@@ -19,6 +19,14 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.6.3] — Scheduler Dispatch Fix (2026-07-14)
+
+### Runtime
+
+- [runtime] Fix engine exiting immediately after `job_ready` without dispatching any jobs. The scheduler no longer silently skips ready jobs whose definitions are missing from `workflow.jobs` (e.g., v0.5-style jobs where Zod strips unknown fields). The run loop now detects missed ready jobs and dispatches them with a warning instead of always breaking on empty batches. Unexpected rejections from `executeJobOnce` are now logged instead of being silently swallowed (#225, #226).
+
+---
+
 ## [v0.6.2] — Run Directory Expression (2026-07-14)
 
 ### DSL

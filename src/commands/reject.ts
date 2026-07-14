@@ -124,6 +124,7 @@ export async function rejectAction(opts: RejectActionOpts): Promise<void> {
     stepId: resolvedStepId,
     decision: "rejected",
     comment,
+    source: "cli",
     ...(decidedBy !== undefined ? { decidedBy } : {}),
     clock,
     stateStore,

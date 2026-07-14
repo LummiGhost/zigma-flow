@@ -1041,7 +1041,10 @@ async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
     eventWriter,
   });
 
-  return { jobId, success: true, action: "completed", detail: "awaiting_human" };
+  // Read back the post-enter state to report the actual step_status (v0.6)
+  const postState = await stateStore.readSnapshot(runDir);
+  const postDetail = postState?.jobs[jobId]?.step_status ?? "awaiting_input";
+  return { jobId, success: true, action: "completed", detail: postDetail };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,8 +1,27 @@
 # Zigma Flow MVP Architecture
 
-文档版本：v0.1（含 v0.2 修订增量，2026-06-27）
+文档版本：v0.1（含 v0.2 修订增量，2026-06-27；v0.6 修订增量，2026-07-14）
 日期：2026-06-06
-适用范围：Zigma Flow PRD v0.3 + v0.2 修订增量；v0.2 修订集中在 §5.2、§6.2、§7.1、§7.2
+适用范围：Zigma Flow PRD v0.3 + v0.2 修订增量 + v0.6 修订增量；v0.2 修订集中在 §5.2、§6.2、§7.1、§7.2
+
+> **v0.6 修订总览（2026-07-14）：** v0.6 将工作流数据模型从可变共享状态迁移到函数式数据流。Step 和 Job 读取输入和上游 outputs，生成新的 outputs 和 artifacts，不再原地修改共享状态。
+>
+> **Deprecation notice** — The following are deprecated in v0.6 and will be removed in v1.0:
+> - Workflow top-level `variables` — use job outputs (`jobs.<id>.outputs.*`) instead
+> - Workflow top-level `context_blocks` — use artifacts for large data and job outputs for structured data
+> - Agent Report `context_patches` — use `outputs` and `artifacts` instead
+> - Step `permissions.context_edit`, `permissions.variables`, `permissions.context_blocks` — no replacement; these were tied to the mutable context model
+> - `allowed_writers` on variables and context_blocks — no replacement; output ownership is determined by the producing step
+> - `${{ variables.* }}` expressions — use `${{ jobs.<id>.outputs.* }}` or `${{ steps.<id>.outputs.* }}` instead
+>
+> **Migration guide:**
+> - Replace `variables` declarations with explicit step `outputs` on the producing step
+> - Replace `context_blocks` with artifact files written by steps and read by downstream steps
+> - Replace `context_patches` in Agent Reports with the standard `outputs` field
+> - Replace `${{ variables.x }}` expressions with `${{ jobs.<id>.outputs.x }}` where `<id>` is the job that produces the value
+> - Remove `allowed_writers`, `permissions.variables`, `permissions.context_blocks`, and `permissions.context_edit` from workflow and step definitions
+>
+> **Compatibility:** In v0.6, all deprecated fields still parse and function normally. A deprecation warning is printed to stderr at parse/validation time. In v1.0, these fields will be removed from the schema and engine.
 
 > **v0.2 修订总览（2026-06-27）：** 为承载 P13 引入的三类 Agent 主动控制流能力（结构化返回状态、workflow 变量与上下文块、条件/跳转/有界循环），架构在以下位置扩展：
 >

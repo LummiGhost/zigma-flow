@@ -55,12 +55,6 @@ export function validateNeedsReferences(
       }
     }
     for (const dep of jobDef.optional_needs ?? []) {
-      // v0.6 deprecation warning (Issue #209)
-      if (!process.env.ZIGMA_SUPPRESS_DEPRECATION) {
-        console.warn(
-          `[DEPRECATED] Job "${jobId}" uses optional_needs. Use needs with optional job activation instead. This will be removed in v1.0.`
-        );
-      }
       if (!jobIds.has(dep)) {
         errors.push(
           `Job "${jobId}" has an optional_needs reference to "${dep}" which does not exist`

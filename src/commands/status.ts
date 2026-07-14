@@ -199,7 +199,7 @@ export function renderRunStatus(
   // --- Awaiting human input (WF-P15-CLI, AD-P15-008) ---
 
   const awaitingHumanEntries = Object.entries(state.jobs)
-    .filter(([, js]) => js.step_status === "awaiting_human");
+    .filter(([, js]) => js.step_status === "awaiting_human" || js.step_status === "awaiting_input");
 
   if (awaitingHumanEntries.length > 0) {
     lines.push("");
@@ -220,6 +220,7 @@ export function renderRunStatus(
         lines.push("    Approvers: (anyone with project access)");
       }
       lines.push(`    Decide with: zigma-flow approve --job ${jobId} | reject --job ${jobId} --comment "..."`);
+      lines.push(`    (v0.6+) Or:   zigma-flow resume --job ${jobId} --input decision=approve`);
     }
     lines.push("");
   }

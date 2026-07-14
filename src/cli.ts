@@ -31,6 +31,7 @@ import { invokeAction } from "./commands/invoke.js";
 import { inspectAction } from "./commands/inspect.js";
 import { approveAction } from "./commands/approve.js";
 import { rejectAction } from "./commands/reject.js";
+import { resumeAction } from "./commands/resume.js";
 import { verifyRunAction } from "./commands/verify-run.js";
 import { doctorAction } from "./commands/doctor.js";
 import { eventsAction } from "./commands/events.js";
@@ -542,6 +543,30 @@ async function runProgram(
         ...(options.step !== undefined ? { stepId: options.step } : {}),
         ...(options.run !== undefined ? { runId: options.run } : {}),
         ...(options.latest !== undefined ? { latest: options.latest } : {}),
+        clock: new SystemClock(),
+      });
+    });
+
+  program
+    .command("resume [run-id]")
+    .description("Submit human input to resume a paused run (v0.6+). Replaces approve and reject.")
+    .requiredOption("--job <job>", "Job id to resume.")
+    .option("--step <step>", "Step id to resume (auto-detected if only one awaiting).")
+    .option("--input <key=value>", "Structured input for the human step (repeatable).", collectInputs, [] as string[])
+    .exitOverride()
+    .action(async (runId: string | undefined, options: { job: string; step?: string; input?: string[] }) => {
+      const inputs = parseInputs(options.input);
+      if (inputs === undefined || Object.keys(inputs).length === 0) {
+        console.error("Error: At least one --input key=value is required (e.g. --input decision=approve).");
+        process.exitCode = 2;
+        return;
+      }
+      await resumeAction({
+        zigmaflowDir: cwd(),
+        ...(runId !== undefined ? { runId } : {}),
+        jobId: options.job,
+        ...(options.step !== undefined ? { stepId: options.step } : {}),
+        input: inputs,
         clock: new SystemClock(),
       });
     });

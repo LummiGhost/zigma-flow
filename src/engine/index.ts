@@ -6,7 +6,7 @@
  */
 
 import { dirname, join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 
 import { parse as parseYaml } from "yaml";
 
@@ -34,6 +34,8 @@ import {
 import { nextEventId as formatEventId, nextSequentialEventId } from "../events/index.js";
 import { evaluateCondition } from "../expression/index.js";
 import type { ExpressionContext } from "../expression/index.js";
+import type { CallerContext } from "../caller-context.js";
+import { createPermissionSnapshot } from "../caller-context.js";
 
 export { applyRoutingAction } from "./routing.js";
 export type { ApplyRoutingActionOpts } from "./routing.js";
@@ -62,6 +64,8 @@ export interface CreateRunInputs {
   skillLockPath: string;
   clock?: Clock; // injectable for tests; defaults to SystemClock
   inputs?: Record<string, string>; // additional named inputs from CLI --input flags
+  /** Caller identity, origin, and authority (optional for backward compatibility). */
+  callerContext?: CallerContext;
 }
 
 export interface CreateRunResult {
@@ -86,8 +90,21 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
   // RC-R12: Snapshot skill-lock into run directory
   await snapshotSkillLock(runDir, inputs.skillLockPath);
 
-  // RC-R03: Write run.yml
   const createdAt = clock.now();
+
+  // RC-R12b: Write caller context snapshot if provided.
+  // The snapshot is deep-copied via structuredClone so the original object
+  // cannot be mutated after the run starts. The path is recorded in run.yml
+  // for downstream consumers (step executors, evidence collectors).
+  let callerContextSnapshotPath: string | undefined;
+  if (inputs.callerContext !== undefined) {
+    const snapshot = createPermissionSnapshot(inputs.callerContext, runId, createdAt);
+    const callerContextPath = join(runDir, "caller-context.json");
+    await writeFile(callerContextPath, JSON.stringify(snapshot, null, 2), "utf-8");
+    callerContextSnapshotPath = "caller-context.json";
+  }
+
+  // RC-R03: Write run.yml
   await writeRunYaml(runDir, {
     task: inputs.task,
     workflow: {
@@ -97,6 +114,9 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     created_at: createdAt,
     skill_lock_snapshot: "skill-lock.snapshot.json",
     ...(inputs.inputs !== undefined ? { inputs: inputs.inputs } : {}),
+    ...(callerContextSnapshotPath !== undefined
+      ? { caller_context_snapshot: callerContextSnapshotPath }
+      : {}),
   });
 
   // RC-R04/R05/R06: Compute initial job states (ready / waiting / inactive)

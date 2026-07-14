@@ -4,14 +4,38 @@
 日期：2026-06-06
 适用范围：Zigma Flow PRD v0.3 + v0.2/v0.6 修订增量；v0.2 修订集中在 §5.2、§6.2、§7.1、§7.2
 
-> **v0.6 修订总览（2026-07-14）：** Human Step 从 approve/reject 双命令模式简化为统一的 pause-and-resume 协议：
+> **v0.6 修订总览（2026-07-14）：** API 收敛、数据模型简化与 v1.0 准备。
 >
-> - §7.1 Engine 入口清单：追加 `resumeWithInput` 统一入口。
-> - §7.2 状态转换规则：Step `awaiting_human` 更名为 `awaiting_input`；新增 `paused` run status。
-> - Human Step 支持 `inputs` schema 定义结构化输入，Engine 验证输入后记录决策。
-> - `approve`/`reject` CLI 命令标记为 deprecated，改为 `resume` 命令的薄包装。
-> - `approvers` 字段标记为 deprecated（身份/角色管理移至 Host 层）。
-> - 详见 GitHub Issue #210。
+> **Deprecation notice** — The following are deprecated in v0.6 and will be removed in v1.0:
+>
+> **CLI 收敛（#204）：** 新增 `invoke` 统一执行命令和 `inspect` 统一查询命令。旧命令标记 deprecated：
+> - `run`, `run-all`, `prompt`, `step`, `check`, `next` → 使用 `invoke`
+> - `approve`, `reject` → 使用 `resume --input decision=approve|reject`
+> - `status`, `show`, `events`, `artifacts` → 使用 `inspect`
+>
+> **显式 Run 寻址（#205）：** 移除 `active-run` 配置，新增 `--latest` 标志。命令支持显式 `--run <run-id>`。
+>
+> **数据模型迁移（#206）：** 废弃可变共享上下文：
+> - `variables`, `context_blocks`, `context_patches` → 使用 job outputs 和 artifacts
+> - `${{ variables.* }}` → 使用 `${{ jobs.<id>.outputs.* }}`
+> - `allowed_writers` → 删除（输出所有权由生产 step 决定）
+>
+> **Skill 发现简化（#207）：** 基于目录的 Skill 发现（确定优先级搜索路径）。`skill-lock.json`、`skill add`、config `version` → deprecated。未来由 `zigma-skill` 管理版本。
+>
+> **控制流收敛（#209）：** 统一到 DAG + 顺序步骤 + `if` 条件 + 有界重试 + 可选 Job + `returns/on_return`：
+> - signals, goto_step, goto_job, goto_with, max_visits → deprecated
+> - `optional_needs` → deprecated（`needs` 中非活跃可选 Job 视为已满足）
+> - `activation: manual` → deprecated（视为 `optional`）
+> - `type: check` → deprecated（使用 `type: script`）
+> - `retry_with`, `retry --with` → deprecated
+>
+> **Human Step 暂停/恢复（#210）：** Human Step 收敛为 pause-and-resume 协议。新增 `resume` 命令、`awaiting_input` 状态、`paused` run 状态。`approvers` 字段 → deprecated。
+>
+> **触发器声明（#211）：** `on` 改为可选，顶层 `inputs` 提升为输入声明。`on.manual.inputs`, `--task` → deprecated。
+>
+> **Schema 清理（#212）：** 废弃未实现占位字段：`type: workflow`、`workspace.branch`、`workspace.mode`、Job 级 `permissions`。
+>
+> **兼容性：** 所有废弃特性在 v0.6 中正常工作（仅 stderr 警告），v1.0 将移除。设置 `ZIGMA_SUPPRESS_DEPRECATION=1` 可抑制警告。
 >
 > **v0.2 修订总览（2026-06-27）：** 为承载 P13 引入的三类 Agent 主动控制流能力（结构化返回状态、workflow 变量与上下文块、条件/跳转/有界循环），架构在以下位置扩展：
 >

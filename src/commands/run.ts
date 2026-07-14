@@ -63,7 +63,7 @@ export async function resolveWorkflowPath(
 }
 
 export async function runAction(workflowPath: string, options: RunOptions): Promise<void> {
-  deprecationWarn("run", "zigma-flow invoke");
+  deprecationWarn("'zigma-flow run' is deprecated", "zigma-flow invoke");
   const projectRoot = options.projectRoot ?? process.cwd();
   const absWorkflowPath = await resolveWorkflowPath(workflowPath, projectRoot);
   const runsDir = join(projectRoot, ".zigma-flow", "runs");

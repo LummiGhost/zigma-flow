@@ -1,20 +1,26 @@
 /**
- * Deprecation warning utility.
+ * Shared deprecation utility.
  *
- * Prints consistent-format deprecation warnings to stderr (via console.warn).
+ * Prints consistently formatted deprecation warnings to stderr via console.warn.
  * Supports the `ZIGMA_SUPPRESS_DEPRECATION` environment variable — when set to
- * any non-empty value, all deprecation warnings are silently suppressed.
+ * "1" or "true", all deprecation warnings are silently suppressed.
  *
- * Format: `[DEPRECATED] <message>. Use <alternative>. This will be removed in v1.0.`
+ * Format (with alternative): `[DEPRECATED] <message>. Use <alternative>. This will be removed in v1.0.`
+ * Format (without alternative): prints message as-is (for pre-formatted warnings).
  */
 
-const SUPPRESS_KEY = "ZIGMA_SUPPRESS_DEPRECATION";
+function deprecationEnabled(): boolean {
+  const val = process.env["ZIGMA_SUPPRESS_DEPRECATION"];
+  return val !== "1" && val !== "true";
+}
 
 /**
  * Emit a deprecation warning to stderr if not suppressed.
  *
  * @param message   - Description of the deprecated feature/field/command.
- * @param alternative - The recommended replacement (omitted when empty).
+ * @param alternative - The recommended replacement. When provided, the message
+ *                      is formatted as `[DEPRECATED] <message>. Use <alternative>. ...`
+ *                      When omitted, the message is printed as-is (for pre-formatted warnings).
  * @param removalVersion - The version when the feature will be removed (default "v1.0").
  */
 export function deprecationWarn(
@@ -22,7 +28,7 @@ export function deprecationWarn(
   alternative?: string,
   removalVersion: string = "v1.0",
 ): void {
-  if (process.env[SUPPRESS_KEY]) return;
+  if (!deprecationEnabled()) return;
 
   if (alternative) {
     console.warn(`[DEPRECATED] ${message}. Use ${alternative}. This will be removed in ${removalVersion}.`);

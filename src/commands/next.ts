@@ -44,7 +44,7 @@ export interface NextActionOpts {
 // ---------------------------------------------------------------------------
 
 export async function nextAction(opts: NextActionOpts): Promise<void> {
-  deprecationWarn("next", "zigma-flow invoke");
+  deprecationWarn("'zigma-flow next' is deprecated", "zigma-flow invoke");
   const { zigmaflowDir, jobId, clock, runId } = opts;
 
   // 1. Resolve run id (explicit --run, --latest, or deprecated fallback from config)

@@ -46,7 +46,7 @@ export async function runAllAction(
   workflowPath: string,
   options: RunAllOptions,
 ): Promise<void> {
-  deprecationWarn("run-all", "zigma-flow invoke");
+  deprecationWarn("'zigma-flow run-all' is deprecated", "zigma-flow invoke");
   const projectRoot = options.projectRoot ?? process.cwd();
   const absWorkflowPath = await resolveWorkflowPath(workflowPath, projectRoot);
   const zigmaflowDir = projectRoot;

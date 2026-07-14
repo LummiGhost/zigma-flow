@@ -103,7 +103,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function promptAction(opts: PromptActionOpts): Promise<void> {
-  deprecationWarn("prompt", "zigma-flow invoke --pause-before <step>");
+  deprecationWarn("'zigma-flow prompt' is deprecated", "zigma-flow invoke --pause-before <step>");
   const { zigmaflowDir, clock, runId } = opts;
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();

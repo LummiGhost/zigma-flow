@@ -1017,9 +1017,9 @@ async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
     return { jobId, success: false, action: "blocked", detail: "Job not found in run state" };
   }
 
-  // Idempotent: if already awaiting_human, no-op
-  if (jobState.step_status === "awaiting_human") {
-    return { jobId, success: true, action: "completed", detail: "awaiting_human" };
+  // Idempotent: if already awaiting_human or awaiting_input, no-op (v0.6)
+  if (jobState.step_status === "awaiting_human" || jobState.step_status === "awaiting_input") {
+    return { jobId, success: true, action: "completed", detail: jobState.step_status };
   }
 
   const prompt = stepDef.prompt;
@@ -1036,6 +1036,7 @@ async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
     stepPrompt: prompt,
     ...(stepDef.approvers !== undefined ? { stepApprovers: stepDef.approvers } : {}),
     ...(stepDef.instructions !== undefined ? { stepInstructions: stepDef.instructions } : {}),
+    ...(stepDef.inputs !== undefined ? { stepInputs: stepDef.inputs as Record<string, import("../engine/humanGate.js").HumanInputSchema> } : {}),
     stateStore,
     eventWriter,
   });
@@ -1263,11 +1264,11 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
     // ── Post-batch: human gate check (WF-P15-ENGINE, AD-P15-007) ─────────
 
-    // If any job entered awaiting_human, break the loop so the user can act.
+    // If any job entered awaiting_human or awaiting_input, break the loop so the user can act.
     const postBatchState = await stateStore.readSnapshot(runDir);
     if (postBatchState !== null) {
       const awaitingHumanJobs = Object.entries(postBatchState.jobs)
-        .filter(([, js]) => js.step_status === "awaiting_human");
+        .filter(([, js]) => js.step_status === "awaiting_human" || js.step_status === "awaiting_input");
 
       if (awaitingHumanJobs.length > 0) {
         // Print human gate instructions to console
@@ -1276,13 +1277,14 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         console.log(`Run ${runId} paused on human gate.`);
         console.log(`  Job: ${hjId} / Step: ${hjState.current_step ?? "?"}`);
         console.log();
-        console.log("To approve:");
-        console.log(`  zigma-flow approve --job ${hjId} --comment "..."`);
+        console.log("To decide (unified, v0.6+):");
+        console.log(`  zigma-flow resume ${runId} --job ${hjId} --input decision=approve`);
         console.log();
-        console.log("To reject and retry:");
+        console.log("Legacy (deprecated):");
+        console.log(`  zigma-flow approve --job ${hjId} --comment "..."`);
         console.log(`  zigma-flow reject --job ${hjId} --comment "..."`);
         console.log();
-        console.log(`Then resume:`);
+        console.log(`Then continue:`);
         console.log(`  zigma-flow run-all <workflow> --resume ${runId}`);
         console.log();
         break;

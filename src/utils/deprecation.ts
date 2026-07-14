@@ -1,29 +1,29 @@
 /**
- * Shared deprecation utility for CLI commands.
+ * Deprecation warning utility.
  *
- * Prints a consistently formatted deprecation warning to stderr when
- * ZIGMA_SUPPRESS_DEPRECATION is not set.
+ * Prints consistent-format deprecation warnings to stderr (via console.warn).
+ * Supports the `ZIGMA_SUPPRESS_DEPRECATION` environment variable — when set to
+ * any non-empty value, all deprecation warnings are silently suppressed.
  *
- * Reference: docs/prd.md §17 (CLI commands).
+ * Format: `[DEPRECATED] <message>. Use <alternative>. This will be removed in v1.0.`
  */
 
-function deprecationEnabled(): boolean {
-  const val = process.env["ZIGMA_SUPPRESS_DEPRECATION"];
-  return val !== "1" && val !== "true";
-}
+const SUPPRESS_KEY = "ZIGMA_SUPPRESS_DEPRECATION";
 
 /**
- * Issue a deprecation warning for a deprecated CLI command.
+ * Emit a deprecation warning to stderr if not suppressed.
  *
- * Format: `[DEPRECATED] <command> is deprecated. Use <alternative>. This will be removed in v1.0.`
- *
- * Printed to stderr via console.warn. Suppressed when `ZIGMA_SUPPRESS_DEPRECATION=1` or `true`.
- *
- * The environment variable is read on every call to support dynamic toggling in tests.
+ * @param message   - Description of the deprecated feature/field/command.
+ * @param alternative - The recommended replacement (omitted when empty).
+ * @param removalVersion - The version when the feature will be removed (default "v1.0").
  */
-export function deprecationWarn(command: string, alternative: string): void {
-  if (!deprecationEnabled()) return;
-  console.warn(
-    `[DEPRECATED] 'zigma-flow ${command}' is deprecated. Use '${alternative}' instead. This will be removed in v1.0.`,
-  );
+export function deprecationWarn(
+  message: string,
+  alternative?: string,
+  removalVersion: string = "v1.0",
+): void {
+  if (process.env[SUPPRESS_KEY]) return;
+
+  const alt = alternative ? ` Use ${alternative}.` : "";
+  console.warn(`[DEPRECATED] ${message}.${alt} This will be removed in ${removalVersion}.`);
 }

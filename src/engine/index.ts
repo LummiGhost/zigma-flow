@@ -50,8 +50,18 @@ export { applyStatusReturn } from "./applyStatusReturn.js";
 export type { ApplyStatusReturnOpts } from "./applyStatusReturn.js";
 export { applyContextPatch } from "./applyContextPatch.js";
 export type { ApplyContextPatchOpts, ContextPatch, ContextPatchKind } from "./applyContextPatch.js";
-export { enterHumanGate, recordHumanDecision } from "./humanGate.js";
-export type { EnterHumanGateOpts, RecordHumanDecisionOpts, DecisionSource, DecisionActor } from "./humanGate.js";
+export { enterHumanGate, recordHumanDecision, resumeWithInput } from "./humanGate.js";
+export type {
+  EnterHumanGateOpts,
+  RecordHumanDecisionOpts,
+  RecordHumanDecisionResult,
+  ResumeWithInputOpts,
+  ResumeWithInputResult,
+  DecisionSource,
+  DecisionActor,
+  HumanInputSchema,
+  HumanInput,
+} from "./humanGate.js";
 export { checkAndExecuteTraverses, resolveTraverseInput, getTraverseInputJob, parseVirtualJobId } from "./traverse.js";
 export type { ExecuteTraverseOpts, ExecuteTraverseResult } from "./traverse.js";
 export { resolveJobWorkingDirectory, extractWorkspacePath } from "./workspace.js";

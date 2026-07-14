@@ -1,40 +1,38 @@
 /**
- * `zigma-flow reject` command handler.
+ * `zigma-flow resume` command handler (v0.6, Issue #210).
  *
- * @deprecated Use `zigma-flow resume --input decision=reject` instead.
- * This command is kept as a thin wrapper for backward compatibility.
+ * Unified entry point for submitting human input to a paused run.
+ * Replaces the legacy `approve` and `reject` commands.
  *
- * Records a rejection decision for a human gate step in the active run.
- *
- * Reference: docs/phases/p15-human-gate/02-development-plan.md AD-P15-004
- * v0.6 Issue #210 — deprecated in favor of unified resume command
+ * Usage: zigma-flow resume <run-id> --job <job-id> --step <step-id> --input key=value
  */
 
 import { join } from "node:path";
 
-import { recordHumanDecision } from "../engine/humanGate.js";
-import { readActiveRun } from "../run/index.js";
+import { resumeWithInput } from "../engine/humanGate.js";
+import type { HumanInputSchema } from "../engine/humanGate.js";
+import { readActiveRun, resolveRunId } from "../run/index.js";
 import type { Clock } from "../run/index.js";
 import { LocalStateStore } from "../run/index.js";
-import { ConfigError, StateError, UserInputError, deprecationWarn } from "../utils/index.js";
+import { ConfigError, StateError, UserInputError } from "../utils/index.js";
+import { loadWorkflowFile } from "../workflow/index.js";
 
-export interface RejectActionOpts {
+export interface ResumeActionOpts {
   zigmaflowDir: string;
+  /** Explicit run ID (when provided, takes priority over active run). */
+  runId?: string;
   jobId: string;
-  comment: string;
   stepId?: string;
+  /** Structured input key-value pairs. */
+  input: Record<string, string>;
   clock: Clock;
 }
 
-export async function rejectAction(opts: RejectActionOpts): Promise<void> {
-  deprecationWarn(
-    "reject command is deprecated",
-    "'zigma-flow resume --input decision=reject' instead",
-  );
+export async function resumeAction(opts: ResumeActionOpts): Promise<void> {
+  const { zigmaflowDir, runId: explicitRunId, jobId, stepId, input, clock } = opts;
 
-  const { zigmaflowDir, jobId, stepId, comment, clock } = opts;
-
-  const activeRunId = await readActiveRun(zigmaflowDir);
+  // Resolve run ID
+  const activeRunId = explicitRunId ?? await readActiveRun(zigmaflowDir);
   if (activeRunId === null) {
     throw new ConfigError(
       "No active run found. Run `zigma-flow run` first.",
@@ -73,6 +71,7 @@ export async function rejectAction(opts: RejectActionOpts): Promise<void> {
     if (jobState.step_status === "awaiting_human" || jobState.step_status === "awaiting_input") {
       resolvedStepId = jobState.current_step;
     } else {
+      // Check all jobs for awaiting steps
       const awaitingEntries = Object.entries(state.jobs)
         .filter(([, js]) => js.step_status === "awaiting_human" || js.step_status === "awaiting_input");
 
@@ -102,7 +101,7 @@ export async function rejectAction(opts: RejectActionOpts): Promise<void> {
 
   if (resolvedStepId === undefined) {
     throw new UserInputError(
-      "Could not determine which step to reject. Use --step <id>.",
+      "Could not determine which step to resume. Use --step <id>.",
       {
         details: { jobId },
         suggestion: "Run 'zigma-flow status --verbose' to list the steps of this job and pick the awaiting one.",
@@ -110,7 +109,7 @@ export async function rejectAction(opts: RejectActionOpts): Promise<void> {
     );
   }
 
-  // Validate step is awaiting human input (support both old and new status names)
+  // Validate step is awaiting input
   if (jobState.step_status !== "awaiting_human" && jobState.step_status !== "awaiting_input") {
     throw new StateError(
       `Step "${resolvedStepId}" in job "${jobId}" is not awaiting human input.`,
@@ -121,29 +120,63 @@ export async function rejectAction(opts: RejectActionOpts): Promise<void> {
     );
   }
 
-  // AD-P15-002: `approvers` on the step is informational only in MVP —
-  // we do not check `decidedBy` against it. Filesystem/OS permissions on
-  // the run directory are the enforcement boundary in v0.2.x.
-  const decidedBy = process.env["USER"] ?? process.env["USERNAME"] ?? undefined;
+  // Load workflow to get step definition (for input schema validation)
+  let stepDef: { inputs?: Record<string, HumanInputSchema>; prompt?: string } | undefined;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const { parse } = await import("yaml");
+    const runYmlPath = join(runDir, "run.yml");
+    const runYmlRaw = await readFile(runYmlPath, "utf-8");
+    const runYml = parse(runYmlRaw) as { workflow?: { path?: string } };
+    const wfPath = runYml?.workflow?.path;
+    if (wfPath !== undefined) {
+      const wf = await loadWorkflowFile(wfPath);
+      const jobDef = wf.jobs[jobId];
+      if (jobDef !== undefined) {
+        const sDef = jobDef.steps.find(s => s.id === resolvedStepId);
+        if (sDef !== undefined) {
+          const inputs = sDef.inputs as Record<string, HumanInputSchema> | undefined;
+          stepDef = {};
+          if (inputs !== undefined) {
+            stepDef.inputs = inputs;
+          }
+          if (sDef.prompt !== undefined) {
+            stepDef.prompt = sDef.prompt;
+          }
+        }
+      }
+    }
+  } catch {
+    // If we can't load the workflow, continue without input schema validation.
+    // The engine's enterHumanGate already has the step prompt stored in the
+    // human_gate_waiting event, so this is a best-effort enhancement.
+  }
 
-  const result = await recordHumanDecision({
+  // Resolve actor from environment (same pattern as approve/reject)
+  const userId = process.env["USER"] ?? process.env["USERNAME"] ?? undefined;
+
+  const result = await resumeWithInput({
     runDir,
     runId: activeRunId,
     jobId,
     stepId: resolvedStepId,
-    decision: "rejected",
-    comment,
+    input,
+    ...(userId !== undefined ? { actor: { id: userId, type: "user" as const } } : {}),
     source: "cli",
-    ...(decidedBy !== undefined ? { decidedBy } : {}),
+    ...(stepDef !== undefined ? { stepDef } : {}),
     clock,
     stateStore,
   });
 
   if (result.status === "duplicate") {
-    console.log(`[IDEMPOTENT] Step "${resolvedStepId}" in job "${jobId}" has already been rejected. No changes made.`);
+    console.log(`[IDEMPOTENT] Step "${resolvedStepId}" in job "${jobId}" has already been decided as "${result.outcome}". No changes made.`);
   } else {
-    console.log(`Rejected step "${resolvedStepId}" in job "${jobId}" of run ${activeRunId}.`);
-    console.log(`Comment: ${comment}`);
-    console.log("The router (if configured) may retry the upstream job.");
+    console.log(`Resumed step "${resolvedStepId}" in job "${jobId}" of run ${activeRunId}.`);
+    console.log(`Decision: ${result.outcome}`);
+    console.log(`Next action: ${result.nextAction}`);
+  }
+
+  if (result.status === "recorded") {
+    console.log("Run `zigma-flow run-all <workflow> --resume` to continue.");
   }
 }

@@ -78,7 +78,7 @@ export interface JobState {
   retry_inputs?: Record<string, string>; // retry_with payload from the router action that triggered this retry
   outputs?: Record<string, unknown>; // persisted from report.json.outputs by acceptAgentReport (WF-P9-ACCEPT)
   step_visits?: Record<string, number>; // visit count per step id (WF-P13-VARIABLES)
-  step_status?: "awaiting_human"; // per-step status for human gate (WF-P15-ENGINE, AD-P15-001)
+  step_status?: "awaiting_human" | "awaiting_input"; // per-step status for human gate (WF-P15-ENGINE, AD-P15-001, v0.6 Issue #210)
 }
 
 /** Item-level result from a traverse execution (WF-P16-TRAVERSE, Issue #179). */
@@ -112,7 +112,7 @@ export interface RunState {
   workflow: string;      // workflow name (NOT path)
   task: string;
   created_at: string;    // ISO 8601
-  status?: "running" | "blocked" | "failed" | "completed" | "cancelled"; // mvp-contracts §2.3
+  status?: "running" | "blocked" | "paused" | "failed" | "completed" | "cancelled"; // mvp-contracts §2.3, v0.6 Issue #210
   last_event_id: string; // id of tail event in events.jsonl
   jobs: Record<string, JobState>;
   variables?: Record<string, unknown>; // WF-P13-VARIABLES

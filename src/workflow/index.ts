@@ -11,7 +11,7 @@ import { parseDocument } from "yaml";
 import { z } from "zod";
 
 import { detectCycles, validateNeedsReferences } from "../dag/index.js";
-import { FilesystemError, ValidationError, WorkflowError } from "../utils/index.js";
+import { deprecationWarn, FilesystemError, ValidationError, WorkflowError } from "../utils/index.js";
 
 // ---------------------------------------------------------------------------
 // Deprecation warning helper (v0.6 control-flow convergence, Issue #209)
@@ -202,6 +202,32 @@ const StepBaseSchema = z.object({
    * AD-P15-002 (AD-out-of-scope for runtime enforcement until v0.3).
    */
   timeout_minutes: z.number().int().positive().optional(),
+  // Human step v0.6 input schema (Issue #210)
+  /**
+   * @stability experimental — may change in any minor version release without deprecation
+   *
+   * Structured input schema for a human step. Each key is an input name and
+   * the value defines the type, allowed values, and whether the input is required.
+   *
+   * When present, the engine validates submitted input against this schema
+   * before recording the decision and advancing state.
+   */
+  inputs: z.record(z.string(), z.object({
+    type: z.string(),
+    enum: z.array(z.string()).optional(),
+    required: z.boolean().optional(),
+  })).optional(),
+  /**
+   * @stability experimental — may change in any minor version release without deprecation
+   *
+   * Maps submitted input values to routing actions. Each key is an input
+   * field name (e.g. "decision"), and the nested keys are possible values
+   * (e.g. "approve", "reject") mapped to RouterAction outcomes.
+   *
+   * When omitted and a `decision` input has `enum: [approve, reject]`, the
+   * engine defaults to: approve → continue, reject → fail.
+   */
+  on_submit: z.record(z.string(), z.record(z.string(), RouterActionSchema)).optional(),
   // Step-specific output schemas (Issue #100)
   /** @stability experimental — may change in any minor version release without deprecation — not yet in published language spec */
   outputs_schema: z.record(z.string(), z.object({
@@ -275,6 +301,9 @@ export interface StepDefinition {
   instructions?: string;
   /** DSL-reserved field. Runtime enforcement deferred to v0.3+. */
   timeout_minutes?: number;
+  // Human step v0.6 input schema (Issue #210)
+  inputs?: Record<string, { type: string; enum?: string[]; required?: boolean }>;
+  on_submit?: Record<string, Record<string, RouterAction>>;
   // Step-specific output schemas (Issue #100)
   outputs_schema?: Record<string, { type: string; values?: string[]; on_value?: Record<string, RouterAction> }>;
   // Output-based routing (Issue #172)
@@ -1217,6 +1246,39 @@ export function loadWorkflow(yamlText: string, options?: LoadWorkflowOptions): W
           `Human step "${step.id}" in job "${jobName}" has non-array "approvers"`,
           { details: { job: jobName, step: step.id, field: "approvers" } }
         );
+      }
+
+      // v0.6 deprecation warnings (Issue #210)
+      if (step.approvers !== undefined) {
+        deprecationWarn(
+          `approvers field on human step "${step.id}" is deprecated. User identity and roles are managed by zigma-server or the calling Host`,
+          "'inputs' schema instead",
+        );
+      }
+
+      // Validate new v0.6 input schema if present
+      if (step.inputs !== undefined) {
+        for (const [inputName, inputDef] of Object.entries(step.inputs)) {
+          if (typeof inputDef.type !== "string" || inputDef.type.length === 0) {
+            throw new ValidationError(
+              `Human step "${step.id}" in job "${jobName}" has input "${inputName}" with invalid or missing "type"`,
+              { details: { job: jobName, step: step.id, input: inputName, field: "inputs" } }
+            );
+          }
+        }
+      }
+
+      // Validate on_submit keys reference declared inputs
+      if (step.on_submit !== undefined) {
+        const declaredInputs = step.inputs !== undefined ? new Set(Object.keys(step.inputs)) : new Set(["decision"]);
+        for (const [inputKey] of Object.entries(step.on_submit)) {
+          if (!declaredInputs.has(inputKey)) {
+            throw new ValidationError(
+              `Human step "${step.id}" in job "${jobName}" has on_submit key "${inputKey}" that does not match a declared input`,
+              { details: { job: jobName, step: step.id, key: inputKey } }
+            );
+          }
+        }
       }
     }
   }

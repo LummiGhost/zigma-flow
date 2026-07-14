@@ -221,5 +221,5 @@ Requirements: Node >= 20.11.0, pnpm 10+.
   - [docs/architecture.md](./docs/architecture.md) -- System design and module boundaries
   - [docs/mvp-contracts.md](./docs/mvp-contracts.md) -- MVP execution contracts
   - [docs/error-codes.md](./docs/error-codes.md) -- Stable exit code reference
-  - [docs/wiki/](./docs/wiki/) -- Chinese-language wiki (existing reference)
+
 - `.zigma-flow/` -- The project's own workflow configuration (dogfooding)

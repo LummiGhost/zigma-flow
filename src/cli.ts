@@ -232,8 +232,9 @@ async function runProgram(
     .option("--trace", "Verbose event-by-event output.")
     .option("--pause-before <job.step>", "Pause before a specific step (debugging).")
     .option("--stop-after <job.step>", "Stop after a specific step (debugging).")
+    .option("--save-all-prompts", "Save all prompts to artifacts without pausing (debugging mode).")
     .exitOverride()
-    .action(async (workflowPath: string, options: { task?: string; resume?: string; backend?: string; parallelism?: number; failFast?: boolean; input?: string[]; dryRun?: boolean; trace?: boolean; pauseBefore?: string; stopAfter?: string }) => {
+    .action(async (workflowPath: string, options: { task?: string; resume?: string; backend?: string; parallelism?: number; failFast?: boolean; input?: string[]; dryRun?: boolean; trace?: boolean; pauseBefore?: string; stopAfter?: string; saveAllPrompts?: boolean }) => {
       if (options.task === undefined && options.resume === undefined && options.dryRun !== true) {
         console.error("Error: Either --task <description>, --resume <run-id>, or --dry-run is required.");
         process.exit(2);
@@ -255,6 +256,7 @@ async function runProgram(
         ...(options.trace !== undefined ? { trace: options.trace } : {}),
         ...(options.pauseBefore !== undefined ? { pauseBefore: options.pauseBefore } : {}),
         ...(options.stopAfter !== undefined ? { stopAfter: options.stopAfter } : {}),
+        ...(options.saveAllPrompts !== undefined ? { saveAllPrompts: options.saveAllPrompts } : {}),
       });
     });
 

@@ -48,6 +48,8 @@ export interface InvokeOptions {
   pauseBefore?: string;
   /** Stop after completing a specific job.step (debugging). */
   stopAfter?: string;
+  /** Save all prompts without pausing (debugging mode). */
+  saveAllPrompts?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +197,9 @@ export async function invokeAction(
     ...(options.parallelism !== undefined ? { parallelism: options.parallelism } : {}),
     ...(options.failFast !== undefined ? { failFast: options.failFast } : {}),
     ...(options.inputs !== undefined ? { inputs: options.inputs } : {}),
+    ...(options.pauseBefore !== undefined ? { pauseBefore: options.pauseBefore } : {}),
+    ...(options.stopAfter !== undefined ? { stopAfter: options.stopAfter } : {}),
+    ...(options.saveAllPrompts !== undefined ? { saveAllPrompts: options.saveAllPrompts } : {}),
   };
 
   const summary: RunAllSummary = await runAll(runAllOpts);

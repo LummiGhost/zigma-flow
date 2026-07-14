@@ -403,6 +403,27 @@ export interface TraverseDefinition {
 }
 
 // ---------------------------------------------------------------------------
+// InputDefinition schema (v0.6 — top-level inputs)
+// ---------------------------------------------------------------------------
+
+/** @stability stable — v0.6 promoted to top-level from on.manual.inputs */
+const InputDefinitionSchema = z.object({
+  /** @stability stable */
+  type: z.enum(["string", "number", "boolean", "array", "object"]),
+  /** @stability stable */
+  required: z.boolean().optional(),
+  /** @stability stable */
+  default: z.unknown().optional(),
+}).passthrough();
+
+export interface InputDefinition {
+  type: "string" | "number" | "boolean" | "array" | "object";
+  required?: boolean;
+  default?: unknown;
+  [key: string]: unknown;
+}
+
+// ---------------------------------------------------------------------------
 // WorkflowDefinition schema
 // ---------------------------------------------------------------------------
 
@@ -411,8 +432,22 @@ const WorkflowSchema = z.object({
   name: z.string(),
   /** @stability stable */
   version: z.string(),
-  /** @stability stable */
+  /**
+   * @stability stable
+   *
+   * Host trigger declaration. The local runtime ignores this field;
+   * zigma-server and other hosts consume it for scheduling and event-driven
+   * invocations. Unknown trigger types are warnings without --host; errors with
+   * --host zigma-server.
+   */
   on: z.record(z.string(), z.unknown()).optional(),
+  /**
+   * @stability stable — v0.6 top-level workflow inputs.
+   *
+   * Replaces the deprecated on.manual.inputs. When both are present, top-level
+   * inputs takes precedence.
+   */
+  inputs: z.record(z.string(), InputDefinitionSchema).optional(),
   /** @stability stable */
   skills: z.record(z.string(), z.unknown()).optional(),
   /** @stability stable */
@@ -447,6 +482,7 @@ export interface WorkflowDefinition {
   name: string;
   version: string;
   on?: Record<string, unknown>;
+  inputs?: Record<string, InputDefinition>;
   skills?: Record<string, unknown>;
   permissions?: Record<string, unknown>;
   signals?: Record<string, SignalDeclaration>;
@@ -562,7 +598,19 @@ function scanWithValues(
  * constructs (§6.4): arithmetic, function calls, depth > 3.
  */
 function validateExpressions(workflow: WorkflowDefinition): void {
-  // Workflow input defaults (on.manual.inputs.<name>.default)
+  // Workflow input defaults (top-level inputs.<name>.default, v0.6+)
+  if (workflow.inputs) {
+    for (const [inputName, inputDef] of Object.entries(workflow.inputs)) {
+      if (inputDef.default !== undefined) {
+        scanWithValues(
+          inputDef.default,
+          `inputs.${inputName}.default`,
+        );
+      }
+    }
+  }
+
+  // Workflow input defaults (on.manual.inputs.<name>.default) — deprecated path
   const onManual = workflow.on as { manual?: { inputs?: Record<string, { default?: unknown }> } } | undefined;
   if (onManual?.manual?.inputs) {
     for (const [inputName, inputDef] of Object.entries(onManual.manual.inputs)) {
@@ -614,6 +662,37 @@ function validateExpressions(workflow: WorkflowDefinition): void {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Emit a deprecation warning to stderr.
+ *
+ * Format: [DEPRECATED] <message>. Use <alternative>. This will be removed in v1.0.
+ *
+ * Suppressed when the ZIGMA_SUPPRESS_DEPRECATION environment variable is set.
+ */
+function deprecationWarn(message: string, alternative: string): void {
+  if (process.env.ZIGMA_SUPPRESS_DEPRECATION) return;
+  console.warn(`[DEPRECATED] ${message}. Use ${alternative}. This will be removed in v1.0.`);
+}
+
+// ---------------------------------------------------------------------------
+// Known trigger types per host
+// ---------------------------------------------------------------------------
+
+/** Triggers known to the local runtime. */
+const LOCAL_KNOWN_TRIGGERS = new Set(["manual"]);
+
+/** Triggers known to zigma-server. */
+const ZIGMA_SERVER_KNOWN_TRIGGERS = new Set(["manual", "schedule", "webhook", "push"]);
+
+/**
+ * Return the set of known trigger types for the given host.
+ * When no host is specified, the local runtime set is used for warnings only.
+ */
+function getKnownTriggers(host?: string): Set<string> {
+  if (host === "zigma-server") return ZIGMA_SERVER_KNOWN_TRIGGERS;
+  return LOCAL_KNOWN_TRIGGERS;
+}
+
 function formatZodErrors(issues: z.ZodIssue[]): Record<string, unknown> {
   const paths: string[] = issues.map((issue) => issue.path.join("."));
   const fields: Record<string, string> = {};
@@ -628,7 +707,24 @@ function formatZodErrors(issues: z.ZodIssue[]): Record<string, unknown> {
 // loadWorkflow — synchronous
 // ---------------------------------------------------------------------------
 
-export function loadWorkflow(yamlText: string): WorkflowDefinition {
+/**
+ * Options for loadWorkflow validation.
+ *
+ * @stability stable — v0.6
+ */
+export interface LoadWorkflowOptions {
+  /**
+   * Host name for trigger validation.
+   *
+   * - When omitted, unknown trigger types produce deprecation warnings
+   *   (the local runtime ignores triggers).
+   * - When set to "zigma-server", unknown trigger types cause validation
+   *   errors (strict mode for server-side consumption).
+   */
+  host?: string;
+}
+
+export function loadWorkflow(yamlText: string, options?: LoadWorkflowOptions): WorkflowDefinition {
   // 1. Parse YAML, catching syntax errors
   let doc: ReturnType<typeof parseDocument>;
   try {
@@ -931,6 +1027,55 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
   // 10. Expression validation (§6.4 — forbidden constructs)
   validateExpressions(wf);
 
+  // 10b. Trigger type validation (v0.6 — on is optional, triggers are host concerns)
+  if (wf.on) {
+    const knownTriggers = getKnownTriggers(options?.host);
+    for (const triggerType of Object.keys(wf.on)) {
+      if (!knownTriggers.has(triggerType)) {
+        const msg = `Unknown trigger type '${triggerType}'. This trigger will be ignored by the local runtime but may be used by zigma-server.`;
+        if (options?.host === "zigma-server") {
+          throw new ValidationError(
+            `Unknown trigger type '${triggerType}' for host 'zigma-server'`,
+            { details: { triggerType, host: options.host } }
+          );
+        }
+        // Without a specific host, unknown triggers are warnings
+        console.warn(msg);
+      }
+    }
+  }
+
+  // 10c. on.manual.inputs deprecation and auto-migration (v0.6)
+  const onManual = wf.on as { manual?: { inputs?: Record<string, { type?: string; required?: boolean; default?: unknown; [key: string]: unknown }> } } | undefined;
+  if (onManual?.manual?.inputs) {
+    const manualInputs = onManual.manual.inputs;
+    const manualKeys = Object.keys(manualInputs);
+
+    if (wf.inputs && Object.keys(wf.inputs).length > 0) {
+      // Both top-level inputs and on.manual.inputs present → top-level wins
+      deprecationWarn(
+        "on.manual.inputs is deprecated",
+        "top-level 'inputs' instead"
+      );
+      console.warn("[DEPRECATED] on.manual.inputs is ignored because top-level 'inputs' is present. Remove on.manual.inputs. This will be removed in v1.0.");
+    } else {
+      // Auto-migrate: top-level inputs empty/missing, on.manual.inputs has entries
+      deprecationWarn(
+        "on.manual.inputs is deprecated",
+        "top-level 'inputs' instead"
+      );
+      const migrated: Record<string, InputDefinition> = {};
+      for (const [key, def] of Object.entries(manualInputs)) {
+        migrated[key] = {
+          type: (def.type as InputDefinition["type"]) ?? "string",
+          ...(def.required !== undefined ? { required: def.required } : {}),
+          ...(def.default !== undefined ? { default: def.default } : {}),
+        };
+      }
+      wf.inputs = migrated;
+    }
+  }
+
   // 11. Human step field validation (WF-P15-SCHEMA, AD-P15-002)
   for (const [jobName, job] of Object.entries(wf.jobs)) {
     for (const step of job.steps) {
@@ -980,7 +1125,10 @@ export function loadWorkflow(yamlText: string): WorkflowDefinition {
 // loadWorkflowFile — async file reader
 // ---------------------------------------------------------------------------
 
-export async function loadWorkflowFile(filePath: string): Promise<WorkflowDefinition> {
+export async function loadWorkflowFile(
+  filePath: string,
+  options?: LoadWorkflowOptions,
+): Promise<WorkflowDefinition> {
   let text: string;
   try {
     text = await readFile(filePath, "utf-8");
@@ -989,5 +1137,5 @@ export async function loadWorkflowFile(filePath: string): Promise<WorkflowDefini
       cause: e,
     });
   }
-  return loadWorkflow(text);
+  return loadWorkflow(text, options);
 }

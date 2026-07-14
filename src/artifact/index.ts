@@ -31,3 +31,10 @@ export {
 
 export { writeContextBlockArtifact } from "./writeContextBlockArtifact.js";
 export type { WriteContextBlockArtifactOpts } from "./writeContextBlockArtifact.js";
+
+export {
+  HumanDecisionRecordSchema,
+  DecisionActorSchema,
+  type HumanDecisionRecord,
+  type DecisionActor,
+} from "./humanDecisionRecord.js";

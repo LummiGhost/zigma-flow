@@ -164,6 +164,32 @@ export async function enterHumanGate(opts: EnterHumanGateOpts): Promise<void> {
 // recordHumanDecision
 // ---------------------------------------------------------------------------
 
+/**
+ * Source channel from which a human decision was submitted.
+ *
+ * - `"cli"` — local CLI command (`zigma-flow approve` / `reject`)
+ * - `"api"` — Host API programmatic call
+ * - `"email"` — email-based approval link
+ * - `"web"` — web UI / dashboard
+ */
+export type DecisionSource = "cli" | "api" | "email" | "web";
+
+/**
+ * Structured actor identity for a human decision.
+ *
+ * Replaces the legacy flat `decidedBy` string with a richer record
+ * suitable for audit trails and downstream tooling. See also
+ * `src/artifact/humanDecisionRecord.ts` for the on-disk schema.
+ */
+export interface DecisionActor {
+  /** Unique actor identifier (provider-agnostic). */
+  id: string;
+  /** Display name (optional). */
+  name?: string;
+  /** Actor category. */
+  type: "user" | "system" | "service";
+}
+
 export interface RecordHumanDecisionOpts {
   runDir: string;
   runId: string;
@@ -172,7 +198,17 @@ export interface RecordHumanDecisionOpts {
   decision: "approved" | "rejected";
   comment?: string;
   outputs?: Record<string, string>;
+  /** Legacy flat identity string (kept for backward compatibility). */
   decidedBy?: string;
+  /** Structured actor identity (replaces decidedBy for new consumers). */
+  actor?: DecisionActor;
+  /**
+   * Source channel the decision came through.
+   *
+   * When omitted the engine defaults to `"cli"` if `decidedBy` was resolved
+   * from a process environment variable, or `"api"` otherwise.
+   */
+  source?: DecisionSource;
   clock: Clock;
   stateStore?: LocalStateStore;
   eventWriter?: JsonlEventWriter;
@@ -188,6 +224,8 @@ export async function recordHumanDecision(opts: RecordHumanDecisionOpts): Promis
     comment,
     outputs: customOutputs,
     decidedBy,
+    actor: explicitActor,
+    source: explicitSource,
     clock,
     stateStore = new LocalStateStore(),
     eventWriter = new JsonlEventWriter(),
@@ -211,6 +249,17 @@ export async function recordHumanDecision(opts: RecordHumanDecisionOpts): Promis
     );
   }
 
+  // Resolve actor and source
+  const resolvedActor: DecisionActor | undefined =
+    explicitActor ??
+    (decidedBy !== undefined
+      ? { id: decidedBy, type: "user" as const }
+      : undefined);
+
+  const resolvedSource: DecisionSource | undefined =
+    explicitSource ??
+    (decidedBy !== undefined ? "cli" : "api");
+
   // 2. Write human_decision_record artifact
   const attempt = jobState.attempt ?? 1;
   const stepDir = join(
@@ -223,17 +272,27 @@ export async function recordHumanDecision(opts: RecordHumanDecisionOpts): Promis
     stepId,
   );
 
-  const decisionRecord = JSON.stringify({
+  const stepArtifactDir = relative(runDir, stepDir).replace(/\\/g, "/");
+
+  const decisionRecord: Record<string, unknown> = {
     decision,
-    ...(comment !== undefined ? { comment } : {}),
-    ...(decidedBy !== undefined ? { decided_by: decidedBy } : {}),
-    ...(customOutputs !== undefined && Object.keys(customOutputs).length > 0 ? { outputs: customOutputs } : {}),
     timestamp: clock.now(),
-  }, null, 2);
+    step_artifact_dir: stepArtifactDir,
+  };
+  if (comment !== undefined) decisionRecord["comment"] = comment;
+  if (decidedBy !== undefined) decisionRecord["decided_by"] = decidedBy;
+  if (resolvedActor !== undefined) decisionRecord["actor"] = resolvedActor;
+  if (resolvedSource !== undefined) decisionRecord["source"] = resolvedSource;
+  if (customOutputs !== undefined && Object.keys(customOutputs).length > 0) {
+    decisionRecord["outputs"] = customOutputs;
+    decisionRecord["custom_outputs"] = customOutputs;
+  }
+
+  const decisionRecordJson = JSON.stringify(decisionRecord, null, 2);
 
   const decisionPath = join(stepDir, "human-decision.json");
   await mkdir(stepDir, { recursive: true });
-  await writeFile(decisionPath, decisionRecord, "utf-8");
+  await writeFile(decisionPath, decisionRecordJson, "utf-8");
 
   const decisionRelPath = relative(runDir, decisionPath).replace(/\\/g, "/");
   const metadata: ArtifactMetadata = {
@@ -243,7 +302,7 @@ export async function recordHumanDecision(opts: RecordHumanDecisionOpts): Promis
     kind: "human_decision_record",
     path: decisionRelPath,
     content_type: "application/json",
-    size: Buffer.byteLength(decisionRecord, "utf-8"),
+    size: Buffer.byteLength(decisionRecordJson, "utf-8"),
     summary: `Decision: ${decision}${comment !== undefined ? ` — ${comment.slice(0, 150)}` : ""}`,
     created_at: clock.now(),
   };

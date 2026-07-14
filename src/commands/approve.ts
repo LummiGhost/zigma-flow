@@ -126,6 +126,7 @@ export async function approveAction(opts: ApproveActionOpts): Promise<void> {
     jobId,
     stepId: resolvedStepId,
     decision: "approved",
+    source: "cli",
     ...(comment !== undefined ? { comment } : {}),
     ...(outputs !== undefined ? { outputs } : {}),
     ...(decidedBy !== undefined ? { decidedBy } : {}),

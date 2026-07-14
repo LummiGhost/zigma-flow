@@ -105,13 +105,13 @@ describe("deprecationWarn utility", () => {
   });
 
   it("prints deprecation warning to stderr", () => {
-    deprecationWarn("run", "zigma-flow invoke");
+    deprecationWarn("deprecated-cmd is deprecated", "new-cmd");
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const msg = warnSpy.mock.calls[0]?.[0] as string;
     expect(msg).toContain("[DEPRECATED]");
-    expect(msg).toContain("zigma-flow run");
-    expect(msg).toContain("zigma-flow invoke");
+    expect(msg).toContain("deprecated-cmd");
+    expect(msg).toContain("new-cmd");
     expect(msg).toContain("v1.0");
   });
 

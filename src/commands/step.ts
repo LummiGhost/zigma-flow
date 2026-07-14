@@ -95,7 +95,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function stepAction(opts: StepActionOpts): Promise<void> {
-  deprecationWarn("step", "zigma-flow invoke");
+  deprecationWarn("'zigma-flow step' is deprecated", "zigma-flow invoke");
   const { zigmaflowDir, clock, runId } = opts;
   const stateStore = new LocalStateStore();
 

@@ -1,10 +1,12 @@
 /**
- * Shared deprecation utility for CLI commands.
+ * Shared deprecation utility.
  *
- * Prints a consistently formatted deprecation warning to stderr when
- * ZIGMA_SUPPRESS_DEPRECATION is not set.
+ * Prints consistently formatted deprecation warnings to stderr via console.warn.
+ * Supports the `ZIGMA_SUPPRESS_DEPRECATION` environment variable — when set to
+ * "1" or "true", all deprecation warnings are silently suppressed.
  *
- * Reference: docs/prd.md §17 (CLI commands).
+ * Format (with alternative): `[DEPRECATED] <message>. Use <alternative>. This will be removed in v1.0.`
+ * Format (without alternative): prints message as-is (for pre-formatted warnings).
  */
 
 function deprecationEnabled(): boolean {
@@ -13,17 +15,24 @@ function deprecationEnabled(): boolean {
 }
 
 /**
- * Issue a deprecation warning for a deprecated CLI command.
+ * Emit a deprecation warning to stderr if not suppressed.
  *
- * Format: `[DEPRECATED] <command> is deprecated. Use <alternative>. This will be removed in v1.0.`
- *
- * Printed to stderr via console.warn. Suppressed when `ZIGMA_SUPPRESS_DEPRECATION=1` or `true`.
- *
- * The environment variable is read on every call to support dynamic toggling in tests.
+ * @param message   - Description of the deprecated feature/field/command.
+ * @param alternative - The recommended replacement. When provided, the message
+ *                      is formatted as `[DEPRECATED] <message>. Use <alternative>. ...`
+ *                      When omitted, the message is printed as-is (for pre-formatted warnings).
+ * @param removalVersion - The version when the feature will be removed (default "v1.0").
  */
-export function deprecationWarn(command: string, alternative: string): void {
+export function deprecationWarn(
+  message: string,
+  alternative?: string,
+  removalVersion: string = "v1.0",
+): void {
   if (!deprecationEnabled()) return;
-  console.warn(
-    `[DEPRECATED] 'zigma-flow ${command}' is deprecated. Use '${alternative}' instead. This will be removed in v1.0.`,
-  );
+
+  if (alternative) {
+    console.warn(`[DEPRECATED] ${message}. Use ${alternative}. This will be removed in ${removalVersion}.`);
+  } else {
+    console.warn(message);
+  }
 }

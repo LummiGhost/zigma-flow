@@ -5,6 +5,7 @@
  *   - ${{ inputs.<key> }}  — from ctx.inputs[key]
  *   - ${{ run.id }}        — from ctx.run.id
  *   - ${{ run.workflow }}  — from ctx.run.workflow
+ *   - ${{ run.dir }}       — from ctx.run.dir (absolute path to the run directory)
  *   - ${{ retry.inputs.<key> }} — from ctx.retry?.inputs[key]
  *   - ${{ variables.<name> }}  — from ctx.variables?[name]
  *   - ${{ jobs.<id>.outputs.<key> }} — from ctx.jobs?[id].outputs?[key]
@@ -26,7 +27,7 @@ import { ValidationError } from "../utils/index.js";
 
 export interface ExpressionContext {
   inputs: Record<string, string>;
-  run: { id: string; workflow: string };
+  run: { id: string; workflow: string; dir?: string };
   retry?: { inputs: Record<string, string> };
   variables?: Record<string, unknown>;
   jobs?: Record<string, { outputs?: Record<string, unknown> }>;
@@ -63,6 +64,11 @@ export function resolveExpression(template: string, ctx: ExpressionContext): str
     // ${{ run.workflow }}
     if (expr === "run.workflow") {
       return ctx.run.workflow;
+    }
+
+    // ${{ run.dir }}
+    if (expr === "run.dir") {
+      return ctx.run.dir !== undefined ? ctx.run.dir : fullMatch;
     }
 
     // ${{ inputs.<key> }}

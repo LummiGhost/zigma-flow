@@ -183,6 +183,30 @@ describe("resolveExpression — nested key access (FR-EXPR-STEPS-005)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ${{ run.dir }} — run directory expression (Issue #221)
+// ---------------------------------------------------------------------------
+
+describe("resolveExpression — run.dir (Issue #221)", () => {
+  it("${{ run.dir }} resolves to the run directory when ctx.run.dir is set", () => {
+    const ctx = makeExprCtx({ run: { id: FIXED_RUN_ID, workflow: "code-change", dir: "/path/to/runs/run-001" } });
+    const result = resolveExpression("${{ run.dir }}", ctx);
+    expect(result).toBe("/path/to/runs/run-001");
+  });
+
+  it("${{ run.dir }} is preserved as literal when ctx.run.dir is absent", () => {
+    const ctx = makeExprCtx();
+    const result = resolveExpression("${{ run.dir }}", ctx);
+    expect(result).toBe("${{ run.dir }}");
+  });
+
+  it("${{ run.dir }} can be used in a path template", () => {
+    const ctx = makeExprCtx({ run: { id: FIXED_RUN_ID, workflow: "code-change", dir: "/tmp/runs/r-1" } });
+    const result = resolveExpression("${{ run.dir }}/artifacts", ctx);
+    expect(result).toBe("/tmp/runs/r-1/artifacts");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Combined patterns
 // ---------------------------------------------------------------------------
 

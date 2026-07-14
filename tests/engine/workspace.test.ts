@@ -333,6 +333,27 @@ describe("resolveJobWorkingDirectory", () => {
     expect(result).toBe(tmpDir);
   });
 
+  it("resolves ${{ run.dir }} to the run directory", async () => {
+    const jobDef = {
+      steps: [{ id: "s1", type: "script" as const, run: "echo" }],
+      workspace: "${{ run.dir }}",
+    };
+    const state = makeRunState();
+    // tmpDir is a real directory, so pass it as the runDir argument
+    const result = await resolveJobWorkingDirectory(jobDef, state, tmpDir);
+    expect(result).toBe(tmpDir);
+  });
+
+  it("leaves ${{ run.dir }} unresolved when runDir is not provided", async () => {
+    const jobDef = {
+      steps: [{ id: "s1", type: "script" as const, run: "echo" }],
+      workspace: "${{ run.dir }}",
+    };
+    const state = makeRunState();
+    // Without runDir, the expression stays unresolved → ValidationError
+    await expect(resolveJobWorkingDirectory(jobDef, state)).rejects.toThrow(ValidationError);
+  });
+
   it("throws ValidationError for non-existent directory", async () => {
     const nonExistent = join(tmpDir, "does-not-exist");
     const jobDef = {

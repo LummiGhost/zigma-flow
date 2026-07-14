@@ -1062,7 +1062,7 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   let jobCwd: string | undefined;
   if (jobDef !== undefined) {
     try {
-      jobCwd = await resolveJobWorkingDirectory(jobDef, state);
+      jobCwd = await resolveJobWorkingDirectory(jobDef, state, runDir);
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       await recordAgentFailure({

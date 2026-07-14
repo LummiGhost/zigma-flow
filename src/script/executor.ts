@@ -306,7 +306,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
   }
   const exprCtx: ExpressionContext = {
     inputs: {},
-    run: { id: runId, workflow: state.workflow },
+    run: { id: runId, workflow: state.workflow, dir: runDir },
     jobs: Object.fromEntries(
       Object.entries(state.jobs).map(([jId, j]) => [jId, { outputs: j.outputs ?? {} }])
     ),

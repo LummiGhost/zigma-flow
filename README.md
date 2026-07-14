@@ -16,7 +16,7 @@ A local, single-process TypeScript CLI that orchestrates multi-job workflows for
 1. **Install zigma-flow globally:**
 
    ```bash
-   npm install -g zigma-flow
+   npm install -g @zigma-ai/zigma-flow
    ```
 
 2. **Navigate to your project** (or a fresh directory):

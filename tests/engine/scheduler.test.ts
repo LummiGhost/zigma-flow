@@ -670,3 +670,62 @@ describe("selectExecutable — determinism", () => {
     expect(batch1.rationale).toBe(batch2.rationale);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #225: Ready job missing from workflow.jobs (Zod stripping, v0.5 compat)
+// ---------------------------------------------------------------------------
+
+describe("selectExecutable — missing job definition (Issue #225)", () => {
+  it("selects ready job as writable when missing from workflow.jobs (T-SCHED-225-1)", () => {
+    const state = makeRunState({
+      "issue-context": makeJobState("ready"),
+    });
+    // workflow.jobs is empty — "issue-context" is missing due to Zod
+    // stripping v0.5-style unknown fields from the job definition
+    const wf = makeWorkflow({});
+
+    const batch = selectExecutable({ state, workflow: wf, config: DEFAULT_CONFIG });
+
+    expect(batch.jobs).toHaveLength(1);
+    expect(batch.jobs[0]!.jobId).toBe("issue-context");
+    expect(batch.jobs[0]!.mode).toBe("writable");
+  });
+
+  it("selects multiple ready jobs as writable when all missing from workflow.jobs (T-SCHED-225-2)", () => {
+    const state = makeRunState({
+      "issue-context": makeJobState("ready"),
+      "code-map": makeJobState("ready"),
+    });
+    // Neither job is in workflow.jobs
+    const wf = makeWorkflow({});
+
+    const batch = selectExecutable({ state, workflow: wf, config: DEFAULT_CONFIG });
+
+    // Only 1 writable due to write lock — the other is queued
+    expect(batch.jobs).toHaveLength(1);
+    expect(batch.jobs[0]!.mode).toBe("writable");
+  });
+
+  it("mixes missing + known jobs, respecting writable lock (T-SCHED-225-3)", () => {
+    const state = makeRunState({
+      "unknown-job": makeJobState("ready"),
+      "known-ro": makeJobState("ready"),
+    });
+    const wf = makeWorkflow({
+      "known-ro": makeJobDef("read-only"),
+    });
+    // "unknown-job" is not in wf — treated as writable
+    // "known-ro" is read-only
+    // No writable running → 1 RO + 1 W
+
+    const batch = selectExecutable({ state, workflow: wf, config: DEFAULT_CONFIG });
+
+    expect(batch.jobs).toHaveLength(2);
+    const ro = batch.jobs.filter((j) => j.mode === "read-only");
+    const w = batch.jobs.filter((j) => j.mode === "writable");
+    expect(ro).toHaveLength(1);
+    expect(w).toHaveLength(1);
+    expect(ro[0]!.jobId).toBe("known-ro");
+    expect(w[0]!.jobId).toBe("unknown-job");
+  });
+});

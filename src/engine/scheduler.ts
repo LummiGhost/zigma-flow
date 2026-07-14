@@ -123,9 +123,11 @@ export function selectExecutable(input: SchedulerInput): ExecutableBatch {
 
   for (const [id, js] of Object.entries(state.jobs)) {
     if (js.status === "ready") {
-      // Silently skip jobs that have no corresponding JobDefinition (caller
-      // should ensure consistency).
+      // Job not found in workflow definition — treat as writable
+      // (conservative). This can happen when Zod strips unknown fields
+      // from v0.5-style job definitions (e.g. `skill:` at step level).
       if (!workflow.jobs[id]) {
+        readyWritable.push(id);
         continue;
       }
       if (getJobMode(id, workflow) === "read-only") {

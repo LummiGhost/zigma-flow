@@ -14,23 +14,6 @@ import { detectCycles, validateNeedsReferences } from "../dag/index.js";
 import { deprecationWarn, FilesystemError, ValidationError, WorkflowError } from "../utils/index.js";
 
 // ---------------------------------------------------------------------------
-// Deprecation warning helper (v0.6 control-flow convergence, Issue #209)
-// ---------------------------------------------------------------------------
-
-/**
- * Issue a deprecation warning to stderr.
- * Suppressed when `ZIGMA_SUPPRESS_DEPRECATION` env var is set.
- */
-function deprecationWarn(message: string, alternative?: string): void {
-  if (process.env.ZIGMA_SUPPRESS_DEPRECATION) return;
-  if (alternative) {
-    console.warn(`[DEPRECATED] ${message}. Use ${alternative}. This will be removed in v1.0.`);
-  } else {
-    console.warn(message);
-  }
-}
-
-// ---------------------------------------------------------------------------
 // RouterAction schema
 // ---------------------------------------------------------------------------
 

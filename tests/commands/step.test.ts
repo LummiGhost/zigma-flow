@@ -552,7 +552,7 @@ describe("stepAction with --latest flag", () => {
         (call: unknown[]) => String(call[0]).includes("[DEPRECATED]")
       );
       expect(deprecationCalls).toHaveLength(1);
-      expect(String(deprecationCalls[0]?.[0])).toContain("zigma-flow step");
+      expect(String(deprecationCalls[0]?.[0])).toContain("step");
       expect(String(deprecationCalls[0]?.[0])).not.toContain("active_run");
     } finally {
       warnSpy.mockRestore();

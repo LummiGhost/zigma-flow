@@ -24,6 +24,9 @@ export function deprecationWarn(
 ): void {
   if (process.env[SUPPRESS_KEY]) return;
 
-  const alt = alternative ? ` Use ${alternative}.` : "";
-  console.warn(`[DEPRECATED] ${message}.${alt} This will be removed in ${removalVersion}.`);
+  if (alternative) {
+    console.warn(`[DEPRECATED] ${message}. Use ${alternative}. This will be removed in ${removalVersion}.`);
+  } else {
+    console.warn(message);
+  }
 }

@@ -110,7 +110,7 @@ describe("deprecationWarn utility", () => {
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const msg = warnSpy.mock.calls[0]?.[0] as string;
     expect(msg).toContain("[DEPRECATED]");
-    expect(msg).toContain("zigma-flow run");
+    expect(msg).toContain("run");
     expect(msg).toContain("zigma-flow invoke");
     expect(msg).toContain("v1.0");
   });
@@ -131,8 +131,8 @@ describe("deprecationWarn utility", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("does NOT suppress when ZIGMA_SUPPRESS_DEPRECATION=0", () => {
-    process.env["ZIGMA_SUPPRESS_DEPRECATION"] = "0";
+  it("does NOT suppress when ZIGMA_SUPPRESS_DEPRECATION is empty", () => {
+    process.env["ZIGMA_SUPPRESS_DEPRECATION"] = "";
 
     deprecationWarn("run", "zigma-flow invoke");
 

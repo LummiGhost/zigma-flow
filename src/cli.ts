@@ -36,6 +36,18 @@ import { artifactsAction } from "./commands/artifacts.js";
 import { skillAddAction } from "./commands/skill-add.js";
 import { SystemClock } from "./run/index.js";
 
+/**
+ * Emit a deprecation warning to stderr.
+ *
+ * Format: [DEPRECATED] <message>. Use <alternative>. This will be removed in v1.0.
+ *
+ * Suppressed when the ZIGMA_SUPPRESS_DEPRECATION environment variable is set.
+ */
+function cliDeprecationWarn(message: string, alternative: string): void {
+  if (process.env.ZIGMA_SUPPRESS_DEPRECATION) return;
+  console.warn(`[DEPRECATED] ${message}. Use ${alternative}. This will be removed in v1.0.`);
+}
+
 function collectInputs(value: string, previous: string[]): string[] {
   return previous.concat([value]);
 }
@@ -208,9 +220,12 @@ async function runProgram(
   program
     .command("validate <path>")
     .description("Validate a workflow YAML or Skill Pack manifest.")
+    .option("--host <name>", "Host name for strict trigger validation (e.g. zigma-server).")
     .exitOverride()
-    .action(async (filePath: string) => {
-      await validateAction(filePath);
+    .action(async (filePath: string, options: { host?: string }) => {
+      const validateOpts: { host?: string | undefined } = {};
+      if (options.host !== undefined) validateOpts.host = options.host;
+      await validateAction(filePath, validateOpts);
     });
 
   program
@@ -220,6 +235,7 @@ async function runProgram(
     .option("--input <key=value>", "Named input for the workflow (repeatable).", collectInputs, [] as string[])
     .exitOverride()
     .action(async (workflowPath: string, options: { task: string; input?: string[] }) => {
+      cliDeprecationWarn("--task", "--input task='...'");
       const inputs = parseInputs(options.input);
       await runAction(workflowPath, { task: options.task, projectRoot: cwd(), ...(inputs !== undefined ? { inputs } : {}) });
     });
@@ -235,6 +251,9 @@ async function runProgram(
     .option("--input <key=value>", "Named input for the workflow (repeatable).", collectInputs, [] as string[])
     .exitOverride()
     .action(async (workflowPath: string, options: { task?: string; resume?: string; backend?: string; parallelism?: number; failFast?: boolean; input?: string[] }) => {
+      if (options.task !== undefined) {
+        cliDeprecationWarn("--task", "--input task='...'");
+      }
       if (options.task === undefined && options.resume === undefined) {
         console.error("Error: Either --task <description> or --resume <run-id> is required.");
         process.exit(2);

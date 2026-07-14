@@ -137,10 +137,11 @@ version: 0.3.0
 
 on:
   manual:
-    inputs:
-      task:
-        type: string
-        required: true
+
+inputs:
+  task:
+    type: string
+    required: true
 
 skills:
   code:
@@ -464,10 +465,11 @@ version: 0.1.0
 
 on:
   manual:
-    inputs:
-      task:
-        type: string
-        required: true
+
+inputs:
+  task:
+    type: string
+    required: true
 
 skills:
   code:

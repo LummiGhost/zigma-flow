@@ -124,10 +124,7 @@ describe("runAction", () => {
     expect(runYaml).toContain("path:");
     expect(runYaml).toContain("code-change.yml");
 
-    const config = JSON.parse(await readFile(sandbox.configPath, "utf-8")) as {
-      active_run: string | null;
-    };
-    expect(config.active_run).toBe(runIds[0]);
+    // v0.6: active_run is deprecated — runAction no longer sets it in config.json
 
     const printed = logSpy.mock.calls
       .map((call: unknown[]) => String(call[0] ?? ""))
@@ -140,5 +137,38 @@ describe("runAction", () => {
     await expect(runAction("missing-workflow", { task: "fix the bug" })).rejects.toBeInstanceOf(
       FilesystemError,
     );
+  });
+
+  it("two runs coexist without interfering via active_run (T-CONCURRENT-1)", async () => {
+    // v0.6: active_run is deprecated. Multiple runs coexist without a shared
+    // pointer in config.json. Each run is independent.
+
+    // Place the workflow under .zigma-flow/workflows/ so runAction can resolve
+    // the bare name "code-change".
+    const workflowsDir = join(sandbox.projectRoot, ".zigma-flow", "workflows");
+    await mkdir(workflowsDir, { recursive: true });
+    await writeFile(join(workflowsDir, "code-change.yml"), SINGLE_AGENT_WORKFLOW_YAML, "utf-8");
+
+    // Create two runs sequentially (run ID generator uses directory listing which
+    // is not safe for concurrent creation within the same process).
+    await runAction("code-change", { task: "task A" });
+    await runAction("code-change", { task: "task B" });
+
+    // Both runs must exist.
+    const runIds = await readdir(sandbox.runsDir);
+    expect(runIds).toHaveLength(2);
+
+    // Verify both tasks were recorded correctly.
+    for (const rid of runIds) {
+      const runYaml = await readFile(join(sandbox.runsDir, rid!, "run.yml"), "utf-8");
+      expect(runYaml).toMatch(/task: task [AB]/);
+      expect(runYaml).toContain("code-change.yml");
+    }
+
+    // Config should no longer have active_run set — no single "current" run.
+    const config = JSON.parse(await readFile(sandbox.configPath, "utf-8")) as {
+      active_run?: string | null;
+    };
+    expect(config.active_run ?? null).toBeNull();
   });
 });

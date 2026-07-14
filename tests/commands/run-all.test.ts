@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -118,13 +118,12 @@ describe("runAllAction", () => {
     expect(TestRunAllBackend.calls[0]!.prompt).toContain("# intake/analyze Agent Prompt");
     expect(TestRunAllBackend.calls[0]!.prompt).toContain("exercise the first ready job");
 
-    const config = JSON.parse(await readFile(sandbox.configPath, "utf-8")) as {
-      active_run: string | null;
-    };
-    expect(config.active_run).toBeTruthy();
+    // v0.6: active_run is deprecated — find the run via directory listing
+    const runDirListFirst = await readdir(sandbox.runsDir);
+    const foundRunIdFirst = runDirListFirst.sort().reverse()[0]!;
 
     const state = JSON.parse(
-      await readFile(join(sandbox.runsDir, config.active_run!, "state.json"), "utf-8"),
+      await readFile(join(sandbox.runsDir, foundRunIdFirst, "state.json"), "utf-8"),
     ) as {
       status?: string;
       jobs: Record<string, { status: string; outputs?: Record<string, unknown> }>;
@@ -164,9 +163,11 @@ describe("runAllAction", () => {
 
     await runAllAction(sandbox.workflowPath, { task: "advance without completed flag" });
 
-    const config = JSON.parse(await readFile(sandbox.configPath, "utf-8")) as { active_run: string | null };
+    // v0.6: active_run is deprecated — find the run via directory listing
+    const runDirs = await readdir(sandbox.runsDir);
+    const runId = runDirs.sort().reverse()[0]!;
     const state = JSON.parse(
-      await readFile(join(sandbox.runsDir, config.active_run!, "state.json"), "utf-8"),
+      await readFile(join(sandbox.runsDir, runId, "state.json"), "utf-8"),
     ) as { status?: string; jobs: Record<string, { status: string }> };
 
     expect(state.status).toBe("completed");
@@ -185,13 +186,12 @@ describe("runAllAction", () => {
     expect(TestRunAllBackend.calls).toHaveLength(1);
     expect(TestRunAllBackend.calls[0]!.prompt).toContain("bare name lookup");
 
-    const config = JSON.parse(await readFile(sandbox.configPath, "utf-8")) as {
-      active_run: string | null;
-    };
-    expect(config.active_run).toBeTruthy();
+    // v0.6: active_run is deprecated — find the run via directory listing
+    const runDirEntries2 = await readdir(sandbox.runsDir);
+    const runId2 = runDirEntries2.sort().reverse()[0]!;
 
     const state = JSON.parse(
-      await readFile(join(sandbox.runsDir, config.active_run!, "state.json"), "utf-8"),
+      await readFile(join(sandbox.runsDir, runId2, "state.json"), "utf-8"),
     ) as {
       status?: string;
       jobs: Record<string, { status: string; outputs?: Record<string, unknown> }>;

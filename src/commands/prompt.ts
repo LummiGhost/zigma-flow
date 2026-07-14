@@ -61,6 +61,8 @@ export interface PromptActionOpts {
   clock: Clock;
   /** Optional explicit run id (from --run flag). */
   runId?: string;
+  /** Use the most recently created run (from --latest flag, explicit). */
+  latest?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,8 +106,8 @@ export async function promptAction(opts: PromptActionOpts): Promise<void> {
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
 
-  // 1. Resolve run id (explicit --run or active_run from config)
-  const activeRunId = await resolveRunId(zigmaflowDir, runId);
+  // 1. Resolve run id (explicit --run, --latest, or deprecated fallback from config)
+  const activeRunId = await resolveRunId(zigmaflowDir, runId, opts.latest !== undefined ? { latest: opts.latest } : undefined);
 
   const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
   const runDir = join(runsDir, activeRunId);

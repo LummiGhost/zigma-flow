@@ -14,7 +14,7 @@ import { join, resolve, sep } from "node:path";
 
 import { parse as parseYaml } from "yaml";
 
-import { readActiveRun, LocalStateStore } from "../run/index.js";
+import { resolveRunId, LocalStateStore } from "../run/index.js";
 import type { RunState } from "../run/index.js";
 import { ConfigError, UserInputError } from "../utils/index.js";
 
@@ -25,8 +25,10 @@ import { ConfigError, UserInputError } from "../utils/index.js";
 export interface ShowActionOpts {
   /** Project root directory (parent of .zigma-flow/). */
   zigmaflowDir: string;
-  /** Optional explicit run id; if absent, falls back to active_run. */
+  /** Optional explicit run id; if absent, falls back to active_run or latest. */
   runId?: string;
+  /** Use the most recently created run (explicit, no deprecation warning). */
+  latest?: boolean;
   /** Optional stdout function for testing; defaults to console.log. */
   stdout?: (line: string) => void;
 }
@@ -56,18 +58,8 @@ export async function showAction(opts: ShowActionOpts): Promise<void> {
 
   const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
 
-  // 1. Resolve run id
-  let runId = opts.runId;
-  if (runId === undefined) {
-    const activeRunId = await readActiveRun(zigmaflowDir);
-    if (activeRunId === null) {
-      throw new ConfigError(
-        "No run id provided and no active run found.",
-        { details: { zigmaflowDir } }
-      );
-    }
-    runId = activeRunId;
-  }
+  // 1. Resolve run id (shared logic with all other commands)
+  const runId = await resolveRunId(zigmaflowDir, opts.runId, opts.latest !== undefined ? { latest: opts.latest } : undefined);
 
   const runDir = resolve(runsDir, runId);
   const runsPrefix = resolve(runsDir) + sep;

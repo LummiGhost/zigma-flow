@@ -259,9 +259,10 @@ async function runProgram(
     .command("status")
     .description("Show the status of a workflow run.")
     .option("--run <run_id>", "Specific run id to show (defaults to latest).")
+    .option("--latest", "Use the most recently created run.")
     .option("-v, --verbose", "Show step-level details for each job.")
     .exitOverride()
-    .action(async (options: { run?: string; verbose?: boolean }) => {
+    .action(async (options: { run?: string; latest?: boolean; verbose?: boolean }) => {
       await statusAction(options, rDir());
     });
 
@@ -270,12 +271,14 @@ async function runProgram(
     .description("Generate an agent prompt for the current step of the active run.")
     .option("--job <job>", "Job id to generate a prompt for (defaults to the single ready job).")
     .option("--run <run_id>", "Target a specific run instead of the active run.")
+    .option("--latest", "Use the most recently created run.")
     .exitOverride()
-    .action(async (options: { job?: string; run?: string }) => {
+    .action(async (options: { job?: string; run?: string; latest?: boolean }) => {
       await promptAction({
         zigmaflowDir: cwd(),
         ...(options.job !== undefined ? { job: options.job } : {}),
         ...(options.run !== undefined ? { runId: options.run } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
         clock: new SystemClock(),
       });
     });
@@ -285,12 +288,14 @@ async function runProgram(
     .description("Execute the current script step of the active run.")
     .option("--job <job>", "Job id to execute (defaults to the single ready job).")
     .option("--run <run_id>", "Target a specific run instead of the active run.")
+    .option("--latest", "Use the most recently created run.")
     .exitOverride()
-    .action(async (options: { job?: string; run?: string }) => {
+    .action(async (options: { job?: string; run?: string; latest?: boolean }) => {
       await stepAction({
         zigmaflowDir: cwd(),
         ...(options.job !== undefined ? { job: options.job } : {}),
         ...(options.run !== undefined ? { runId: options.run } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
         clock: new SystemClock(),
       });
     });
@@ -300,12 +305,14 @@ async function runProgram(
     .description("Accept the agent report for the current step of a job and advance the run.")
     .requiredOption("--job <job>", "Job id whose agent report should be accepted.")
     .option("--run <run_id>", "Target a specific run instead of the active run.")
+    .option("--latest", "Use the most recently created run.")
     .exitOverride()
-    .action(async (options: { job: string; run?: string }) => {
+    .action(async (options: { job: string; run?: string; latest?: boolean }) => {
       await nextAction({
         zigmaflowDir: cwd(),
         jobId: options.job,
         ...(options.run !== undefined ? { runId: options.run } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
         clock: new SystemClock(),
       });
     });
@@ -318,8 +325,9 @@ async function runProgram(
     .option("--with <inputs>", "JSON string of retry inputs (wholesale replacement).")
     .option("--force", "Force retry even when max attempts exceeded.")
     .option("--run <run_id>", "Target a specific run instead of the active run.")
+    .option("--latest", "Use the most recently created run.")
     .exitOverride()
-    .action(async (options: { job: string; reason?: string; with?: string; force?: boolean; run?: string }) => {
+    .action(async (options: { job: string; reason?: string; with?: string; force?: boolean; run?: string; latest?: boolean }) => {
       let retryInputs: Record<string, string> | undefined;
       if (options.with !== undefined) {
         try {
@@ -345,6 +353,7 @@ async function runProgram(
         ...(retryInputs !== undefined ? { retryInputs } : {}),
         ...(options.force !== undefined ? { force: options.force } : {}),
         ...(options.run !== undefined ? { runId: options.run } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
         clock: new SystemClock(),
       });
     });
@@ -354,13 +363,15 @@ async function runProgram(
     .description("Cancel the active run without deleting artifacts.")
     .option("--reason <reason>", "Human-readable reason for the abort.")
     .option("--run <run_id>", "Target a specific run instead of the active run.")
+    .option("--latest", "Use the most recently created run.")
     .exitOverride()
-    .action(async (options: { reason?: string; run?: string }) => {
+    .action(async (options: { reason?: string; run?: string; latest?: boolean }) => {
       await abortAction({
         zigmaflowDir: cwd(),
         clock: new SystemClock(),
         ...(options.reason !== undefined ? { reason: options.reason } : {}),
         ...(options.run !== undefined ? { runId: options.run } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
       });
     });
 
@@ -375,11 +386,13 @@ async function runProgram(
   program
     .command("show [run-id]")
     .description("Show details of a run (run info, jobs, last 5 events).")
+    .option("--latest", "Use the most recently created run.")
     .exitOverride()
-    .action(async (runId?: string) => {
+    .action(async (runId: string | undefined, options: { latest?: boolean }) => {
       await showAction({
         zigmaflowDir: cwd(),
         ...(runId !== undefined ? { runId } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
       });
     });
 
@@ -403,8 +416,10 @@ async function runProgram(
     .option("--step <step>", "Step id to approve (auto-detected if only one awaiting).")
     .option("--comment <text>", "Optional approval comment.")
     .option("--output <pairs>", "Optional key=value output pairs (repeatable).", (v, prev: string[]) => [...(prev ?? []), v], [] as string[])
+    .option("--run <run_id>", "Target a specific run instead of the active run.")
+    .option("--latest", "Use the most recently created run.")
     .exitOverride()
-    .action(async (options: { job: string; step?: string; comment?: string; output?: string[] }) => {
+    .action(async (options: { job: string; step?: string; comment?: string; output?: string[]; run?: string; latest?: boolean }) => {
       let outputs: Record<string, string> | undefined;
       if (options.output !== undefined && options.output.length > 0) {
         outputs = {};
@@ -424,6 +439,8 @@ async function runProgram(
         ...(options.step !== undefined ? { stepId: options.step } : {}),
         ...(options.comment !== undefined ? { comment: options.comment } : {}),
         ...(outputs !== undefined ? { outputs } : {}),
+        ...(options.run !== undefined ? { runId: options.run } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
         clock: new SystemClock(),
       });
     });
@@ -434,13 +451,17 @@ async function runProgram(
     .requiredOption("--job <job>", "Job id to reject.")
     .requiredOption("--comment <text>", "Reason for rejection.")
     .option("--step <step>", "Step id to reject (auto-detected if only one awaiting).")
+    .option("--run <run_id>", "Target a specific run instead of the active run.")
+    .option("--latest", "Use the most recently created run.")
     .exitOverride()
-    .action(async (options: { job: string; comment: string; step?: string }) => {
+    .action(async (options: { job: string; comment: string; step?: string; run?: string; latest?: boolean }) => {
       await rejectAction({
         zigmaflowDir: cwd(),
         jobId: options.job,
         comment: options.comment,
         ...(options.step !== undefined ? { stepId: options.step } : {}),
+        ...(options.run !== undefined ? { runId: options.run } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
         clock: new SystemClock(),
       });
     });
@@ -449,12 +470,14 @@ async function runProgram(
     .command("events [run-id]")
     .description("Show recent events for a workflow run.")
     .option("--limit <N>", "Maximum number of events to show (default: 20).", parseInt)
+    .option("--latest", "Use the most recently created run.")
     .exitOverride()
-    .action(async (runId: string | undefined, options: { limit?: number }) => {
+    .action(async (runId: string | undefined, options: { limit?: number; latest?: boolean }) => {
       await eventsAction({
         runsDir: rDir(),
         ...(runId !== undefined ? { runId } : {}),
         ...(options.limit !== undefined ? { limit: options.limit } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
       });
     });
 
@@ -462,12 +485,14 @@ async function runProgram(
     .command("artifacts [run-id]")
     .description("List artifacts produced by a workflow run.")
     .option("--job <id>", "Filter to artifacts produced by the specified job.")
+    .option("--latest", "Use the most recently created run.")
     .exitOverride()
-    .action(async (runId: string | undefined, options: { job?: string }) => {
+    .action(async (runId: string | undefined, options: { job?: string; latest?: boolean }) => {
       await artifactsAction({
         runsDir: rDir(),
         ...(runId !== undefined ? { runId } : {}),
         ...(options.job !== undefined ? { job: options.job } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
       });
     });
 

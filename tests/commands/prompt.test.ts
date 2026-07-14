@@ -118,7 +118,7 @@ describe("promptAction (CLI integration) — happy path", () => {
   });
 
   it("writes current-step.md and a prompt_generated event after createRun (T-CLI-1, UC-ERR-3, UC-CREATE-ACTIVE-1)", async () => {
-    // 1. createRun must populate active_run in config.json.
+    // v0.6: active_run is deprecated — createRun no longer updates config.json.
     const { runId } = await createRun({
       workflowPath,
       task: "fix the bug",
@@ -126,11 +126,6 @@ describe("promptAction (CLI integration) — happy path", () => {
       skillLockPath: sandbox.skillLockPath,
       clock: new FakeClock(),
     });
-
-    const cfgAfterCreate = JSON.parse(
-      await readFile(sandbox.configPath, "utf-8"),
-    ) as { active_run: string | null };
-    expect(cfgAfterCreate.active_run).toBe(runId);
 
     // 2. promptAction without --job auto-detects the single ready job.
     await promptAction({

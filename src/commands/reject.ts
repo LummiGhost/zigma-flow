@@ -9,10 +9,10 @@
 import { join } from "node:path";
 
 import { recordHumanDecision } from "../engine/humanGate.js";
-import { readActiveRun } from "../run/index.js";
+import { resolveRunId } from "../run/index.js";
 import type { Clock } from "../run/index.js";
 import { LocalStateStore } from "../run/index.js";
-import { ConfigError, StateError, UserInputError } from "../utils/index.js";
+import { StateError, UserInputError } from "../utils/index.js";
 
 export interface RejectActionOpts {
   zigmaflowDir: string;
@@ -20,21 +20,17 @@ export interface RejectActionOpts {
   comment: string;
   stepId?: string;
   clock: Clock;
+  /** Optional explicit run id (from --run flag). */
+  runId?: string;
+  /** Use the most recently created run (from --latest flag, explicit). */
+  latest?: boolean;
 }
 
 export async function rejectAction(opts: RejectActionOpts): Promise<void> {
   const { zigmaflowDir, jobId, stepId, comment, clock } = opts;
 
-  const activeRunId = await readActiveRun(zigmaflowDir);
-  if (activeRunId === null) {
-    throw new ConfigError(
-      "No active run found. Run `zigma-flow run` first.",
-      {
-        details: { zigmaflowDir },
-        suggestion: "Run 'zigma-flow list-runs' to see available runs, or 'zigma-flow run <workflow> --task <task>' to create a new one.",
-      }
-    );
-  }
+  // Resolve run id (explicit --run, --latest, or deprecated fallback)
+  const activeRunId = await resolveRunId(zigmaflowDir, opts.runId, opts.latest !== undefined ? { latest: opts.latest } : undefined);
 
   const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
   const runDir = join(runsDir, activeRunId);

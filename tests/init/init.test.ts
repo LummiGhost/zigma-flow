@@ -238,7 +238,7 @@ describe("runInit integration", () => {
     expect(result?.alreadyInitialized).toBe(true);
   });
 
-  it("config.json contains tool_version and active_run placeholder (T-INIT-7)", async () => {
+  it("config.json does not contain deprecated active_run placeholder (T-INIT-7)", async () => {
     const { error } = await safeRunInit(tempDir);
     expect(error).toBeUndefined();
 
@@ -246,8 +246,8 @@ describe("runInit integration", () => {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
 
     expect(parsed["tool_version"]).toBe(getPackageInfo().version);
-    expect("active_run" in parsed).toBe(true);
-    expect(parsed["active_run"]).toBeNull();
+    // v0.6: active_run is deprecated — init no longer includes it in the template
+    expect("active_run" in parsed).toBe(false);
   });
 
   it("skill-lock.json records zigma.code-change with path, version, hash (T-INIT-8)", async () => {

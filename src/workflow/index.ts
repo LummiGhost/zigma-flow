@@ -18,12 +18,16 @@ import { FilesystemError, ValidationError, WorkflowError } from "../utils/index.
 // ---------------------------------------------------------------------------
 
 /**
- * Issue a deprecation warning to stderr. Suppressed when the
- * `ZIGMA_SUPPRESS_DEPRECATION` environment variable is set.
+ * Issue a deprecation warning to stderr.
+ * Suppressed when `ZIGMA_SUPPRESS_DEPRECATION` env var is set.
  */
-export function deprecationWarn(message: string): void {
+function deprecationWarn(message: string, alternative?: string): void {
   if (process.env.ZIGMA_SUPPRESS_DEPRECATION) return;
-  console.warn(message);
+  if (alternative) {
+    console.warn(`[DEPRECATED] ${message}. Use ${alternative}. This will be removed in v1.0.`);
+  } else {
+    console.warn(message);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -679,14 +683,6 @@ function validateExpressions(workflow: WorkflowDefinition): void {
  * Emit a deprecation warning to stderr.
  *
  * Format: [DEPRECATED] <message>. Use <alternative>. This will be removed in v1.0.
- *
- * Suppressed when the ZIGMA_SUPPRESS_DEPRECATION environment variable is set.
- */
-function deprecationWarn(message: string, alternative: string): void {
-  if (process.env.ZIGMA_SUPPRESS_DEPRECATION) return;
-  console.warn(`[DEPRECATED] ${message}. Use ${alternative}. This will be removed in v1.0.`);
-}
-
 // ---------------------------------------------------------------------------
 // Known trigger types per host
 // ---------------------------------------------------------------------------
@@ -1364,24 +1360,28 @@ function warnDeprecatedRouterAction(
 
   if ("goto_step" in action) {
     deprecationWarn(
-      `[DEPRECATED] goto_step used at ${location}. Use Job retry for rework loops. This will be removed in v1.0.`
+      `goto_step used at ${location}`,
+      "Job retry for rework loops"
     );
     if (action.goto_with !== undefined) {
       deprecationWarn(
-        `[DEPRECATED] goto_with used at ${location}. Use explicit upstream outputs. This will be removed in v1.0.`
+        `goto_with used at ${location}`,
+        "explicit upstream outputs"
       );
     }
   }
 
   if ("goto_job" in action) {
     deprecationWarn(
-      `[DEPRECATED] goto_job used at ${location}. Use optional job activation instead. This will be removed in v1.0.`
+      `goto_job used at ${location}`,
+      "optional job activation"
     );
   }
 
   if ("retry_with" in action && action.retry_with !== undefined) {
     deprecationWarn(
-      `[DEPRECATED] retry_with used at ${location}. Use explicit upstream outputs instead. This will be removed in v1.0.`
+      `retry_with used at ${location}`,
+      "explicit upstream outputs"
     );
   }
 }

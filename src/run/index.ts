@@ -129,6 +129,8 @@ export interface RunYamlMeta {
   created_at: string;
   skill_lock_snapshot: string;
   inputs?: Record<string, string>; // workflow inputs from CLI --input flags
+  /** Relative path to the frozen permission snapshot, if caller context was provided. */
+  caller_context_snapshot?: string;
 }
 
 // ---------------------------------------------------------------------------

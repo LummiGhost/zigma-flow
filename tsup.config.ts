@@ -24,6 +24,11 @@ export default defineConfig({
       join("dist", "templates"),
       { recursive: true },
     );
+    await cp(
+      join("src", "init", "default-workflows"),
+      join("dist", "default-workflows"),
+      { recursive: true },
+    );
   },
   esbuildOptions: (options) => {
     options.define = {

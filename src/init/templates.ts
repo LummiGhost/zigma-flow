@@ -24,7 +24,7 @@ export function configJsonTemplate(version: string): string {
         backends: {
           "claude-code": {
             command: "claude",
-            args: ["-p"],
+            args: ["-p", "--dangerously-skip-permissions"],
             timeout: 600000
           }
         }

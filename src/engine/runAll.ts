@@ -40,6 +40,7 @@ import {
   PermissionError,
   StateError,
   ValidationError,
+  WorkflowError,
 } from "../utils/index.js";
 import { advanceJob, createRun, executeCurrentStep, resolveJobWorkingDirectory } from "./index.js";
 import { validateReportShape } from "./accept.js";
@@ -1322,14 +1323,28 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
           jobsToRun.push(d);
         }
       } else {
-        const hasPending = Object.values(state.jobs).some(
-          (js) => js.status === "waiting" || js.status === "inactive",
-        );
-        if (!hasPending) {
-          break; // All jobs accounted for — clean exit
+        const waitingIds = Object.entries(state.jobs)
+          .filter(([, js]) => js.status === "waiting")
+          .map(([id]) => id);
+
+        if (waitingIds.length === 0) {
+          break; // All jobs accounted for — clean exit (only inactive remain)
         }
-        // Pending jobs exist but none are ready — unsatisfied dependencies
-        break;
+
+        // Deadlock: waiting jobs exist but no ready or running jobs are
+        // executable. This indicates a bug in state-transition logic or
+        // dependency resolution (Issue #231).
+        const allJobStates = Object.entries(state.jobs)
+          .map(([id, js]) => `  ${id}: ${js.status}`)
+          .join("\n");
+
+        throw new WorkflowError(
+          `Engine deadlock detected: ${waitingIds.length} job(s) stuck in "waiting" state with no ready or running jobs.\n\n` +
+            `Run: ${runId}\n` +
+            `Stuck jobs: ${waitingIds.join(", ")}\n\n` +
+            `All job states:\n${allJobStates}`,
+          { details: { runId, waitingJobs: waitingIds } },
+        );
       }
     }
 

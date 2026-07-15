@@ -47,6 +47,7 @@ import { createRun } from "../../src/engine/index.js";
 import type { Clock, JobState, RunState } from "../../src/run/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../../src/run/index.js";
 import type { AgentBackend, AgentBackendConfig, AgentExecuteOptions, AgentExecuteResult } from "../../src/agent/index.js";
+import { WorkflowError } from "../../src/utils/index.js";
 import type { ZigmaFlowEvent } from "../../src/events/index.js";
 
 // ---------------------------------------------------------------------------
@@ -857,4 +858,120 @@ describe("runAll — script step delegation (T-RUNALL-8)", () => {
       expect(eventTypes).toContain("run_completed");
     }
   );
+});
+
+// ---------------------------------------------------------------------------
+// T-RUNALL-DEADLOCK: Deadlock detection (Issue #231)
+// ---------------------------------------------------------------------------
+// When waiting jobs exist but no ready or running jobs are executable,
+// the engine must throw a WorkflowError instead of silently exiting.
+// ---------------------------------------------------------------------------
+
+describe("runAll — deadlock detection (T-RUNALL-DEADLOCK)", () => {
+  /**
+   * Two-agent-job workflow: first-job (no deps) → second-job (depends on first-job).
+   * We corrupt the state to put second-job in "waiting" even though its
+   * dependency is already met, simulating a state-corruption bug.
+   */
+  const TWO_JOB_DEP_YAML = `\
+name: runall-deadlock-dep
+version: "0.1.0"
+jobs:
+  first-job:
+    steps:
+      - id: run
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/first-skill
+  second-job:
+    needs:
+      - first-job
+    steps:
+      - id: run
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/second-skill
+`;
+
+  it("throws WorkflowError when waiting jobs exist but none are executable (T-DEADLOCK-1)", async () => {
+    const sandbox = await makeSandbox();
+    FakeBackend.calls = [];
+
+    // Create run — first-job becomes ready, second-job becomes waiting
+    const { runId, runDir } = await bootstrapRun(
+      sandbox,
+      TWO_JOB_DEP_YAML,
+      "runall-deadlock-dep",
+    );
+
+    // Corrupt state: mark first-job as completed (simulating it ran) but
+    // leave second-job as "waiting". This is a corrupt state because
+    // second-job should have become "ready" after first-job completed.
+    const statePath = join(runDir, "state.json");
+    const rawState = JSON.parse(await readFile(statePath, "utf-8")) as RunState;
+    rawState.jobs["first-job"] = {
+      status: "completed",
+      outputs: { completed: true },
+    } as JobState;
+    // second-job already has status: "waiting" — leave it corrupted
+    await writeFile(statePath, JSON.stringify(rawState, null, 2), "utf-8");
+
+    const workflowPath = join(sandbox.projectRoot, "runall-deadlock-dep.yml");
+
+    // Resume the corrupted run — should throw WorkflowError
+    let thrown: unknown = null;
+    try {
+      await callRunAll({
+        runId,
+        workflowPath,
+        runsDir: sandbox.runsDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        skillLockPath: sandbox.skillLockPath,
+        backendResolver: () => new FakeBackend({ command: "fake" }),
+        clock: new FakeClock(),
+      });
+    } catch (e: unknown) {
+      thrown = e;
+    }
+
+    expect(thrown).not.toBeNull();
+    expect(thrown).toBeInstanceOf(WorkflowError);
+
+    const err = thrown as WorkflowError;
+    // Verify the error message contains diagnostic info
+    expect(err.message).toContain("Engine deadlock");
+    expect(err.message).toContain("second-job");
+    expect(err.message).toContain(runId);
+
+    // Verify exit code is non-zero
+    expect(err.exitCode).toBeGreaterThan(0);
+  });
+
+  it("does NOT throw when all jobs are completed (T-DEADLOCK-2)", async () => {
+    const sandbox = await makeSandbox();
+
+    const { runId } = await bootstrapRun(
+      sandbox,
+      SINGLE_AGENT_YAML,
+      "runall-no-deadlock",
+      "exercise no deadlock",
+    );
+
+    const workflowPath = join(sandbox.projectRoot, "runall-no-deadlock.yml");
+
+    // Run normally — should complete without throwing
+    const summary = await callRunAll({
+      runId,
+      workflowPath,
+      runsDir: sandbox.runsDir,
+      zigmaflowDir: sandbox.zigmaflowDir,
+      skillLockPath: sandbox.skillLockPath,
+      backendResolver: () => new FakeBackend({ command: "fake" }),
+      clock: new FakeClock(),
+    });
+
+    expect(summary.status).toBe("completed");
+    expect(summary.jobs).toHaveLength(1);
+    expect(summary.jobs[0]!.status).toBe("completed");
+  });
 });

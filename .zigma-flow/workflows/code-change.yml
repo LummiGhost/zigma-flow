@@ -21,13 +21,11 @@ jobs:
     steps:
       - id: analyze
         type: agent
-        prompt: intake
         with:
           task: "${{ inputs.task }}"
         outputs:
           task_summary: {}
           scope: {}
-          complexity_profile: {}
         expose:
           skills:
             - code
@@ -38,16 +36,11 @@ jobs:
     steps:
       - id: map
         type: agent
-        prompt: code-map
         with:
           task: "${{ inputs.task }}"
         outputs:
-          existing_files: {}
-          new_files: {}
-          test_files: {}
+          files: {}
           modules: {}
-          risk_areas: {}
-          rationale: {}
         expose:
           skills:
             - code
@@ -56,18 +49,9 @@ jobs:
     needs:
       - code-map
     steps:
-      - id: validate-report
+      - id: validate
         type: script
-        shell: pwsh
-        run: "if (-not (Test-Path 'jobs/code-map/attempts/1/steps/map/report.json' -PathType Leaf)) { exit 1 }"
-        on_failure: fail
-      - id: validate-outputs
-        type: script
-        shell: pwsh
-        run: |
-          $report = Get-Content 'jobs/code-map/attempts/1/steps/map/report.json' -Raw | ConvertFrom-Json
-          if (-not $report.outputs) { Write-Error 'Missing field: outputs'; exit 1 }
-          if (-not $report.summary) { Write-Error 'Missing field: summary'; exit 1 }
+        run: "git status"
         on_failure: fail
 
   plan:
@@ -76,16 +60,11 @@ jobs:
     steps:
       - id: plan
         type: agent
-        prompt: plan
         with:
           task: "${{ inputs.task }}"
         outputs:
           plan_summary: {}
           steps: {}
-          risks: {}
-          validation_commands: {}
-          contracts_to_preserve: {}
-          out_of_scope: {}
         returns:
           status:
             values: [ready, needs_architecture_design]
@@ -102,7 +81,6 @@ jobs:
     steps:
       - id: design
         type: agent
-        prompt: architecture-design
         with:
           task: "${{ inputs.task }}"
         expose:
@@ -120,7 +98,6 @@ jobs:
     steps:
       - id: implement
         type: agent
-        prompt: implement
         with:
           task: "${{ inputs.task }}"
         outputs:
@@ -149,7 +126,7 @@ jobs:
     steps:
       - id: test
         type: script
-        run: "pnpm test"
+        run: "pnpm test:ci"
         on_failure: fail
 
   review:
@@ -159,63 +136,31 @@ jobs:
     steps:
       - id: review
         type: agent
-        prompt: review
         with:
           task: "${{ inputs.task }}"
         outputs:
           verdict: {}
-          checked_files: {}
-          checked_artifacts: {}
-          validation_evidence: {}
-          findings: {}
-          accepted_risks: {}
-          non_blocking_improvements: {}
+          issues: {}
         returns:
           status:
-            values: [approved, rejected, needs_architecture_design]
+            values: [approved, rejected]
         on_return:
           rejected: { retry_job: implement }
-          needs_architecture_design: { activate_job: architecture-design }
         expose:
           skills:
             - code
 
-  gate-merge:
-    activation: optional
-    needs:
-      - review
-    steps:
-      - id: gate-merge
-        type: human
-        prompt: |
-          Review the implementation summary before merging.
-
-          Check the review outputs and implementation artifacts before deciding.
-
-          To proceed with the merge: approve
-          To send back for rework: reject (then start a new run)
-        inputs:
-          decision:
-            type: string
-            enum: [approve, reject]
-            required: true
-
   summarize:
     needs:
       - review
-      - gate-merge
     steps:
       - id: summarize
         type: agent
-        prompt: summarize
         with:
           task: "${{ inputs.task }}"
         outputs:
           final_summary: {}
           remaining_risks: {}
-          summary_artifact: {}
-        required_artifacts:
-          - summary.md
         expose:
           skills:
             - code

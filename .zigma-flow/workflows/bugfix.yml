@@ -1,15 +1,13 @@
 name: bugfix
-version: 0.3.0
+version: 0.6.0
 
-on:
-  manual:
-    inputs:
-      bug_report:
-        type: string
-        required: true
-      affected_component:
-        type: string
-        required: false
+inputs:
+  bug_report:
+    type: string
+    required: true
+  affected_component:
+    type: string
+    required: false
 
 skills:
   code:
@@ -21,19 +19,8 @@ permissions:
   commands: none
   workflow_state: none
 
-signals:
-  review_rejected:
-    severity: high
-    priority: 100
-    allowed_from:
-      - review
-    action:
-      retry_job: implement
-
 jobs:
   intake:
-    workspace:
-      mode: read-only
     steps:
       - id: analyze
         type: agent
@@ -49,8 +36,6 @@ jobs:
   reproduce:
     needs:
       - intake
-    workspace:
-      mode: read-only
     steps:
       - id: reproduce
         type: agent
@@ -66,8 +51,6 @@ jobs:
   diagnose:
     needs:
       - reproduce
-    workspace:
-      mode: read-only
     steps:
       - id: diagnose
         type: agent
@@ -83,8 +66,6 @@ jobs:
   plan:
     needs:
       - diagnose
-    workspace:
-      mode: read-only
     steps:
       - id: plan
         type: agent
@@ -123,8 +104,6 @@ jobs:
   regression-test:
     needs:
       - implement
-    workspace:
-      mode: read-only
     steps:
       - id: run-tests
         type: script
@@ -144,8 +123,6 @@ jobs:
   review:
     needs:
       - regression-test
-    workspace:
-      mode: read-only
     steps:
       - id: review
         type: agent
@@ -154,6 +131,11 @@ jobs:
         outputs:
           verdict: {}
           issues: {}
+        returns:
+          status:
+            values: [approved, rejected]
+        on_return:
+          rejected: { retry_job: implement }
         expose:
           skills:
             - code
@@ -161,8 +143,6 @@ jobs:
   summarize:
     needs:
       - review
-    workspace:
-      mode: read-only
     steps:
       - id: summarize
         type: agent

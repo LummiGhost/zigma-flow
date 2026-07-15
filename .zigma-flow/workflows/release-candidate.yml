@@ -1,13 +1,10 @@
----
 name: release-candidate
-version: 0.3.0
+version: 0.6.0
 
-on:
-  manual:
-    inputs:
-      version:
-        type: string
-        required: true
+inputs:
+  version:
+    type: string
+    required: true
 
 permissions:
   contents: read
@@ -17,8 +14,6 @@ permissions:
 
 jobs:
   scope-freeze:
-    workspace:
-      mode: read-only
     steps:
       - id: document-scope
         type: agent
@@ -40,8 +35,6 @@ jobs:
   typecheck:
     needs:
       - build
-    workspace:
-      mode: read-only
     steps:
       - id: typecheck
         type: script
@@ -51,8 +44,6 @@ jobs:
   unit:
     needs:
       - build
-    workspace:
-      mode: read-only
     steps:
       - id: unit-tests
         type: script
@@ -63,8 +54,6 @@ jobs:
     needs:
       - unit
       - typecheck
-    workspace:
-      mode: read-only
     steps:
       - id: integration-tests
         type: script
@@ -74,21 +63,16 @@ jobs:
   smoke:
     needs:
       - integration
-    workspace:
-      mode: read-only
     steps:
       - id: smoke-cli
-        type: check
-        uses: zigma/file-exists
-        with:
-          file: "dist/cli.js"
-        on_fail: fail
+        type: script
+        shell: pwsh
+        run: "if (-not (Test-Path 'dist/cli.js' -PathType Leaf)) { exit 1 }"
+        on_failure: fail
 
   release-notes:
     needs:
       - smoke
-    workspace:
-      mode: read-only
     steps:
       - id: generate-notes
         type: agent
@@ -101,13 +85,22 @@ jobs:
   tag-readiness-gate:
     needs:
       - release-notes
-    workspace:
-      mode: read-only
     steps:
       - id: approve-release
         type: human
-        prompt: "Review release candidate ${{ inputs.version }}. Confirm: (1) all CI stages passed, (2) release notes are complete, (3) no blocking risks. Approve to proceed with tagging."
-        approvers:
-          - LummiGhost
-        instructions: "Review the scope, test results, and release notes before approving. Check for any unresolved risks."
+        prompt: |
+          Review release candidate ${{ inputs.version }} before tagging.
+
+          Confirm all of the following:
+          1. All CI stages passed
+          2. Release notes are complete
+          3. No blocking risks remain
+
+          Review the scope summary, test results, and release notes. Check the known_risks
+          output from scope-freeze for any unresolved risks before deciding.
+        inputs:
+          decision:
+            type: string
+            enum: [approve, reject]
+            required: true
         timeout_minutes: 1440

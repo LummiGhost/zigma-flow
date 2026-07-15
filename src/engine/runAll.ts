@@ -992,6 +992,49 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     }
   }
 
+  // ── Status return dispatch (Issue #227) — before advanceJob ──────────────
+  // If the step declares returns.status and the report includes a status
+  // field, dispatch via applyStatusReturn (matching accept.ts behavior).
+  // Status action takes priority over unconditional advance.
+
+  if (report.status !== undefined && stepDef.returns?.status) {
+    const { applyStatusReturn: applySR } = await import("./applyStatusReturn.js");
+    await applySR({
+      runDir,
+      runId,
+      sourceJobId: jobId,
+      sourceStepId: stepId,
+      attempt,
+      status: report.status,
+      clock,
+    });
+
+    return { jobId, success: true, action: "completed" };
+  }
+
+  // ── Required status validation (Issue #227) ──────────────────────────────
+  // If the step declares returns.status.required: true but the report omitted
+  // the status field, fail the job explicitly via recordAgentFailure so the
+  // job transitions to "failed" rather than staying "running" and looping.
+
+  if (stepDef.returns?.status?.required === true && report.status === undefined) {
+    const reason = `Step "${stepId}" requires a return status but none was provided in report.json`;
+    const failureResult = await recordAgentFailure({
+      runDir,
+      runId,
+      jobId,
+      stepId,
+      attempt,
+      reason,
+      errorType: "execution",
+      clock,
+      stateStore,
+      eventWriter,
+    });
+    const action = failureResult.action === "run_failed" ? "failed" : (failureResult.action as JobStepResult["action"]);
+    return { jobId, success: false, action, detail: reason };
+  }
+
   // Advance unconditionally after a valid report is accepted — matches accept.ts behavior.
   // Single-turn agent steps should not require outputs.completed to progress.
   await advanceJob({ runDir, runId, jobId, clock });

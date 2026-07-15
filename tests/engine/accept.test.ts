@@ -1912,3 +1912,224 @@ describe("acceptAgentReport — required_artifacts policy (T-ACCEPT-17)", () => 
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// T-ACCEPT-18: returns.status.required=true, status missing → ValidationError
+// ---------------------------------------------------------------------------
+//
+// Issue #227: When a step declares returns.status.required: true and the
+// agent's report.json omits the status field, acceptAgentReport must throw
+// a ValidationError instead of silently continuing (which would cause an
+// infinite re-invoke loop in executeAgentStep).
+// ---------------------------------------------------------------------------
+
+const AGENT_RETURNS_REQUIRED_YAML = `\
+name: accept-returns-required
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review-step
+        type: agent
+        uses: zigma/review-skill
+        returns:
+          status:
+            values:
+              - approved
+              - rejected
+            required: true
+        on_return:
+          approved: continue
+          rejected: fail
+`;
+
+const AGENT_RETURNS_OPTIONAL_YAML = `\
+name: accept-returns-optional
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review-step
+        type: agent
+        uses: zigma/review-skill
+        returns:
+          status:
+            values:
+              - approved
+              - rejected
+            required: false
+        on_return:
+          approved: continue
+          rejected: fail
+`;
+
+describe("acceptAgentReport — required status missing (T-ACCEPT-18)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "throws ValidationError when required=true and report omits status field (T-ACCEPT-18, Issue #227)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_RETURNS_REQUIRED_YAML,
+        "accept-returns-required"
+      );
+
+      await setJobState(runDir, "review", {
+        status: "running",
+        current_step: "review-step",
+        attempt: 1,
+      });
+
+      // Report with NO status field — step requires it
+      await writeReport(runDir, "review", 1, "review-step", {
+        outputs: { summary: "done" },
+        artifacts: [],
+        signals: [],
+        summary: "review completed without status",
+      });
+
+      const eventsBefore = await readEventsBytes(runDir);
+      const stateBefore = await readStateBytes(runDir);
+
+      await expect(
+        callAcceptAgentReport({
+          runDir,
+          runId,
+          jobId: "review",
+          clock: new FakeClock(),
+        })
+      ).rejects.toMatchObject({ kind: "ValidationError" });
+
+      // No disk mutation on validation failure
+      const eventsAfter = await readEventsBytes(runDir);
+      const stateAfter = await readStateBytes(runDir);
+      expect(eventsAfter).toBe(eventsBefore);
+      expect(stateAfter).toBe(stateBefore);
+    }
+  );
+});
+
+describe("acceptAgentReport — optional status missing continues (T-ACCEPT-19)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "continues normally when required=false and report omits status field (T-ACCEPT-19, Issue #227)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_RETURNS_OPTIONAL_YAML,
+        "accept-returns-optional"
+      );
+
+      await setJobState(runDir, "review", {
+        status: "running",
+        current_step: "review-step",
+        attempt: 1,
+      });
+
+      // Report with NO status field — step has required: false so this is OK
+      await writeReport(runDir, "review", 1, "review-step", {
+        outputs: { summary: "done" },
+        artifacts: [],
+        signals: [],
+        summary: "review completed without status",
+      });
+
+      await callAcceptAgentReport({
+        runDir,
+        runId,
+        jobId: "review",
+        clock: new FakeClock(),
+      });
+
+      // Job should advance — single-step job becomes completed
+      const snap = await readStateSnapshot(runDir);
+      expect(snap.jobs["review"]!.status).toBe("completed");
+
+      // agent_report_accepted should be emitted (no-signal path)
+      const events = await readEvents(runDir);
+      const accepted = events.find((e) => e.type === "agent_report_accepted");
+      expect(accepted).toBeDefined();
+    }
+  );
+});
+
+describe("acceptAgentReport — status present dispatches via applyStatusReturn (T-ACCEPT-20)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "dispatches via applyStatusReturn when report includes status and step declares returns (T-ACCEPT-20, Issue #227)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_RETURNS_REQUIRED_YAML,
+        "accept-returns-required"
+      );
+
+      await setJobState(runDir, "review", {
+        status: "running",
+        current_step: "review-step",
+        attempt: 1,
+      });
+
+      // Report WITH status field
+      await writeReport(runDir, "review", 1, "review-step", {
+        outputs: { summary: "done" },
+        artifacts: [],
+        signals: [],
+        status: "approved",
+        summary: "review approved",
+      });
+
+      await callAcceptAgentReport({
+        runDir,
+        runId,
+        jobId: "review",
+        clock: new FakeClock(),
+      });
+
+      // step_returned event must be present (emitted by applyStatusReturn)
+      const events = await readEvents(runDir);
+      const returnedEvent = events.find((e) => e.type === "step_returned");
+      expect(returnedEvent).toBeDefined();
+      expect(returnedEvent!.payload).toMatchObject({
+        status: "approved",
+        mapped_action: "continue",
+      });
+
+      // NO agent_report_accepted on the status-return path
+      expect(events.filter((e) => e.type === "agent_report_accepted")).toHaveLength(0);
+
+      // Outputs should be persisted
+      const snap = await readStateSnapshot(runDir);
+      const outputs = readOutputs(snap, "review");
+      expect(outputs).toBeDefined();
+      expect(outputs!["summary"]).toBe("done");
+    }
+  );
+});

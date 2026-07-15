@@ -401,6 +401,18 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
     return;
   }
 
+  // ── Required status validation (Issue #227) ────────────────────────────
+  // If the step declares returns.status.required: true but the report omitted
+  // the status field, fail with a clear ValidationError instead of silently
+  // continuing (which would cause an infinite re-invoke loop in runAll).
+
+  if (report.status === undefined && stepDef?.returns?.status?.required === true) {
+    throw new ValidationError(
+      `Step "${stepId}" requires a return status but none was provided in report.json`,
+      { details: { jobId, stepId, required: true } }
+    );
+  }
+
   // ── on_output routing (Issue #172) — before signals ─────────────────────
   // If the step declares on_output and a reported output value matches a
   // routing rule, dispatch the action via applyRoutingAction. This takes

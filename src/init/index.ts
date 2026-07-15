@@ -7,30 +7,31 @@
  */
 
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { getPackageInfo } from "../utils/index.js";
 import {
   codeChangeWorkflowYml,
-  codeChangeFastWorkflowYml,
-  codeMapMd,
-  architectureDesignMd,
-  codingGuidelinesMd,
-  collectDiffTs,
-  commonFailurePatternsMd,
   configJsonTemplate,
-  forbiddenPathsYml,
-  implementMd,
-  intakeMd,
-  planMd,
-  reportSchemaJson,
-  reviewMd,
-  skillYml,
-  summarizeMd,
-  workflowGuideMd
 } from "./templates.js";
 
 import { detectEnvironment } from "./detect.js";
+
+// ---------------------------------------------------------------------------
+// Default workflow file resolution
+// ---------------------------------------------------------------------------
+
+// During tests (vitest): import.meta.url → src/init/index.ts → __dir = src/init/
+// In production bundle: import.meta.url → dist/cli.js → __dir = dist/
+// tsup copies src/init/default-workflows/ → dist/default-workflows/ at build time,
+// so join(__dir, "default-workflows") resolves correctly in both environments.
+const __dir = dirname(fileURLToPath(import.meta.url));
+const DEFAULT_WORKFLOWS_DIR = join(__dir, "default-workflows");
+
+async function readDefaultFile(...parts: string[]): Promise<string> {
+  return readFile(join(DEFAULT_WORKFLOWS_DIR, ...parts), "utf-8");
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -135,50 +136,84 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
 
   const directories = await createDirectories(dirPaths);
 
-  // Detect project environment for tailored template generation
+  // Detect project environment for tailored workflow generation
   const detection = await detectEnvironment(options.cwd);
 
-  // Generate template content
+  // Generate version-stamped config
   const version = getPackageInfo().version;
-  const skillYmlContent = skillYml();
+
+  // Read static default workflow files from the bundled default-workflows directory
+  const [
+    codeChangeFastYml,
+    skillYmlContent,
+    codingGuidelinesContent,
+    workflowGuideContent,
+    commonFailurePatternsContent,
+    intakeContent,
+    codeMapContent,
+    planContent,
+    architectureDesignContent,
+    implementContent,
+    reviewContent,
+    summarizeContent,
+    collectDiffContent,
+    reportSchemaContent,
+    forbiddenPathsContent,
+  ] = await Promise.all([
+    readDefaultFile("workflows", "code-change-fast.yml"),
+    readDefaultFile("skills", "code-change", "skill.yml"),
+    readDefaultFile("skills", "code-change", "knowledge", "coding-guidelines.md"),
+    readDefaultFile("skills", "code-change", "knowledge", "workflow-guide.md"),
+    readDefaultFile("skills", "code-change", "knowledge", "common-failure-patterns.md"),
+    readDefaultFile("skills", "code-change", "prompts", "intake.md"),
+    readDefaultFile("skills", "code-change", "prompts", "code-map.md"),
+    readDefaultFile("skills", "code-change", "prompts", "plan.md"),
+    readDefaultFile("skills", "code-change", "prompts", "architecture-design.md"),
+    readDefaultFile("skills", "code-change", "prompts", "implement.md"),
+    readDefaultFile("skills", "code-change", "prompts", "review.md"),
+    readDefaultFile("skills", "code-change", "prompts", "summarize.md"),
+    readDefaultFile("skills", "code-change", "scripts", "collect-diff.ts"),
+    readDefaultFile("skills", "code-change", "checks", "report-schema.json"),
+    readDefaultFile("skills", "code-change", "checks", "forbidden-paths.yml"),
+  ]);
 
   // Files to write (in order) — skill-lock.json is no longer generated (v0.6 deprecation)
   const fileEntries: Array<[string, string]> = [
     [configJsonPath, configJsonTemplate(version)],
     [join(dotZigma, "workflows", "code-change.yml"), codeChangeWorkflowYml(detection)],
-    [join(dotZigma, "workflows", "code-change-fast.yml"), codeChangeFastWorkflowYml()],
+    [join(dotZigma, "workflows", "code-change-fast.yml"), codeChangeFastYml],
     [join(dotZigma, "skills", "code-change", "skill.yml"), skillYmlContent],
     [
       join(dotZigma, "skills", "code-change", "knowledge", "coding-guidelines.md"),
-      codingGuidelinesMd()
+      codingGuidelinesContent,
     ],
     [
       join(dotZigma, "skills", "code-change", "knowledge", "workflow-guide.md"),
-      workflowGuideMd()
+      workflowGuideContent,
     ],
     [
       join(dotZigma, "skills", "code-change", "knowledge", "common-failure-patterns.md"),
-      commonFailurePatternsMd()
+      commonFailurePatternsContent,
     ],
-    [join(dotZigma, "skills", "code-change", "prompts", "intake.md"), intakeMd()],
-    [join(dotZigma, "skills", "code-change", "prompts", "code-map.md"), codeMapMd()],
-    [join(dotZigma, "skills", "code-change", "prompts", "plan.md"), planMd()],
+    [join(dotZigma, "skills", "code-change", "prompts", "intake.md"), intakeContent],
+    [join(dotZigma, "skills", "code-change", "prompts", "code-map.md"), codeMapContent],
+    [join(dotZigma, "skills", "code-change", "prompts", "plan.md"), planContent],
     [
       join(dotZigma, "skills", "code-change", "prompts", "architecture-design.md"),
-      architectureDesignMd()
+      architectureDesignContent,
     ],
-    [join(dotZigma, "skills", "code-change", "prompts", "implement.md"), implementMd()],
-    [join(dotZigma, "skills", "code-change", "prompts", "review.md"), reviewMd()],
-    [join(dotZigma, "skills", "code-change", "prompts", "summarize.md"), summarizeMd()],
-    [join(dotZigma, "skills", "code-change", "scripts", "collect-diff.ts"), collectDiffTs()],
+    [join(dotZigma, "skills", "code-change", "prompts", "implement.md"), implementContent],
+    [join(dotZigma, "skills", "code-change", "prompts", "review.md"), reviewContent],
+    [join(dotZigma, "skills", "code-change", "prompts", "summarize.md"), summarizeContent],
+    [join(dotZigma, "skills", "code-change", "scripts", "collect-diff.ts"), collectDiffContent],
     [
       join(dotZigma, "skills", "code-change", "checks", "report-schema.json"),
-      reportSchemaJson()
+      reportSchemaContent,
     ],
     [
       join(dotZigma, "skills", "code-change", "checks", "forbidden-paths.yml"),
-      forbiddenPathsYml()
-    ]
+      forbiddenPathsContent,
+    ],
   ];
 
   const files: WriteFileResult[] = [];

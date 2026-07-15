@@ -1,0 +1,107 @@
+name: code-change-fast
+version: 0.1.0
+
+on:
+  manual:
+
+inputs:
+  task:
+    type: string
+    required: true
+
+skills:
+  code:
+    uses: skill://zigma.code-change@1
+
+permissions:
+  contents: read
+  edits: write
+  commands: none
+  workflow_state: none
+
+jobs:
+  intake:
+    workspace:
+      mode: read-only
+    steps:
+      - id: analyze
+        type: agent
+        prompt: intake
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          task_summary: {}
+          scope: {}
+          complexity_profile: {}
+        expose:
+          skills:
+            - code
+
+  implement:
+    needs:
+      - intake
+    retry:
+      max_attempts: 3
+      on_exceeded:
+        status: failed
+    steps:
+      - id: implement
+        type: agent
+        prompt: implement
+        with:
+          task: "${{ inputs.task }}"
+        expose:
+          skills:
+            - code
+      - id: collect-diff
+        type: script
+        run: "git diff HEAD"
+        env:
+          CI: "true"
+        on_failure: fail
+
+  static-check:
+    needs:
+      - implement
+    workspace:
+      mode: read-only
+    steps:
+      - id: check
+        type: script
+        run: "pnpm typecheck && pnpm lint"
+        env:
+          CI: "true"
+        on_failure: fail
+
+  unit-test:
+    needs:
+      - implement
+    workspace:
+      mode: read-only
+    steps:
+      - id: test
+        type: script
+        run: "pnpm test:ci"
+        env:
+          CI: "true"
+        on_failure: fail
+
+  summarize:
+    needs:
+      - static-check
+      - unit-test
+    workspace:
+      mode: read-only
+    steps:
+      - id: summarize
+        type: agent
+        prompt: summarize
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          final_summary: {}
+          remaining_risks: {}
+          summary_artifact: {}
+        expose:
+          skills:
+            - code

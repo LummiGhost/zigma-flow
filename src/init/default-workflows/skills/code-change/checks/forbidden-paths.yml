@@ -1,0 +1,10 @@
+kind: path-policy
+description: >
+  Paths that must not be modified by agent or script steps.
+  Violations cause the current step to fail with a PermissionError.
+
+forbidden:
+  - .zigma-flow/runs/**
+  - .zigma-flow/state.json
+  - .zigma-flow/config.json
+  - .zigma-flow/skill-lock.json

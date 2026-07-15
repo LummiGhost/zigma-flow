@@ -1308,11 +1308,18 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         .map(([id]) => id);
 
       if (missedReady.length > 0) {
+        const dispatched = missedReady.map((jid) => {
+          const mode = getJobMode(jid, wf);
+          return { jobId: jid, mode };
+        });
+        const modeSummary = dispatched
+          .map((d) => `${d.jobId} (${d.mode})`)
+          .join(", ");
         console.warn(
-          `Scheduler returned empty batch but ${missedReady.length} ready job(s) found: ${missedReady.join(", ")}. Dispatching as writable.`,
+          `Scheduler returned empty batch but ${missedReady.length} ready job(s) found. Dispatching: ${modeSummary}.`,
         );
-        for (const jid of missedReady) {
-          jobsToRun.push({ jobId: jid, mode: "writable" });
+        for (const d of dispatched) {
+          jobsToRun.push(d);
         }
       } else {
         const hasPending = Object.values(state.jobs).some(

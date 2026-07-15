@@ -1,0 +1,238 @@
+name: issue-fix
+version: 0.6.0
+
+inputs:
+  task:
+    type: string
+    required: true
+    description: |
+      Issue fix task string. Format:
+        issue #<N>                       — hotfix mode (default)
+        issue #<N> fully-fix             — fully-fix mode
+        issue #<N> hotfix                — explicit hotfix
+        issue #<N> fully-fix repo:owner/name  — custom repo
+      Examples:
+        issue #152
+        issue #152 fully-fix
+        issue #42 hotfix repo:myorg/myrepo
+
+skills:
+  issue-fix:
+    uses: skill://zigma-flow.issue-fix@1
+
+permissions:
+  contents: read
+  edits: write
+  commands: write
+  workflow_state: none
+
+jobs:
+  issue-context:
+    steps:
+      - id: fetch
+        type: agent
+        prompt: issue-context
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          issue_number: {}
+          mode: {}
+          repo: {}
+          issue_title: {}
+          issue_body: {}
+          issue_labels: {}
+          affected_areas: {}
+          reproduction_steps: {}
+          fix_scope: {}
+          related_issues: {}
+          complexity: {}
+        expose:
+          skills:
+            - issue-fix
+
+  fix:
+    needs:
+      - issue-context
+    retry:
+      max_attempts: 3
+      on_exceeded:
+        status: failed
+    steps:
+      - id: implement
+        type: agent
+        prompt: fix
+        with:
+          issue_number: "${{ jobs.issue-context.outputs.issue_number }}"
+          mode: "${{ jobs.issue-context.outputs.mode }}"
+          issue_title: "${{ jobs.issue-context.outputs.issue_title }}"
+          affected_areas: "${{ jobs.issue-context.outputs.affected_areas }}"
+          reproduction_steps: "${{ jobs.issue-context.outputs.reproduction_steps }}"
+          fix_scope: "${{ jobs.issue-context.outputs.fix_scope }}"
+          related_issues: "${{ jobs.issue-context.outputs.related_issues }}"
+          complexity: "${{ jobs.issue-context.outputs.complexity }}"
+        outputs:
+          summary: {}
+          files_changed: {}
+          fix_approach: {}
+          branch_name: {}
+          worktree_path: {}
+          test_added: {}
+        expose:
+          skills:
+            - issue-fix
+      - id: collect-diff
+        type: script
+        shell: pwsh
+        run: "$wt = (Get-Content .zigma-flow/fix-worktree.txt -Raw).Trim(); git -C $wt diff origin/main"
+        on_failure: continue
+
+  static-check:
+    needs:
+      - fix
+    retry:
+      max_attempts: 3
+      on_exceeded:
+        status: failed
+    steps:
+      - id: autofix
+        type: agent
+        prompt: gate-autofix
+        with:
+          gate: static-check
+          issue_number: "${{ jobs.issue-context.outputs.issue_number }}"
+          worktree_path: "${{ jobs.fix.outputs.worktree_path }}"
+        returns:
+          status:
+            values: [fixed, unfixable]
+            required: true
+        on_return:
+          fixed: continue
+          unfixable: fail
+        expose:
+          skills:
+            - issue-fix
+      - id: run-gates
+        type: script
+        shell: pwsh
+        run: "$wt = (Get-Content .zigma-flow/fix-worktree.txt -Raw).Trim(); Set-Location $wt; pnpm typecheck; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; pnpm lint; exit $LASTEXITCODE"
+        on_failure: fail
+
+  unit-test:
+    needs:
+      - fix
+    retry:
+      max_attempts: 3
+      on_exceeded:
+        status: failed
+    steps:
+      - id: autofix
+        type: agent
+        prompt: gate-autofix
+        with:
+          gate: unit-test
+          issue_number: "${{ jobs.issue-context.outputs.issue_number }}"
+          worktree_path: "${{ jobs.fix.outputs.worktree_path }}"
+        returns:
+          status:
+            values: [fixed, unfixable]
+            required: true
+        on_return:
+          fixed: continue
+          unfixable: fail
+        expose:
+          skills:
+            - issue-fix
+      - id: run-tests
+        type: script
+        shell: pwsh
+        run: "$wt = (Get-Content .zigma-flow/fix-worktree.txt -Raw).Trim(); Set-Location $wt; pnpm test:ci; exit $LASTEXITCODE"
+        on_failure: fail
+
+  review:
+    needs:
+      - static-check
+      - unit-test
+    steps:
+      - id: review
+        type: agent
+        prompt: review
+        with:
+          issue_number: "${{ jobs.issue-context.outputs.issue_number }}"
+          mode: "${{ jobs.issue-context.outputs.mode }}"
+          issue_title: "${{ jobs.issue-context.outputs.issue_title }}"
+          issue_body: "${{ jobs.issue-context.outputs.issue_body }}"
+          fix_scope: "${{ jobs.issue-context.outputs.fix_scope }}"
+          reproduction_steps: "${{ jobs.issue-context.outputs.reproduction_steps }}"
+          fix_summary: "${{ jobs.fix.outputs.summary }}"
+          files_changed: "${{ jobs.fix.outputs.files_changed }}"
+          fix_approach: "${{ jobs.fix.outputs.fix_approach }}"
+          branch_name: "${{ jobs.fix.outputs.branch_name }}"
+          worktree_path: "${{ jobs.fix.outputs.worktree_path }}"
+        outputs:
+          verdict: {}
+          issue_resolved: {}
+          p0_issues: {}
+          p1_issues: {}
+          p2_p3_issues: {}
+          registered_deferred: {}
+          summary: {}
+        returns:
+          status:
+            values: [approved, rejected, needs_human]
+            required: true
+        on_return:
+          approved: continue
+          rejected: { retry_job: fix }
+          needs_human: { activate_job: human-escalation }
+        expose:
+          skills:
+            - issue-fix
+
+  human-escalation:
+    activation: optional
+    needs:
+      - review
+    steps:
+      - id: escalate
+        type: human
+        prompt: |
+          Issue #${{ jobs.issue-context.outputs.issue_number }} fix has exceeded maximum retry attempts or requires human intervention.
+          Review the fix and review artifacts before deciding next steps.
+
+          Approve to allow one final retry of the fix job.
+          Reject to abandon this run (then run `zigma-flow abort` to clean up).
+        inputs:
+          decision:
+            type: string
+            enum: [approve, reject]
+            required: true
+
+  submit-pr:
+    needs:
+      - review
+      - human-escalation
+    steps:
+      - id: submit
+        type: agent
+        prompt: submit-pr
+        with:
+          issue_number: "${{ jobs.issue-context.outputs.issue_number }}"
+          mode: "${{ jobs.issue-context.outputs.mode }}"
+          repo: "${{ jobs.issue-context.outputs.repo }}"
+          issue_title: "${{ jobs.issue-context.outputs.issue_title }}"
+          fix_summary: "${{ jobs.fix.outputs.summary }}"
+          files_changed: "${{ jobs.fix.outputs.files_changed }}"
+          branch_name: "${{ jobs.fix.outputs.branch_name }}"
+          worktree_path: "${{ jobs.fix.outputs.worktree_path }}"
+          review_verdict: "${{ jobs.review.outputs.verdict }}"
+          registered_deferred: "${{ jobs.review.outputs.registered_deferred }}"
+          p2_p3_issues: "${{ jobs.review.outputs.p2_p3_issues }}"
+        outputs:
+          pr_url: {}
+          pr_number: {}
+          pr_title: {}
+          branch_name: {}
+          deferred_issues_filed: {}
+        expose:
+          skills:
+            - issue-fix

@@ -32,7 +32,6 @@ const REQUIRED_EXAMPLE_FILES = [
   join("src", "index.ts"),
   join(".zigma-flow", "workflows", "code-change.yml"),
   join(".zigma-flow", "config.json"),
-  join(".zigma-flow", "skill-lock.json"),
   join(".zigma-flow", "skills", "code-change", "skill.yml"),
 ];
 
@@ -205,7 +204,7 @@ describe("example workflow YAML validation (T-EX-YAML)", () => {
     }
   });
 
-  it("workflow has required fields: name, jobs, entry (T-EX-YAML-2)", () => {
+  it("workflow has required fields: name, jobs (T-EX-YAML-2)", () => {
     expect(workflowYaml).not.toBeNull();
 
     if (workflowYaml) {
@@ -214,7 +213,6 @@ describe("example workflow YAML validation (T-EX-YAML)", () => {
       expect(typeof parsed.name).toBe("string");
       expect(parsed.jobs).toBeDefined();
       expect(typeof parsed.jobs).toBe("object");
-      expect(parsed.entry).toBeDefined();
     }
   });
 
@@ -250,27 +248,17 @@ describe("example workflow YAML validation (T-EX-YAML)", () => {
     }
   });
 
-  it("all job references in needs/entry exist in jobs map (T-EX-YAML-4)", () => {
+  it("all job references in needs exist in jobs map (T-EX-YAML-4)", () => {
     expect(workflowYaml).not.toBeNull();
 
     if (workflowYaml) {
       const parsed = parseYaml(workflowYaml) as Record<string, unknown>;
       const jobs = parsed.jobs as Record<string, unknown> | undefined;
-      const entry = parsed.entry as string | string[] | undefined;
       expect(jobs).toBeDefined();
-      expect(entry).toBeDefined();
 
-      if (jobs && entry) {
+      if (jobs) {
         const jobIds = new Set(Object.keys(jobs));
         const missingRefs: string[] = [];
-
-        // Check entry jobs
-        const entryJobs = Array.isArray(entry) ? entry : [entry];
-        for (const entryJob of entryJobs) {
-          if (!jobIds.has(entryJob)) {
-            missingRefs.push(`entry: "${entryJob}"`);
-          }
-        }
 
         // Check needs references
         for (const [jobId, jobDef] of Object.entries(jobs)) {

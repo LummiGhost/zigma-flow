@@ -1,12 +1,10 @@
 name: docs-change
-version: 0.3.0
+version: 0.6.0
 
-on:
-  manual:
-    inputs:
-      task:
-        type: string
-        required: true
+inputs:
+  task:
+    type: string
+    required: true
 
 skills:
   code:
@@ -20,8 +18,6 @@ permissions:
 
 jobs:
   scope:
-    workspace:
-      mode: read-only
     steps:
       - id: scope
         type: agent
@@ -36,8 +32,6 @@ jobs:
   source-map:
     needs:
       - scope
-    workspace:
-      mode: read-only
     steps:
       - id: map
         type: agent
@@ -52,8 +46,6 @@ jobs:
   draft:
     needs:
       - source-map
-    workspace:
-      mode: read-only
     steps:
       - id: draft
         type: agent
@@ -68,21 +60,15 @@ jobs:
   consistency-check:
     needs:
       - draft
-    workspace:
-      mode: read-only
     steps:
       - id: check
-        type: check
-        uses: zigma/file-exists
-        with:
-          file: "."
-        on_fail: fail
+        type: script
+        run: "git status"
+        on_failure: fail
 
   review:
     needs:
       - consistency-check
-    workspace:
-      mode: read-only
     steps:
       - id: review
         type: agent
@@ -98,14 +84,11 @@ jobs:
   summarize:
     needs:
       - review
-    workspace:
-      mode: read-only
     steps:
       - id: summarize
         type: agent
-        prompt: "Summarize the documentation change. Cite evidence from the scope artifact and draft artifact for each key claim."
         with:
-          task: "${{ inputs.task }}"
+          task: "Summarize the documentation change. Cite evidence from the scope artifact and draft artifact for each key claim."
         outputs:
           final_summary: {}
         expose:

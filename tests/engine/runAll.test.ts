@@ -975,3 +975,239 @@ jobs:
     expect(summary.jobs[0]!.status).toBe("completed");
   });
 });
+
+// ---------------------------------------------------------------------------
+// T-RUNALL-RECONCILE: Terminal reconciliation (Issue #229)
+// ---------------------------------------------------------------------------
+// When a script/check/router executor sets a job to failed/blocked without
+// updating state.status, the post-loop reconciliation must derive the
+// correct run-level terminal status and emit the corresponding run event.
+
+/** Single script job that fails — exercises terminal reconciliation. */
+const FAILING_SCRIPT_YAML = `\
+name: runall-failing-script
+version: "0.1.0"
+jobs:
+  build:
+    steps:
+      - id: compile
+        type: script
+        run: "exit 1"
+`;
+
+/** Single check job that fails — exercises terminal reconciliation. */
+const FAILING_CHECK_YAML = `\
+name: runall-failing-check
+version: "0.1.0"
+jobs:
+  check:
+    steps:
+      - id: validate
+        type: check
+        uses: zigma/file-exists
+        with:
+          file: nonexistent.txt
+`;
+
+/** Single router job that decides "fail". */
+const ROUTER_FAIL_YAML = `\
+name: runall-router-fail
+version: "0.1.0"
+jobs:
+  decide:
+    steps:
+      - id: route
+        type: router
+        switch: "fail"
+        cases:
+          fail: fail
+`;
+
+/** Single router job that decides "block". */
+const ROUTER_BLOCK_YAML = `\
+name: runall-router-block
+version: "0.1.0"
+jobs:
+  decide:
+    steps:
+      - id: route
+        type: router
+        switch: "block"
+        cases:
+          block: block
+`;
+
+describe("runAll — terminal reconciliation (T-RUNALL-RECONCILE)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "sets run status to failed when a script step fails (T-RECONCILE-1, UC-RECONCILE-001)",
+    async () => {
+      const { runId: _precreatedRunId, runDir: _precreatedRunDir, workflowPath } =
+        await bootstrapRun(sandbox, FAILING_SCRIPT_YAML, "runall-failing-script");
+
+      await rm(_precreatedRunDir, { recursive: true, force: true });
+
+      const summary = await callRunAll({
+        task: "exercise failing script",
+        workflowPath,
+        runsDir: sandbox.runsDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        skillLockPath: sandbox.skillLockPath,
+        backendResolver: () => new FakeBackend({ command: "fake" }),
+        clock: new FakeClock(),
+      });
+
+      expect(summary.runId).toBeTruthy();
+      expect(summary.status).toBe("failed");
+      expect(summary.jobs).toHaveLength(1);
+      expect(summary.jobs[0]!.id).toBe("build");
+      expect(summary.jobs[0]!.status).toBe("failed");
+
+      // Verify events include run_failed
+      const runDir = join(sandbox.runsDir, summary.runId);
+      const events = await readEvents(runDir);
+      const eventTypes = events.map((e) => e.type);
+      expect(eventTypes).toContain("run_failed");
+      expect(eventTypes).toContain("step_failed");
+    }
+  );
+
+  it(
+    "sets run status to failed when a check step fails (T-RECONCILE-2, UC-RECONCILE-002)",
+    async () => {
+      const { runId: _precreatedRunId, runDir: _precreatedRunDir, workflowPath } =
+        await bootstrapRun(sandbox, FAILING_CHECK_YAML, "runall-failing-check");
+
+      await rm(_precreatedRunDir, { recursive: true, force: true });
+
+      const summary = await callRunAll({
+        task: "exercise failing check",
+        workflowPath,
+        runsDir: sandbox.runsDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        skillLockPath: sandbox.skillLockPath,
+        backendResolver: () => new FakeBackend({ command: "fake" }),
+        clock: new FakeClock(),
+      });
+
+      expect(summary.runId).toBeTruthy();
+      expect(summary.status).toBe("failed");
+
+      const checkJob = summary.jobs.find((j) => j.id === "check");
+      expect(checkJob).toBeDefined();
+      expect(checkJob!.status).toBe("failed");
+
+      // Verify events include run_failed
+      const runDir = join(sandbox.runsDir, summary.runId);
+      const events = await readEvents(runDir);
+      const eventTypes = events.map((e) => e.type);
+      expect(eventTypes).toContain("run_failed");
+    }
+  );
+
+  it(
+    "sets run status to failed when a router decides fail (T-RECONCILE-3, UC-RECONCILE-003)",
+    async () => {
+      const { runId: _precreatedRunId, runDir: _precreatedRunDir, workflowPath } =
+        await bootstrapRun(sandbox, ROUTER_FAIL_YAML, "runall-router-fail");
+
+      await rm(_precreatedRunDir, { recursive: true, force: true });
+
+      const summary = await callRunAll({
+        task: "exercise router fail",
+        workflowPath,
+        runsDir: sandbox.runsDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        skillLockPath: sandbox.skillLockPath,
+        backendResolver: () => new FakeBackend({ command: "fake" }),
+        clock: new FakeClock(),
+      });
+
+      expect(summary.runId).toBeTruthy();
+      expect(summary.status).toBe("failed");
+
+      const decideJob = summary.jobs.find((j) => j.id === "decide");
+      expect(decideJob).toBeDefined();
+      expect(decideJob!.status).toBe("failed");
+
+      // Verify events include run_failed
+      const runDir = join(sandbox.runsDir, summary.runId);
+      const events = await readEvents(runDir);
+      const eventTypes = events.map((e) => e.type);
+      expect(eventTypes).toContain("run_failed");
+      expect(eventTypes).toContain("router_decided");
+    }
+  );
+
+  it(
+    "sets run status to blocked when a router decides block (T-RECONCILE-4, UC-RECONCILE-004)",
+    async () => {
+      const { runId: _precreatedRunId, runDir: _precreatedRunDir, workflowPath } =
+        await bootstrapRun(sandbox, ROUTER_BLOCK_YAML, "runall-router-block");
+
+      await rm(_precreatedRunDir, { recursive: true, force: true });
+
+      const summary = await callRunAll({
+        task: "exercise router block",
+        workflowPath,
+        runsDir: sandbox.runsDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        skillLockPath: sandbox.skillLockPath,
+        backendResolver: () => new FakeBackend({ command: "fake" }),
+        clock: new FakeClock(),
+      });
+
+      expect(summary.runId).toBeTruthy();
+      expect(summary.status).toBe("blocked");
+
+      const decideJob = summary.jobs.find((j) => j.id === "decide");
+      expect(decideJob).toBeDefined();
+      expect(decideJob!.status).toBe("blocked");
+
+      // Verify events include run_blocked
+      const runDir = join(sandbox.runsDir, summary.runId);
+      const events = await readEvents(runDir);
+      const eventTypes = events.map((e) => e.type);
+      expect(eventTypes).toContain("run_blocked");
+      expect(eventTypes).toContain("router_decided");
+    }
+  );
+
+  it(
+    "returns run_completed when the final job completes (T-RECONCILE-5, UC-RECONCILE-005)",
+    async () => {
+      const { runId: _precreatedRunId, runDir: _precreatedRunDir, workflowPath } =
+        await bootstrapRun(sandbox, SINGLE_SCRIPT_YAML, "runall-single-script");
+
+      await rm(_precreatedRunDir, { recursive: true, force: true });
+
+      const summary = await callRunAll({
+        task: "exercise all complete reconciliation",
+        workflowPath,
+        runsDir: sandbox.runsDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        skillLockPath: sandbox.skillLockPath,
+        backendResolver: () => new FakeBackend({ command: "fake" }),
+        clock: new FakeClock(),
+      });
+
+      expect(summary.runId).toBeTruthy();
+      expect(summary.status).toBe("completed");
+
+      // Verify events include run_completed
+      const runDir = join(sandbox.runsDir, summary.runId);
+      const events = await readEvents(runDir);
+      const eventTypes = events.map((e) => e.type);
+      expect(eventTypes).toContain("run_completed");
+    }
+  );
+});

@@ -1163,6 +1163,57 @@ async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
 }
 
 // ---------------------------------------------------------------------------
+// reconcileTerminalState — derive run-level terminal status from job states
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the run-level terminal status from job states.
+ *
+ * Only required (non-optional, non-manual) jobs are considered for failure
+ * and blockage. Optional/manual jobs that are inactive are ignored.
+ *
+ * Returns null when no terminal status can be determined (the run is still
+ * in progress — at least one job is still running, ready, or waiting).
+ *
+ * Issue #229: script/check/router executors set only jobs[jobId].status
+ * when a job enters a terminal state, but do not update state.status or
+ * emit run_failed/run_blocked. This function reconciles the run-level view
+ * so the main loop and post-loop safety net can set the correct terminal
+ * run status.
+ */
+function reconcileTerminalState(
+  jobs: Record<string, { status: string }>,
+  jobDefs: Record<string, { activation?: string }>,
+): "completed" | "failed" | "blocked" | null {
+  const requiredJobIds = Object.entries(jobDefs)
+    .filter(([, def]) => def.activation === undefined)
+    .map(([id]) => id);
+
+  if (requiredJobIds.length === 0) return null;
+
+  // Any required job failed → run_failed (highest priority)
+  if (requiredJobIds.some((id) => jobs[id]?.status === "failed")) {
+    return "failed";
+  }
+
+  // Any required job blocked → run_blocked
+  if (requiredJobIds.some((id) => jobs[id]?.status === "blocked")) {
+    return "blocked";
+  }
+
+  // All non-inactive jobs completed → run_completed
+  const allNonInactiveCompleted = Object.values(jobs).every(
+    (js) => js.status === "completed" || js.status === "inactive",
+  );
+  const hasCompletedJob = Object.values(jobs).some(
+    (js) => js.status === "completed",
+  );
+  if (allNonInactiveCompleted && hasCompletedJob) return "completed";
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // runAll
 // ---------------------------------------------------------------------------
 
@@ -1329,6 +1380,58 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
         if (waitingIds.length === 0) {
           break; // All jobs accounted for — clean exit (only inactive remain)
+        }
+
+        // Before declaring deadlock, try to reconcile a terminal run status
+        // from job states. Terminal job states (failed/blocked/completed) may
+        // have been set by executors without updating state.status (Issue #229).
+        const reconciled = reconcileTerminalState(state.jobs, wf.jobs);
+        if (reconciled !== null) {
+          const termEventId = await nextSequentialEventId(runDir, eventWriter);
+          const termEvent: ZigmaFlowEvent = reconciled === "failed"
+            ? {
+                id: termEventId,
+                type: "run_failed",
+                run_id: runId,
+                timestamp: clock.now(),
+                producer: "engine",
+                job: null,
+                step: null,
+                attempt: null,
+                payload: { reason: "terminal job states reconciled" },
+              }
+            : reconciled === "blocked"
+            ? {
+                id: termEventId,
+                type: "run_blocked",
+                run_id: runId,
+                timestamp: clock.now(),
+                producer: "engine",
+                job: null,
+                step: null,
+                attempt: null,
+                payload: { reason: "terminal job states reconciled" },
+              }
+            : {
+                id: termEventId,
+                type: "run_completed",
+                run_id: runId,
+                timestamp: clock.now(),
+                producer: "engine",
+                job: null,
+                step: null,
+                attempt: null,
+                payload: {},
+              };
+          await eventWriter.appendEvent(runDir, termEvent);
+          onEvent?.(termEvent);
+
+          await stateStore.updateState(runDir, (current) => ({
+            ...current,
+            status: reconciled,
+            last_event_id: termEventId,
+          }));
+          break;
         }
 
         // Deadlock: waiting jobs exist but no ready or running jobs are
@@ -1566,6 +1669,73 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
       // Re-read after update so the summary reflects the final state
       finalState = await stateStore.readSnapshot(runDir);
+    }
+
+    // ── 3.6. Post-loop: reconcile terminal run status from job states ─────
+    //
+    // Executors (script, check, router) and routing.ts set only
+    // jobs[jobId].status when a job enters a terminal state, but do not
+    // update state.status or emit run_failed/run_blocked. Reconcile the
+    // run-level view here so callers get a correct terminal status even
+    // when the loop exited via maxIterations or clean break (Issue #229).
+
+    if (
+      finalState !== null &&
+      finalState.status !== "completed" &&
+      finalState.status !== "failed" &&
+      finalState.status !== "blocked" &&
+      finalState.status !== "cancelled"
+    ) {
+      const reconciled = reconcileTerminalState(finalState.jobs, wf.jobs);
+      if (reconciled !== null) {
+        const termEventId = await nextSequentialEventId(runDir, eventWriter);
+        const termEvent: ZigmaFlowEvent = reconciled === "failed"
+          ? {
+              id: termEventId,
+              type: "run_failed",
+              run_id: runId,
+              timestamp: clock.now(),
+              producer: "engine",
+              job: null,
+              step: null,
+              attempt: null,
+              payload: { reason: "terminal job states reconciled" },
+            }
+          : reconciled === "blocked"
+          ? {
+              id: termEventId,
+              type: "run_blocked",
+              run_id: runId,
+              timestamp: clock.now(),
+              producer: "engine",
+              job: null,
+              step: null,
+              attempt: null,
+              payload: { reason: "terminal job states reconciled" },
+            }
+          : {
+              id: termEventId,
+              type: "run_completed",
+              run_id: runId,
+              timestamp: clock.now(),
+              producer: "engine",
+              job: null,
+              step: null,
+              attempt: null,
+              payload: {},
+            };
+        await eventWriter.appendEvent(runDir, termEvent);
+        onEvent?.(termEvent);
+
+        await stateStore.updateState(runDir, (current) => ({
+          ...current,
+          status: reconciled,
+          last_event_id: termEventId,
+        }));
+
+        // Re-read after update so the summary reflects the reconciled state
+        finalState = await stateStore.readSnapshot(runDir);
+      }
     }
   }
 

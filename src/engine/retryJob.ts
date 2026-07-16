@@ -29,6 +29,7 @@ import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import { StateError, UserInputError } from "../utils/index.js";
+import { createOpenAttempt } from "./attemptModel.js";
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -140,6 +141,33 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
   // ── 5. Check if max_attempts exceeded ─────────────────────────────────────
 
   if (currentAttempt >= maxAttempts && !force) {
+    // ── WF-7.1: Seal the last open attempt as failure ───────────────────────────
+    if (jobState.attempts && jobState.attempts.length > 0) {
+      const lastIdx = jobState.attempts.length - 1;
+      const lastAttempt = jobState.attempts[lastIdx]!;
+      if (!lastAttempt.status) {
+        const attemptFailedId = getNextEventId();
+        await eventWriter.appendEvent(runDir, {
+          id: attemptFailedId,
+          run_id: runId,
+          type: "attempt_failed",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: jobId,
+          step: null,
+          attempt: currentAttempt,
+          payload: {
+            job_id: jobId,
+            attempt: currentAttempt,
+            failure_kind: "agent_error",
+            reason: reason ?? "max attempts exceeded",
+            step_count: lastAttempt.step_count ?? 0,
+            duration_ms: 0,
+          },
+        });
+      }
+    }
+
     // Exhausted — read on_exceeded.status (default: "blocked")
     const onExceededStatus: "blocked" | "failed" =
       retryConfig !== undefined &&
@@ -160,7 +188,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
         job: jobId,
         step: null,
         attempt: currentAttempt,
-        payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
+        payload: { job_id: jobId, reason: reason ?? "max attempts exceeded", failure_kind: "agent_error" },
       });
     } else {
       await eventWriter.appendEvent(runDir, {
@@ -172,7 +200,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
         job: jobId,
         step: null,
         attempt: currentAttempt,
-        payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
+        payload: { job_id: jobId, reason: reason ?? "max attempts exceeded", failure_kind: "agent_error" },
       });
     }
 
@@ -192,7 +220,65 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
     return;
   }
 
-  // ── 6. Emit job_retrying event ─────────────────────────────────────────────
+  // ── 6. WF-7.1: Seal old attempt as failure, then create new attempt ─────────
+  // Events must respect: attempt_failed (old) → attempt_started (new) → job_retrying
+
+  // 6a. Seal old attempt as failure
+  let sealedAttempts: import("../run/index.js").Attempt[] | undefined;
+  if (jobState.attempts && jobState.attempts.length > 0) {
+    sealedAttempts = [...jobState.attempts];
+    const lastIdx = sealedAttempts.length - 1;
+    const lastAttempt = sealedAttempts[lastIdx]!;
+    if (!lastAttempt.status) {
+      sealedAttempts[lastIdx] = {
+        ...lastAttempt,
+        status: "failure" as const,
+        ended_at: clock.now(),
+      };
+
+      const attemptFailedId = getNextEventId();
+      await eventWriter.appendEvent(runDir, {
+        id: attemptFailedId,
+        run_id: runId,
+        type: "attempt_failed",
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: null,
+        attempt: currentAttempt,
+        payload: {
+          job_id: jobId,
+          attempt: currentAttempt,
+          failure_kind: "agent_error",
+          reason: reason ?? "",
+          step_count: lastAttempt.step_count ?? 0,
+          duration_ms: 0,
+        },
+      });
+    }
+  }
+
+  // 6b. Create new open attempt with retry_inputs if provided
+  const newAttempt = createOpenAttempt(nextAttempt, clock.now(), reason);
+  if (retryInputs !== undefined) {
+    newAttempt.retry_inputs = { ...retryInputs };
+  }
+  const newAttempts = [...(sealedAttempts ?? jobState.attempts ?? []), newAttempt];
+
+  const attemptStartedId = getNextEventId();
+  await eventWriter.appendEvent(runDir, {
+    id: attemptStartedId,
+    run_id: runId,
+    type: "attempt_started",
+    timestamp: clock.now(),
+    producer: "engine",
+    job: jobId,
+    step: null,
+    attempt: nextAttempt,
+    payload: { job_id: jobId, attempt: nextAttempt, reason: reason ?? "" },
+  });
+
+  // ── 7. Emit job_retrying event ─────────────────────────────────────────────
 
   const jobRetryingId = getNextEventId();
   await eventWriter.appendEvent(runDir, {
@@ -204,17 +290,17 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
     job: jobId,
     step: null,
     attempt: nextAttempt,
-    payload: { job_id: jobId, attempt: nextAttempt, reason: reason ?? "" },
+    payload: { job_id: jobId, attempt: nextAttempt, reason: reason ?? "", failure_kind: "agent_error" },
   });
 
-  // ── 7. Update job state: status → ready, attempt++, clear current_step ─────
+  // ── 8. Update job state: status → ready, attempt++, clear current_step ─────
 
-  const retryJobState = { ...jobState };
+  const retryJobState: Record<string, unknown> = { ...jobState };
   retryJobState.status = "ready";
   retryJobState.attempt = nextAttempt;
   delete retryJobState.current_step;
   // Reset step_visits on retry (WF-P13-FLOW)
-  delete (retryJobState as Record<string, unknown>)["step_visits"];
+  delete retryJobState["step_visits"];
   if (reason !== undefined) {
     retryJobState.retry_reason = reason;
   }
@@ -226,12 +312,15 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
     delete retryJobState.retry_inputs;
   }
 
+  // WF-7.1: Store updated attempts array
+  retryJobState.attempts = newAttempts;
+
   await stateStore.updateState(runDir, (current) => ({
     ...current,
     last_event_id: jobRetryingId,
     jobs: {
       ...current.jobs,
-      [jobId]: retryJobState,
+      [jobId]: retryJobState as unknown as import("../run/index.js").JobState,
     },
   }));
 }

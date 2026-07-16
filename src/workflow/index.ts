@@ -383,6 +383,27 @@ const JobWorkspaceSchema = z.union([
   }).catchall(z.unknown()),
 ]);
 
+/**
+ * Zod schema for RetryPolicy (matches the interface in run/index.ts).
+ * Uses passthrough() for backward compatibility with deprecated retry_with field.
+ */
+const RetryConfigSchema = z.object({
+  /** @stability stable */
+  max_attempts: z.number().int().min(1).optional(),
+  /**
+   * Failure kinds that trigger a retry.
+   * When absent: defaults to transient kinds.
+   * When empty array ([]): never retry.
+   */
+  when: z.array(z.string()).optional(),
+  /** What to do when max_attempts is exhausted. Default: "blocked". */
+  on_exceeded: z.object({
+    status: z.enum(["blocked", "failed"]),
+  }).optional(),
+  /** Reserved for v0.8 exponential backoff. Not enforced in v0.7. */
+  max_delay_ms: z.number().int().min(0).optional(),
+}).passthrough().optional();
+
 const JobSchema = z.object({
   /** @stability stable */
   steps: z.array(StepBaseSchema),
@@ -395,7 +416,7 @@ const JobSchema = z.object({
   /** @stability stable */
   activation: z.string().optional(),
   /** @stability stable */
-  retry: z.record(z.string(), z.unknown()).optional(),
+  retry: RetryConfigSchema,
   /** @stability stable */
   permissions: z.record(z.string(), z.unknown()).optional(),
 });

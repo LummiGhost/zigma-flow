@@ -10,6 +10,9 @@ export { nextSequentialEventId } from "./sequence.js";
 export {
   EVENT_TYPES,
   nextEventId,
+  type AttemptCompletedPayload,
+  type AttemptFailedPayload,
+  type AttemptStartedPayload,
   type ContextBlockDeletedPayload,
   type ContextBlockUpdatedPayload,
   type VariableDeletedPayload,

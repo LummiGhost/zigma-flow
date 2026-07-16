@@ -37,6 +37,7 @@ import { loadWorkflowFile } from "../workflow/index.js";
 import type { WorkflowDefinition } from "../workflow/index.js";
 import { StateError } from "../utils/index.js";
 import { retryJob } from "./retryJob.js";
+import { classifyFailureKind } from "./attemptModel.js";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -162,6 +163,36 @@ export async function recordAgentFailure(
   // -- 2. Config / Permission error ⇒ fail run immediately (no retry) -----
 
   if (errorType === "config" || errorType === "permission") {
+    // WF-7.1: Seal the last open attempt as failure
+    let lastEventId = stepFailedId;
+    const currentJobState = currentState.jobs[jobId];
+    if (currentJobState?.attempts && currentJobState.attempts.length > 0) {
+      const lastIdx = currentJobState.attempts.length - 1;
+      const lastAttempt = currentJobState.attempts[lastIdx]!;
+      if (!lastAttempt.status) {
+        const attemptFailedId = await nextSequentialEventId(runDir, eventWriter);
+        await eventWriter.appendEvent(runDir, {
+          id: attemptFailedId,
+          run_id: runId,
+          type: "attempt_failed",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: jobId,
+          step: stepId,
+          attempt,
+          payload: {
+            job_id: jobId,
+            attempt,
+            failure_kind: classifyFailureKind(errorType),
+            reason,
+            step_count: lastAttempt.step_count ?? 0,
+            duration_ms: 0,
+          },
+        });
+        lastEventId = attemptFailedId;
+      }
+    }
+
     const runFailedId = await nextSequentialEventId(runDir, eventWriter);
     const runFailedEvent: ZigmaFlowEvent = {
       id: runFailedId,
@@ -176,18 +207,27 @@ export async function recordAgentFailure(
     };
     await eventWriter.appendEvent(runDir, runFailedEvent);
 
-    await stateStore.updateState(runDir, (current) => ({
-      ...current,
-      status: "failed",
-      last_event_id: runFailedId,
-      jobs: {
-        ...current.jobs,
-        [jobId]: {
-          ...current.jobs[jobId]!,
-          status: "failed",
-        },
-      },
-    }));
+    // WF-7.1: Store sealed attempt in state
+    await stateStore.updateState(runDir, (current) => {
+      const updatedJob = { ...current.jobs[jobId]! };
+      updatedJob.status = "failed";
+      if (updatedJob.attempts && updatedJob.attempts.length > 0) {
+        const li = updatedJob.attempts.length - 1;
+        const la = updatedJob.attempts[li]!;
+        if (!la.status) {
+          updatedJob.attempts = [
+            ...updatedJob.attempts.slice(0, li),
+            { ...la, status: "failure" as const, ended_at: clock.now() },
+          ];
+        }
+      }
+      return {
+        ...current,
+        status: "failed",
+        last_event_id: runFailedId,
+        jobs: { ...current.jobs, [jobId]: updatedJob },
+      };
+    });
 
     return { action: "run_failed", jobStatus: "failed" };
   }
@@ -234,6 +274,36 @@ export async function recordAgentFailure(
 
   // -- 5. Attempt >= max_attempts — apply on_exceeded ---------------------
 
+  // WF-7.1: Seal the last open attempt as failure before terminal event
+  let lastEventIdBeforeTerminal = stepFailedId;
+  const jobStateForSeal = currentState.jobs[jobId];
+  if (jobStateForSeal?.attempts && jobStateForSeal.attempts.length > 0) {
+    const lastIdx = jobStateForSeal.attempts.length - 1;
+    const lastAttempt = jobStateForSeal.attempts[lastIdx]!;
+    if (!lastAttempt.status) {
+      const attemptFailedId = await nextSequentialEventId(runDir, eventWriter);
+      await eventWriter.appendEvent(runDir, {
+        id: attemptFailedId,
+        run_id: runId,
+        type: "attempt_failed",
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: stepId,
+        attempt,
+        payload: {
+          job_id: jobId,
+          attempt,
+          failure_kind: classifyFailureKind(errorType),
+          reason: reason ?? "max attempts exceeded",
+          step_count: lastAttempt.step_count ?? 0,
+          duration_ms: 0,
+        },
+      });
+      lastEventIdBeforeTerminal = attemptFailedId;
+    }
+  }
+
   const onExceededStatus: "blocked" | "failed" =
     retryConfig !== undefined &&
     typeof retryConfig["on_exceeded"] === "object" &&
@@ -272,18 +342,26 @@ export async function recordAgentFailure(
     await eventWriter.appendEvent(runDir, jobBlockedEvent);
   }
 
-  await stateStore.updateState(runDir, (current) => ({
-    ...current,
-    status: onExceededStatus,
-    last_event_id: terminalEventId,
-    jobs: {
-      ...current.jobs,
-      [jobId]: {
-        ...current.jobs[jobId]!,
-        status: onExceededStatus,
-      },
-    },
-  }));
+  await stateStore.updateState(runDir, (current) => {
+    const updatedJob = { ...current.jobs[jobId]! };
+    updatedJob.status = onExceededStatus;
+    if (updatedJob.attempts && updatedJob.attempts.length > 0) {
+      const li = updatedJob.attempts.length - 1;
+      const la = updatedJob.attempts[li]!;
+      if (!la.status) {
+        updatedJob.attempts = [
+          ...updatedJob.attempts.slice(0, li),
+          { ...la, status: "failure" as const, ended_at: clock.now(), failure_kind: classifyFailureKind(errorType), failure_reason: reason ?? "max attempts exceeded" },
+        ];
+      }
+    }
+    return {
+      ...current,
+      status: onExceededStatus,
+      last_event_id: terminalEventId,
+      jobs: { ...current.jobs, [jobId]: updatedJob },
+    };
+  });
 
   return { action: onExceededStatus, jobStatus: onExceededStatus };
 }

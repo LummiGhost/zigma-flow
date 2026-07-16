@@ -24,6 +24,7 @@ import { nextEventId as formatEventId } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import { StateError, WorkflowError } from "../utils/index.js";
+import { createOpenAttempt } from "./attemptModel.js";
 
 // ---------------------------------------------------------------------------
 // ApplyRoutingActionOpts
@@ -265,6 +266,33 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     const nextAttempt = currentAttempt + 1;
 
     if (nextAttempt > maxAttempts) {
+      // WF-7.1: Seal the last open attempt as failure before terminal event
+      if (targetJobState.attempts && targetJobState.attempts.length > 0) {
+        const li = targetJobState.attempts.length - 1;
+        const la = targetJobState.attempts[li]!;
+        if (!la.status) {
+          const attemptFailedId = getNextEventId();
+          await eventWriter.appendEvent(runDir, {
+            id: attemptFailedId,
+            run_id: runId,
+            type: "attempt_failed",
+            timestamp: clock.now(),
+            producer: "engine",
+            job: targetJobId,
+            step: null,
+            attempt: currentAttempt,
+            payload: {
+              job_id: targetJobId,
+              attempt: currentAttempt,
+              failure_kind: "agent_error",
+              reason,
+              step_count: la.step_count ?? 0,
+              duration_ms: 0,
+            },
+          });
+        }
+      }
+
       // Exhausted — read on_exceeded.status from workflow config (default: blocked)
       const onExceededStatus: "blocked" | "failed" =
         retryConfig !== undefined &&
@@ -307,6 +335,17 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       terminalJobState.status = onExceededStatus;
       delete terminalJobState.retry_inputs;
       delete terminalJobState.current_step;
+      // WF-7.1: Seal the last open attempt in state
+      if (terminalJobState.attempts && terminalJobState.attempts.length > 0) {
+        const li = terminalJobState.attempts.length - 1;
+        const la = terminalJobState.attempts[li]!;
+        if (!la.status) {
+          terminalJobState.attempts = [
+            ...terminalJobState.attempts.slice(0, li),
+            { ...la, status: "failure" as const, ended_at: clock.now() },
+          ];
+        }
+      }
 
       const updatedState: RunState = {
         ...state,
@@ -319,6 +358,52 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       await stateStore.writeSnapshot(runDir, updatedState);
       return;
     }
+
+    // WF-7.1: Seal the last open attempt as failure before creating new attempt
+    let sealedAttempts: import("../run/index.js").Attempt[] | undefined;
+    if (targetJobState.attempts && targetJobState.attempts.length > 0) {
+      sealedAttempts = [...targetJobState.attempts];
+      const li = sealedAttempts.length - 1;
+      const la = sealedAttempts[li]!;
+      if (!la.status) {
+        sealedAttempts[li] = { ...la, status: "failure" as const, ended_at: clock.now() };
+        const attemptFailedId = getNextEventId();
+        await eventWriter.appendEvent(runDir, {
+          id: attemptFailedId,
+          run_id: runId,
+          type: "attempt_failed",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: targetJobId,
+          step: null,
+          attempt: currentAttempt,
+          payload: {
+            job_id: targetJobId,
+            attempt: currentAttempt,
+            failure_kind: "agent_error",
+            reason,
+            step_count: la.step_count ?? 0,
+            duration_ms: 0,
+          },
+        });
+      }
+    }
+
+    // WF-7.1: Create new open attempt
+    const newAttempt = createOpenAttempt(nextAttempt, clock.now(), reason);
+    const newAttempts = [...(sealedAttempts ?? targetJobState.attempts ?? []), newAttempt];
+    const attemptStartedId = getNextEventId();
+    await eventWriter.appendEvent(runDir, {
+      id: attemptStartedId,
+      run_id: runId,
+      type: "attempt_started",
+      timestamp: clock.now(),
+      producer: "engine",
+      job: targetJobId,
+      step: null,
+      attempt: nextAttempt,
+      payload: { job_id: targetJobId, attempt: nextAttempt, reason },
+    });
 
     // Append job_retrying
     const jobRetryingId = getNextEventId();
@@ -340,6 +425,8 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     delete retryJobState.current_step;
     retryJobState.attempt = nextAttempt;
     retryJobState.retry_reason = reason;
+    // WF-7.1: Store updated attempts array
+    retryJobState.attempts = newAttempts;
     // Store retry_with data as retry_inputs (wholesale replacement, not merge)
     if (typeof action === "object" && "retry_with" in action && action.retry_with !== undefined) {
       retryJobState.retry_inputs = { ...action.retry_with };
@@ -411,9 +498,31 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     activatedJobState.activated = true;
     activatedJobState.activation_reason = reason;
 
+    // WF-7.1: Initialize attempt for jobs that become ready on activation
+    let lastEventId = jobActivatedId;
+    if (newStatus === "ready") {
+      const openAttempt = createOpenAttempt(1, clock.now());
+      activatedJobState.attempt = 1;
+      activatedJobState.attempts = [openAttempt];
+
+      const attemptStartedId = getNextEventId();
+      await eventWriter.appendEvent(runDir, {
+        id: attemptStartedId,
+        run_id: runId,
+        type: "attempt_started",
+        timestamp: clock.now(),
+        producer: "engine",
+        job: targetJobId,
+        step: null,
+        attempt: 1,
+        payload: { job_id: targetJobId, attempt: 1, reason },
+      });
+      lastEventId = attemptStartedId;
+    }
+
     const updatedState: RunState = {
       ...state,
-      last_event_id: jobActivatedId,
+      last_event_id: lastEventId,
       jobs: {
         ...state.jobs,
         [targetJobId]: activatedJobState,
@@ -485,9 +594,31 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     const readyTargetState = { ...targetJobState };
     readyTargetState.status = newTargetStatus;
 
+    // WF-7.1: Initialize attempt for jobs that become ready via goto_job
+    let lastEventId = jobSkippedId;
+    if (newTargetStatus === "ready") {
+      const openAttempt = createOpenAttempt(1, clock.now());
+      readyTargetState.attempt = 1;
+      readyTargetState.attempts = [openAttempt];
+
+      const attemptStartedId = getNextEventId();
+      await eventWriter.appendEvent(runDir, {
+        id: attemptStartedId,
+        run_id: runId,
+        type: "attempt_started",
+        timestamp: clock.now(),
+        producer: "engine",
+        job: targetJobId,
+        step: null,
+        attempt: 1,
+        payload: { job_id: targetJobId, attempt: 1, reason },
+      });
+      lastEventId = attemptStartedId;
+    }
+
     const updatedState: RunState = {
       ...state,
-      last_event_id: jobSkippedId,
+      last_event_id: lastEventId,
       jobs: {
         ...updatedJobs,
         [targetJobId]: readyTargetState,

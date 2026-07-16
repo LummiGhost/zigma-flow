@@ -32,6 +32,7 @@ import { inspectAction } from "./commands/inspect.js";
 import { approveAction } from "./commands/approve.js";
 import { rejectAction } from "./commands/reject.js";
 import { resumeAction } from "./commands/resume.js";
+import { forceSetAction } from "./commands/force-set.js";
 import { verifyRunAction } from "./commands/verify-run.js";
 import { doctorAction } from "./commands/doctor.js";
 import { eventsAction } from "./commands/events.js";
@@ -570,6 +571,26 @@ async function runProgram(
         ...(options.step !== undefined ? { stepId: options.step } : {}),
         input: inputs,
         clock: new SystemClock(),
+      });
+    });
+
+  program
+    .command("force-set [run-id]")
+    .description("Manually override a job's status for recovery (completed, waiting, failed, blocked).")
+    .requiredOption("--job <id>", "Job id to force-set.")
+    .requiredOption("--status <status>", "Target status: completed, waiting, failed, or blocked.")
+    .option("--reason <reason>", "Human-readable reason for the override.")
+    .option("--latest", "Use the most recently created run.")
+    .exitOverride()
+    .action(async (runId: string | undefined, options: { job: string; status: string; reason?: string; latest?: boolean }) => {
+      await forceSetAction({
+        zigmaflowDir: cwd(),
+        ...(runId !== undefined ? { runId } : {}),
+        jobId: options.job,
+        status: options.status,
+        clock: new SystemClock(),
+        ...(options.reason !== undefined ? { reason: options.reason } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
       });
     });
 

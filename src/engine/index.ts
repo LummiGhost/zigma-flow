@@ -65,8 +65,8 @@ export type {
 export { checkAndExecuteTraverses, resolveTraverseInput, getTraverseInputJob, parseVirtualJobId } from "./traverse.js";
 export type { ExecuteTraverseOpts, ExecuteTraverseResult } from "./traverse.js";
 export { resolveJobWorkingDirectory, extractWorkspacePath } from "./workspace.js";
-export { forceSetJob } from "./forceSet.js";
-export type { ForceSetJobOpts } from "./forceSet.js";
+export { resetRun } from "./resetRun.js";
+export type { ResetRunOpts, ResetRunResult, ResetJobChange } from "./resetRun.js";
 
 export interface CreateRunInputs {
   workflowPath: string;

@@ -6,7 +6,7 @@
  */
 
 // ---------------------------------------------------------------------------
-// ZigmaFlowEventType — the 44 event type tags (closed string union)
+// ZigmaFlowEventType — the 45 event type tags (closed string union)
 // ---------------------------------------------------------------------------
 
 export type ZigmaFlowEventType =
@@ -53,7 +53,8 @@ export type ZigmaFlowEventType =
   | "traverse_completed"
   | "execution_paused"
   | "execution_stopped"
-  | "job_state_override";
+  | "job_state_override"
+  | "job_reset";
 
 /**
  * Runtime tuple of all event type tags.
@@ -104,6 +105,7 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "execution_paused",
   "execution_stopped",
   "job_state_override",
+  "job_reset",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -407,6 +409,13 @@ export interface JobStateOverridePayload {
   reason: string;
 }
 
+export interface JobResetPayload {
+  job_id: string;
+  from_status: string;
+  to_status: string;
+  reason: string;
+}
+
 // ---------------------------------------------------------------------------
 // EventEnvelope — the common envelope wrapping every event
 // ---------------------------------------------------------------------------
@@ -472,7 +481,8 @@ export type ZigmaFlowEvent =
   | (EventEnvelope & { type: "traverse_completed"; payload: TraverseCompletedPayload })
   | (EventEnvelope & { type: "execution_paused"; payload: ExecutionPausedPayload })
   | (EventEnvelope & { type: "execution_stopped"; payload: ExecutionStoppedPayload })
-  | (EventEnvelope & { type: "job_state_override"; payload: JobStateOverridePayload });
+  | (EventEnvelope & { type: "job_state_override"; payload: JobStateOverridePayload })
+  | (EventEnvelope & { type: "job_reset"; payload: JobResetPayload });
 
 // ---------------------------------------------------------------------------
 // nextEventId — sequential event id formatter

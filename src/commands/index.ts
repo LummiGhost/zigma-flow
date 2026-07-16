@@ -13,5 +13,5 @@ export { runAllAction } from "./run-all.js";
 export type { RunAllOptions } from "./run-all.js";
 export { resumeAction } from "./resume.js";
 export type { ResumeActionOpts } from "./resume.js";
-export { forceSetAction } from "./force-set.js";
-export type { ForceSetActionOpts } from "./force-set.js";
+export { resetRunAction } from "./reset-run.js";
+export type { ResetRunActionOpts } from "./reset-run.js";

@@ -32,11 +32,11 @@ import { inspectAction } from "./commands/inspect.js";
 import { approveAction } from "./commands/approve.js";
 import { rejectAction } from "./commands/reject.js";
 import { resumeAction } from "./commands/resume.js";
-import { forceSetAction } from "./commands/force-set.js";
 import { verifyRunAction } from "./commands/verify-run.js";
 import { doctorAction } from "./commands/doctor.js";
 import { eventsAction } from "./commands/events.js";
 import { artifactsAction } from "./commands/artifacts.js";
+import { resetRunAction } from "./commands/reset-run.js";
 import { skillAddAction } from "./commands/skill-add.js";
 import { SystemClock } from "./run/index.js";
 
@@ -575,26 +575,6 @@ async function runProgram(
     });
 
   program
-    .command("force-set [run-id]")
-    .description("Manually override a job's status for recovery (completed, waiting, failed, blocked).")
-    .requiredOption("--job <id>", "Job id to force-set.")
-    .requiredOption("--status <status>", "Target status: completed, waiting, failed, or blocked.")
-    .option("--reason <reason>", "Human-readable reason for the override.")
-    .option("--latest", "Use the most recently created run.")
-    .exitOverride()
-    .action(async (runId: string | undefined, options: { job: string; status: string; reason?: string; latest?: boolean }) => {
-      await forceSetAction({
-        zigmaflowDir: cwd(),
-        ...(runId !== undefined ? { runId } : {}),
-        jobId: options.job,
-        status: options.status,
-        clock: new SystemClock(),
-        ...(options.reason !== undefined ? { reason: options.reason } : {}),
-        ...(options.latest !== undefined ? { latest: options.latest } : {}),
-      });
-    });
-
-  program
     .command("events [run-id]")
     .description("Show recent events for a workflow run.")
     .option("--limit <N>", "Maximum number of events to show (default: 20).", parseInt)
@@ -645,6 +625,24 @@ async function runProgram(
         zigmaflowDir: zfDir(),
       });
       process.exitCode = exitCode;
+    });
+
+  program
+    .command("reset-run [run-id]")
+    .description("Reset a stuck/errored run's state machine so it can be resumed.")
+    .option("--latest", "Use the most recently created run.")
+    .option("--dry-run", "Show what would change without applying.")
+    .option("--force", "Skip confirmation prompt.")
+    .exitOverride()
+    .action(async (runId: string | undefined, options: { latest?: boolean; dryRun?: boolean; force?: boolean }) => {
+      await resetRunAction({
+        zigmaflowDir: cwd(),
+        ...(runId !== undefined ? { runId } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
+        ...(options.dryRun !== undefined ? { dryRun: options.dryRun } : {}),
+        ...(options.force !== undefined ? { force: options.force } : {}),
+        clock: new SystemClock(),
+      });
     });
 
   const skillCmd = program

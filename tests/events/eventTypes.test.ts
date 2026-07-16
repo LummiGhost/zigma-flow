@@ -38,6 +38,7 @@ import type {
   JobCompletedPayload,
   JobFailedPayload,
   JobReadyPayload,
+  JobResetPayload,
   JobRetryingPayload,
   JobSkippedPayload,
   PromptGeneratedPayload,
@@ -103,7 +104,7 @@ function runEnvelope(id: string, type: ZigmaFlowEventType): EventEnvelope {
 // ---------------------------------------------------------------------------
 
 describe("ZigmaFlowEventType", () => {
-  it("enumerates all 43 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
+  it("enumerates all 45 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
     const expected: ZigmaFlowEventType[] = [
       "run_created",
       "job_ready",
@@ -149,12 +150,13 @@ describe("ZigmaFlowEventType", () => {
       "execution_paused",
       "execution_stopped",
       "job_state_override",
+      "job_reset",
     ];
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(44);
-    expect(expected.length).toBe(44);
+    expect(EVENT_TYPES.length).toBe(45);
+    expect(expected.length).toBe(45);
   });
 });
 
@@ -329,6 +331,8 @@ describe("ZigmaFlowEvent", () => {
           return "execution_stopped";
         case "job_state_override":
           return "job_state_override";
+        case "job_reset":
+          return "job_reset";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;
@@ -747,6 +751,23 @@ describe("ZigmaFlowEvent JSON round-trip", () => {
     const back = roundTrip(ev);
     expect(back).toEqual(ev);
     expect(back.type).toBe("job_failed");
+  });
+
+  it("round-trips job_reset (T-EVT-RT-44, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {
+    const payload: JobResetPayload = {
+      job_id: "implement",
+      from_status: "failed",
+      to_status: "waiting",
+      reason: "reset-run command",
+    };
+    const ev: ZigmaFlowEvent = {
+      ...stepEnvelope("evt-044", "job_reset", "engine", "implement", "", 1),
+      type: "job_reset",
+      payload,
+    };
+    const back = roundTrip(ev);
+    expect(back).toEqual(ev);
+    expect(back.type).toBe("job_reset");
   });
 });
 

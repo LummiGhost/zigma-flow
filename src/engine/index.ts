@@ -14,6 +14,7 @@ import { computeReadyJobs } from "../dag/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import { StateError, WorkflowError } from "../utils/index.js";
+import { createOpenAttempt } from "./attemptModel.js";
 import type { ProcessRunner } from "../script/index.js";
 import { ExecaProcessRunner } from "../script/index.js";
 import { executeScriptStep } from "../script/executor.js";
@@ -67,6 +68,14 @@ export type { ExecuteTraverseOpts, ExecuteTraverseResult } from "./traverse.js";
 export { resolveJobWorkingDirectory, extractWorkspacePath } from "./workspace.js";
 export { resetRun } from "./resetRun.js";
 export type { ResetRunOpts, ResetRunResult, ResetJobChange } from "./resetRun.js";
+export {
+  classifyFailureKind,
+  createOpenAttempt,
+  deriveJobConclusion,
+  retryPolicyAllowsRetry,
+  sealAttempt,
+} from "./attemptModel.js";
+export type { OpenAttempt } from "./attemptModel.js";
 
 export interface CreateRunInputs {
   workflowPath: string;
@@ -204,21 +213,40 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
   });
 
   // RC-R10: Append one job_ready event per initial ready job
-  // Use Object.keys(wf.jobs) order filtered to those in the ready set
-  for (const jobId of Object.keys(wf.jobs)) {
-    if (readySet.has(jobId)) {
-      await eventWriter.appendEvent(runDir, {
-        id: nextEventId(),
-        type: "job_ready",
-        run_id: runId,
-        timestamp: clock.now(),
-        producer: "engine",
-        job: null,
-        step: null,
-        attempt: null,
-        payload: { job_id: jobId },
-      });
-    }
+  // Also emit attempt_started for each ready job's initial attempt (WF-7.1)
+  const readyJobIds = Object.keys(wf.jobs).filter((id) => readySet.has(id));
+  for (const jobId of readyJobIds) {
+    await eventWriter.appendEvent(runDir, {
+      id: nextEventId(),
+      type: "job_ready",
+      run_id: runId,
+      timestamp: clock.now(),
+      producer: "engine",
+      job: null,
+      step: null,
+      attempt: null,
+      payload: { job_id: jobId },
+    });
+
+    // Initialize open attempt for this ready job
+    const openAttempt = createOpenAttempt(1, clock.now());
+    jobs[jobId] = {
+      ...jobs[jobId]!,
+      attempt: 1,
+      attempts: [openAttempt],
+    };
+
+    await eventWriter.appendEvent(runDir, {
+      id: nextEventId(),
+      type: "attempt_started",
+      run_id: runId,
+      timestamp: clock.now(),
+      producer: "engine",
+      job: jobId,
+      step: null,
+      attempt: 1,
+      payload: { job_id: jobId, attempt: 1, reason: "" },
+    });
   }
 
   // RC-R08/R11: Read confirmed tail event id — MUST be non-null after appending run_created
@@ -671,6 +699,27 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
   const jobState = state.jobs[jobId]!;
   const attempt = jobState.attempt ?? 1;
 
+  // ── WF-7.1: Seal the current attempt as success and emit attempt_completed ──
+  const jobDef = wf.jobs[jobId];
+  const stepCount = jobDef?.steps.length ?? 0;
+  const attemptCompletedId = await nextSequentialEventId(runDir, eventWriter);
+  await eventWriter.appendEvent(runDir, {
+    id: attemptCompletedId,
+    run_id: runId,
+    type: "attempt_completed",
+    timestamp: clock.now(),
+    producer: "engine",
+    job: jobId,
+    step: null,
+    attempt,
+    payload: {
+      job_id: jobId,
+      attempt,
+      step_count: stepCount,
+      duration_ms: 0,
+    },
+  });
+
   // Emit job_completed event BEFORE updateState (maintains events-before-state invariant)
   const jobCompletedId = await nextSequentialEventId(runDir, eventWriter);
   await eventWriter.appendEvent(runDir, {
@@ -728,6 +777,24 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
     const completedJobState = { ...current.jobs[jobId]! };
     delete completedJobState.current_step;
     completedJobState.status = "completed";
+
+    // WF-7.1: Seal the open attempt as success in state
+    if (completedJobState.attempts && completedJobState.attempts.length > 0) {
+      const lastIdx = completedJobState.attempts.length - 1;
+      const lastAttempt = completedJobState.attempts[lastIdx]!;
+      if (!lastAttempt.status) {
+        const sealedAttempt = {
+          ...lastAttempt,
+          status: "success" as const,
+          ended_at: clock.now(),
+          step_count: stepCount,
+        };
+        completedJobState.attempts = [
+          ...completedJobState.attempts.slice(0, lastIdx),
+          sealedAttempt,
+        ];
+      }
+    }
 
     let newState: RunState = {
       ...current,

@@ -67,18 +67,126 @@ export interface StateStore {
 // Types
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Attempt Model types (WF-7.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Well-known failure classifications for the Execution Attempt model.
+ *
+ * - timeout:              Agent backend timed out
+ * - infrastructure_error: Network, disk, or backend infrastructure failure (transient)
+ * - invalid_output:       Agent produced output that fails validation (permanent without input change)
+ * - agent_error:          Agent execution failed for reasons not covered above
+ * - cancelled:            Agent was cancelled by signal
+ * - permission_denied:    Agent lacks required permissions
+ * - config_error:         Misconfiguration (wrong model, missing backend, etc.)
+ *
+ * Extension slot (string & {}): any string is accepted at runtime but only
+ * well-known values participate in retry policy matching. Custom values are
+ * treated as agent_error for retry purposes.
+ */
+export type FailureKind =
+  | "timeout"
+  | "infrastructure_error"
+  | "invalid_output"
+  | "agent_error"
+  | "cancelled"
+  | "permission_denied"
+  | "config_error"
+  | (string & {});
+
+/** Well-known failure kinds that the engine recognizes for policy evaluation. */
+export const WELL_KNOWN_FAILURE_KINDS: ReadonlySet<FailureKind> = new Set([
+  "timeout",
+  "infrastructure_error",
+  "invalid_output",
+  "agent_error",
+  "cancelled",
+  "permission_denied",
+  "config_error",
+]);
+
+/**
+ * Transient failure kinds — retryable by default.
+ * These represent failures that may resolve on a subsequent attempt
+ * without changes to inputs or configuration.
+ */
+export const TRANSIENT_FAILURE_KINDS: ReadonlySet<FailureKind> = new Set([
+  "timeout",
+  "infrastructure_error",
+  "agent_error",
+]);
+
+/**
+ * Immutable execution record for a single job attempt.
+ * Hybrid state shape: key summary fields in the Attempt record;
+ * step-level detail stays in events.jsonl.
+ */
+export interface Attempt {
+  /** Per-job monotonic attempt number (1-based). */
+  number: number;
+  /** Terminal status of this attempt. Undefined for in-progress attempts. */
+  status?: "success" | "failure" | "cancelled";
+  /** Failure classification. Present iff status is "failure". */
+  failure_kind?: FailureKind;
+  /** Human-readable failure reason. Present iff status is "failure" or "cancelled". */
+  failure_reason?: string;
+  /** ISO 8601 timestamp when the attempt started. */
+  started_at: string;
+  /** ISO 8601 timestamp when the attempt ended. Undefined for in-progress attempts. */
+  ended_at?: string;
+  /** Number of steps executed in this attempt. */
+  step_count: number;
+  /** Job outputs snapshot at the end of this attempt (present iff status is "success"). */
+  outputs?: Record<string, unknown>;
+  /** Inputs provided to this attempt via retry_with. */
+  retry_inputs?: Record<string, string>;
+  /** Reason why this attempt was initiated (null for the initial attempt). */
+  initiation_reason?: string;
+}
+
+/** Retry policy configuration (replaces max_attempts-only). */
+export interface RetryPolicy {
+  /** Maximum number of attempts (including the initial one). Default: 1 (no retry). */
+  max_attempts?: number;
+  /**
+   * Failure kinds that trigger a retry.
+   * When absent: defaults to TRANSIENT_FAILURE_KINDS.
+   * When empty array ([]): never retry.
+   */
+  when?: FailureKind[];
+  /** What to do when max_attempts is exhausted. Default: "blocked". */
+  on_exceeded?: {
+    status: "blocked" | "failed";
+  };
+  /** Reserved for v0.8 exponential backoff. Not enforced in v0.7. */
+  max_delay_ms?: number;
+}
+
+/** Derived job conclusion from attempt history. */
+export type JobConclusion = "success" | "failure" | "blocked" | "cancelled";
+
 export interface JobState {
   status: "ready" | "waiting" | "inactive" | "running" | "done" | "completed" | "failed" | "blocked";
   activation?: string;           // present iff workflow declares activation on the job
+  /** @deprecated Use attempts[attempts.length-1].number instead. Kept for backward compat. */
   attempt?: number;              // present iff retry-eligible; omit for initial state
   current_step?: string;         // id of the step that has just completed within the current attempt; absent before any step has run (WF-P8-MULTISTEP Architecture Decision 2)
   activated?: boolean;           // true after activate_job transition (WF-P8-SIGNALS)
   activation_reason?: string;    // reason from opts.reason on activate_job (WF-P8-SIGNALS)
+  /** @deprecated Use attempts[attempts.length-1].initiation_reason. Kept for backward compat. */
   retry_reason?: string;         // reason from opts.reason on retry_job (WF-P8-SIGNALS)
+  /** @deprecated Use attempts[attempts.length-1].retry_inputs. Kept for backward compat. */
   retry_inputs?: Record<string, string>; // retry_with payload from the router action that triggered this retry
   outputs?: Record<string, unknown>; // persisted from report.json.outputs by acceptAgentReport (WF-P9-ACCEPT)
   step_visits?: Record<string, number>; // visit count per step id (WF-P13-VARIABLES)
   step_status?: "awaiting_human" | "awaiting_input"; // per-step status for human gate (WF-P15-ENGINE, AD-P15-001, v0.6 Issue #210)
+
+  /** Immutable attempt history. New attempts are appended; never modified in place. */
+  attempts?: Attempt[];
+  /** Resolved retry policy for this job (from workflow config). */
+  retry_policy?: RetryPolicy;
 }
 
 /** Item-level result from a traverse execution (WF-P16-TRAVERSE, Issue #179). */

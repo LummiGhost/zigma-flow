@@ -196,14 +196,17 @@ describe("engine.createRun", () => {
     expect(events[0]?.type).toBe("run_created");
     expect(events[0]?.id).toBe("evt-001");
 
-    const jobReadyEvents = events.slice(1);
-    expect(jobReadyEvents).toHaveLength(2);
-    expect(jobReadyEvents.every((e) => e.type === "job_ready")).toBe(true);
-    expect(events[1]?.id).toBe("evt-002");
-    expect(events[2]?.id).toBe("evt-003");
-
-    const jobIds = new Set(jobReadyEvents.map((e) => e.payload["job_id"] as string));
-    expect(jobIds).toEqual(new Set(["job-a", "job-b"]));
+    // WF-7.1: Each job_ready is followed by attempt_started
+    const postRunEvents = events.slice(1);
+    expect(postRunEvents).toHaveLength(4);
+    expect(postRunEvents[0]?.type).toBe("job_ready");
+    expect(postRunEvents[0]?.id).toBe("evt-002");
+    expect(postRunEvents[1]?.type).toBe("attempt_started");
+    expect(postRunEvents[1]?.id).toBe("evt-003");
+    expect(postRunEvents[2]?.type).toBe("job_ready");
+    expect(postRunEvents[2]?.id).toBe("evt-004");
+    expect(postRunEvents[3]?.type).toBe("attempt_started");
+    expect(postRunEvents[3]?.id).toBe("evt-005");
   });
 
   it("state.json is the run-state shape expected by the contract (T-ENG-7, UC-ENG-1)", async () => {

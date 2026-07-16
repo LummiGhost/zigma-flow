@@ -104,7 +104,7 @@ function runEnvelope(id: string, type: ZigmaFlowEventType): EventEnvelope {
 // ---------------------------------------------------------------------------
 
 describe("ZigmaFlowEventType", () => {
-  it("enumerates all 45 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
+  it("enumerates all 48 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
     const expected: ZigmaFlowEventType[] = [
       "run_created",
       "job_ready",
@@ -151,12 +151,16 @@ describe("ZigmaFlowEventType", () => {
       "execution_stopped",
       "job_state_override",
       "job_reset",
+      // WF-7.1: Attempt model event types
+      "attempt_started",
+      "attempt_completed",
+      "attempt_failed",
     ];
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(45);
-    expect(expected.length).toBe(45);
+    expect(EVENT_TYPES.length).toBe(48);
+    expect(expected.length).toBe(48);
   });
 });
 
@@ -333,6 +337,13 @@ describe("ZigmaFlowEvent", () => {
           return "job_state_override";
         case "job_reset":
           return "job_reset";
+        // WF-7.1: Attempt model event types
+        case "attempt_started":
+          return "attempt_started";
+        case "attempt_completed":
+          return "attempt_completed";
+        case "attempt_failed":
+          return "attempt_failed";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;

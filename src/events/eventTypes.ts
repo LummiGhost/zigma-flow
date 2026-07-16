@@ -3,10 +3,11 @@
  *
  * Reference: docs/mvp-contracts.md §2.4
  * WF-P4-EVENT Step 2.
+ * WF-7.1: Added attempt_started, attempt_completed, attempt_failed.
  */
 
 // ---------------------------------------------------------------------------
-// ZigmaFlowEventType — the 45 event type tags (closed string union)
+// ZigmaFlowEventType — the 48 event type tags (closed string union)
 // ---------------------------------------------------------------------------
 
 export type ZigmaFlowEventType =
@@ -54,7 +55,11 @@ export type ZigmaFlowEventType =
   | "execution_paused"
   | "execution_stopped"
   | "job_state_override"
-  | "job_reset";
+  | "job_reset"
+  // WF-7.1: Attempt model event types
+  | "attempt_started"
+  | "attempt_completed"
+  | "attempt_failed";
 
 /**
  * Runtime tuple of all event type tags.
@@ -106,6 +111,10 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "execution_stopped",
   "job_state_override",
   "job_reset",
+  // WF-7.1: Attempt model event types
+  "attempt_started",
+  "attempt_completed",
+  "attempt_failed",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -228,6 +237,7 @@ export interface JobRetryingPayload {
   job_id: string;
   attempt: number;
   reason: string;
+  failure_kind?: string; // WF-7.1: failure classification for the concluded attempt
 }
 
 export interface JobCompletedPayload {
@@ -265,11 +275,13 @@ export interface JobSkippedPayload {
 export interface JobBlockedPayload {
   job_id: string;
   reason: string;
+  failure_kind?: string; // WF-7.1: failure classification
 }
 
 export interface JobFailedPayload {
   job_id: string;
   reason: string;
+  failure_kind?: string; // WF-7.1: failure classification
 }
 
 export interface StepReturnedPayload {
@@ -277,6 +289,33 @@ export interface StepReturnedPayload {
   step_id: string;
   status: string;
   mapped_action: string;
+}
+
+// ---------------------------------------------------------------------------
+// WF-7.1: Attempt model event payload interfaces
+// ---------------------------------------------------------------------------
+
+export interface AttemptStartedPayload {
+  job_id: string;
+  attempt: number;
+  /** Reason for this attempt. Empty string for the initial attempt. */
+  reason: string;
+}
+
+export interface AttemptCompletedPayload {
+  job_id: string;
+  attempt: number;
+  step_count: number;
+  duration_ms: number;
+}
+
+export interface AttemptFailedPayload {
+  job_id: string;
+  attempt: number;
+  failure_kind: string;
+  reason: string;
+  step_count: number;
+  duration_ms: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -482,7 +521,11 @@ export type ZigmaFlowEvent =
   | (EventEnvelope & { type: "execution_paused"; payload: ExecutionPausedPayload })
   | (EventEnvelope & { type: "execution_stopped"; payload: ExecutionStoppedPayload })
   | (EventEnvelope & { type: "job_state_override"; payload: JobStateOverridePayload })
-  | (EventEnvelope & { type: "job_reset"; payload: JobResetPayload });
+  | (EventEnvelope & { type: "job_reset"; payload: JobResetPayload })
+  // WF-7.1: Attempt model event types
+  | (EventEnvelope & { type: "attempt_started"; payload: AttemptStartedPayload })
+  | (EventEnvelope & { type: "attempt_completed"; payload: AttemptCompletedPayload })
+  | (EventEnvelope & { type: "attempt_failed"; payload: AttemptFailedPayload });
 
 // ---------------------------------------------------------------------------
 // nextEventId — sequential event id formatter

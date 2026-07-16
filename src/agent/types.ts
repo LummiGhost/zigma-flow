@@ -61,4 +61,14 @@ export interface AgentBackendConfig {
   timeout?: number;
   /** Environment variables to set for the agent process. */
   env?: Record<string, string>;
+  /** Model to use (e.g. "claude-sonnet-4-6"). Injected as --model before the prompt. */
+  model?: string;
+  /** When true, use --result-file instead of embedding the report path in the prompt. */
+  use_result_file?: boolean;
+  /** Maximum agent turns. Injected as --max-turns before the prompt. */
+  max_turns?: number;
+  /** Tools the agent is allowed to use. Injected as --allowedTools before the prompt. */
+  allowed_tools?: string[];
+  /** Tools the agent is not allowed to use. Injected as --disallowedTools before the prompt. */
+  disallowed_tools?: string[];
 }

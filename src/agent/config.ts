@@ -26,6 +26,16 @@ export interface AgentBackendConfigEntry {
   args?: string[];
   timeout?: number;
   env?: Record<string, string>;
+  /** Model to use (e.g. "claude-sonnet-4-6"). Injected as --model before the prompt. */
+  model?: string;
+  /** When true, use --result-file instead of embedding the report path in the prompt. */
+  use_result_file?: boolean;
+  /** Maximum agent turns. Injected as --max-turns before the prompt. */
+  max_turns?: number;
+  /** Tools the agent is allowed to use. Injected as --allowedTools before the prompt. */
+  allowed_tools?: string[];
+  /** Tools the agent is not allowed to use. Injected as --disallowedTools before the prompt. */
+  disallowed_tools?: string[];
 }
 
 export interface AgentConfig {
@@ -65,6 +75,11 @@ const DEFAULT_CLAUDE_CODE_CONFIG: AgentBackendConfigEntry = {
   command: "claude",
   args: ["-p"],
   timeout: 600_000,
+  // model: "claude-sonnet-4-6",         // optional: set --model
+  // use_result_file: true,               // optional: use --result-file instead of prompt embedding
+  // max_turns: 50,                       // optional: set --max-turns
+  // allowed_tools: ["Read", "Write"],    // optional: set --allowedTools
+  // disallowed_tools: ["Bash"],          // optional: set --disallowedTools
 };
 
 /** Default parallelism when config.json does not specify one (AD-P14-007). */
@@ -216,5 +231,10 @@ export function createBackend(
     ...(config.args !== undefined ? { args: config.args } : {}),
     ...(config.timeout !== undefined ? { timeout: config.timeout } : {}),
     ...(config.env !== undefined ? { env: config.env } : {}),
+    ...(config.model !== undefined ? { model: config.model } : {}),
+    ...(config.use_result_file !== undefined ? { use_result_file: config.use_result_file } : {}),
+    ...(config.max_turns !== undefined ? { max_turns: config.max_turns } : {}),
+    ...(config.allowed_tools !== undefined ? { allowed_tools: config.allowed_tools } : {}),
+    ...(config.disallowed_tools !== undefined ? { disallowed_tools: config.disallowed_tools } : {}),
   });
 }

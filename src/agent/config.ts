@@ -30,12 +30,40 @@ export interface AgentBackendConfigEntry {
   model?: string;
   /** When true, use --result-file instead of embedding the report path in the prompt. */
   use_result_file?: boolean;
+  /** When true, inject --output-format json and parse stdout as the report. */
+  use_output_format_json?: boolean;
   /** Maximum agent turns. Injected as --max-turns before the prompt. */
   max_turns?: number;
   /** Tools the agent is allowed to use. Injected as --allowedTools before the prompt. */
   allowed_tools?: string[];
   /** Tools the agent is not allowed to use. Injected as --disallowedTools before the prompt. */
   disallowed_tools?: string[];
+}
+
+/**
+ * Per-step backend override declared in the workflow YAML.
+ *
+ * Any field overrides the corresponding field in the global backend config for
+ * that step only. `name` selects a different named backend; all other fields
+ * are merged on top of the selected (or default) backend's config.
+ */
+export interface StepBackendOverride {
+  /** Select a different named backend for this step (optional; falls back to global default). */
+  name?: string;
+  /** Override --model for this step. */
+  model?: string;
+  /** Override use_result_file mode for this step. */
+  use_result_file?: boolean;
+  /** Override use_output_format_json mode for this step. */
+  use_output_format_json?: boolean;
+  /** Override --max-turns for this step. */
+  max_turns?: number;
+  /** Override --allowedTools for this step. */
+  allowed_tools?: string[];
+  /** Override --disallowedTools for this step. */
+  disallowed_tools?: string[];
+  /** Override timeout (ms) for this step. */
+  timeout?: number;
 }
 
 export interface AgentConfig {
@@ -77,6 +105,7 @@ const DEFAULT_CLAUDE_CODE_CONFIG: AgentBackendConfigEntry = {
   timeout: 600_000,
   // model: "claude-sonnet-4-6",         // optional: set --model
   // use_result_file: true,               // optional: use --result-file instead of prompt embedding
+  // use_output_format_json: true,        // optional: use --output-format json instead of report.json
   // max_turns: 50,                       // optional: set --max-turns
   // allowed_tools: ["Read", "Write"],    // optional: set --allowedTools
   // disallowed_tools: ["Bash"],          // optional: set --disallowedTools
@@ -148,59 +177,71 @@ export function getParallelism(agentConfig: AgentConfig): number {
  *
  * Resolution priority (highest to lowest):
  * 1. `cliOverride` — the `--backend` CLI flag
- * 2. `stepDef.backend` — the step-level backend declaration
+ * 2. `stepDef.backend` — step-level backend declaration (string name OR override object)
  * 3. `agentConfig.backend` — the global default
+ *
+ * When `stepDef.backend` is a string it selects a named backend. When it is a
+ * `StepBackendOverride` object, its `name` field (optional) selects the base backend
+ * and the remaining fields are merged on top of the resolved base config.
  *
  * The built-in "claude-code" backend gets a default config if not explicitly
  * declared in `agentConfig.backends`. All other backends must be configured.
  *
- * If the resolved backend name is unknown and is not the built-in, throws
- * ConfigError.
- *
- * If the step definition specifies a `timeout`, it overrides the backend-level
- * timeout in the returned config.
+ * If the resolved backend name is unknown and is not the built-in, throws ConfigError.
  */
 export function resolveBackendForStep(
   agentConfig: AgentConfig,
-  stepDef?: { backend?: string; timeout?: number },
+  stepDef?: { backend?: string | StepBackendOverride; timeout?: number },
   cliOverride?: string,
 ): ResolvedBackend {
   const backends = agentConfig.backends ?? {};
 
-  // Determine effective backend name (CLI > step > global)
-  const backendName = cliOverride ?? stepDef?.backend ?? agentConfig.backend;
+  const stepBackend = stepDef?.backend;
+  const overrideObj: StepBackendOverride | undefined =
+    typeof stepBackend === "object" ? stepBackend : undefined;
+  const stepBackendName: string | undefined =
+    typeof stepBackend === "string" ? stepBackend : overrideObj?.name;
 
-  // Handle built-in "claude-code" with default config
+  // Determine effective backend name (CLI > step string/object.name > global)
+  const backendName = cliOverride ?? stepBackendName ?? agentConfig.backend;
+
+  // Resolve base config for the named backend
+  let baseConfig: AgentBackendConfigEntry;
   const isBuiltin = backendName === "claude-code";
   if (isBuiltin && !(backendName in backends)) {
-    // Apply step-level timeout override on top of the default config
-    const config: AgentBackendConfigEntry = { ...DEFAULT_CLAUDE_CODE_CONFIG };
-    if (stepDef?.timeout !== undefined) {
-      config.timeout = stepDef.timeout;
+    baseConfig = { ...DEFAULT_CLAUDE_CODE_CONFIG };
+  } else {
+    const entry = backends[backendName];
+    if (entry === undefined) {
+      throw new ConfigError(
+        `Agent backend "${backendName}" is not configured. ` +
+        `Available backends: ${Object.keys(backends).join(", ") || "(none)"}`,
+        {
+          details: { backendName, available: Object.keys(backends) },
+          suggestion: `Add a "backends.${backendName}" entry to .zigma-flow/config.json.`,
+        },
+      );
     }
-    return { name: backendName, config };
+    baseConfig = { ...entry };
   }
 
-  // Look up the backend in the configured backends map
-  const entry = backends[backendName];
-  if (entry === undefined) {
-    throw new ConfigError(
-      `Agent backend "${backendName}" is not configured. ` +
-      `Available backends: ${Object.keys(backends).join(", ") || "(none)"}`,
-      {
-        details: { backendName, available: Object.keys(backends) },
-        suggestion: `Add a "backends.${backendName}" entry to .zigma-flow/config.json.`,
-      },
-    );
+  // Merge step-level backend override object fields on top of base config
+  if (overrideObj !== undefined) {
+    if (overrideObj.model !== undefined) baseConfig.model = overrideObj.model;
+    if (overrideObj.use_result_file !== undefined) baseConfig.use_result_file = overrideObj.use_result_file;
+    if (overrideObj.use_output_format_json !== undefined) baseConfig.use_output_format_json = overrideObj.use_output_format_json;
+    if (overrideObj.max_turns !== undefined) baseConfig.max_turns = overrideObj.max_turns;
+    if (overrideObj.allowed_tools !== undefined) baseConfig.allowed_tools = overrideObj.allowed_tools;
+    if (overrideObj.disallowed_tools !== undefined) baseConfig.disallowed_tools = overrideObj.disallowed_tools;
+    if (overrideObj.timeout !== undefined) baseConfig.timeout = overrideObj.timeout;
   }
 
-  // Apply step-level timeout override on top of the backend config
-  const config: AgentBackendConfigEntry = { ...entry };
+  // Step-level timeout (from stepDef.timeout, separate from backend override) wins over everything
   if (stepDef?.timeout !== undefined) {
-    config.timeout = stepDef.timeout;
+    baseConfig.timeout = stepDef.timeout;
   }
 
-  return { name: backendName, config };
+  return { name: backendName, config: baseConfig };
 }
 
 // ---------------------------------------------------------------------------
@@ -236,5 +277,6 @@ export function createBackend(
     ...(config.max_turns !== undefined ? { max_turns: config.max_turns } : {}),
     ...(config.allowed_tools !== undefined ? { allowed_tools: config.allowed_tools } : {}),
     ...(config.disallowed_tools !== undefined ? { disallowed_tools: config.disallowed_tools } : {}),
+    ...(config.use_output_format_json !== undefined ? { use_output_format_json: config.use_output_format_json } : {}),
   });
 }

@@ -37,6 +37,7 @@ export class ClaudeCodeBackend implements AgentBackend {
   private readonly env: Record<string, string | undefined>;
   private readonly model: string | undefined;
   private readonly useResultFile: boolean;
+  private readonly useOutputFormatJson: boolean;
   private readonly maxTurns: number | undefined;
   private readonly allowedTools: string[] | undefined;
   private readonly disallowedTools: string[] | undefined;
@@ -48,6 +49,7 @@ export class ClaudeCodeBackend implements AgentBackend {
     this.env = this.interpolateEnv(config.env ?? {});
     this.model = config.model;
     this.useResultFile = config.use_result_file ?? false;
+    this.useOutputFormatJson = config.use_output_format_json ?? false;
     this.maxTurns = config.max_turns;
     this.allowedTools = config.allowed_tools;
     this.disallowedTools = config.disallowed_tools;
@@ -90,10 +92,13 @@ export class ClaudeCodeBackend implements AgentBackend {
     if (this.useResultFile) {
       dynamicArgs.push("--result-file", reportPath);
     }
+    if (this.useOutputFormatJson) {
+      dynamicArgs.push("--output-format", "json");
+    }
 
-    // Build prompt — when use_result_file is set, replace the CRITICAL block
-    // with a short JSON-only instruction since --result-file handles file output.
-    const fullPrompt = this.useResultFile
+    // Build prompt — structured output modes replace the CRITICAL block with a short instruction.
+    const useStructuredOutput = this.useResultFile || this.useOutputFormatJson;
+    const fullPrompt = useStructuredOutput
       ? [
           prompt,
           "",
@@ -159,34 +164,70 @@ export class ClaudeCodeBackend implements AgentBackend {
       };
       await writeFile(invocationPath, JSON.stringify(invocationMeta, null, 2), "utf-8");
 
-      // Check if report.json was written (skip existsSync when --result-file is used,
-      // as the CLI guarantees the file exists)
-      if (!this.useResultFile && !existsSync(reportPath)) {
-        return {
-          success: false,
-          exitCode: result.exitCode ?? 1,
-          error: `Claude Code exited with code ${result.exitCode}. See agent.stdout.log and agent.stderr.log for full output.`,
-          stdoutPath,
-          stderrPath,
-          invocationPath,
-          durationMs,
-        };
-      }
+      // When --output-format json is set, parse stdout as Claude CLI JSON wrapper
+      // and extract the agent's response as the report.
+      if (this.useOutputFormatJson) {
+        let cliResult: { result?: unknown } | undefined;
+        try {
+          cliResult = JSON.parse(result.stdout ?? "") as { result?: unknown };
+        } catch {
+          return {
+            success: false,
+            exitCode: result.exitCode ?? 1,
+            error: `--output-format json: stdout is not valid JSON. See agent.stdout.log for raw output.`,
+            stdoutPath,
+            stderrPath,
+            invocationPath,
+            durationMs,
+          };
+        }
+        // The agent's final text response is in .result; parse it as our report JSON.
+        let reportText: string;
+        try {
+          reportText = typeof cliResult.result === "string" ? cliResult.result : JSON.stringify(cliResult.result);
+          JSON.parse(reportText);
+        } catch {
+          return {
+            success: false,
+            exitCode: result.exitCode ?? 1,
+            error: `--output-format json: agent response in .result is not valid report JSON.`,
+            stdoutPath,
+            stderrPath,
+            invocationPath,
+            durationMs,
+          };
+        }
+        await writeFile(reportPath, reportText, "utf-8");
+      } else {
+        // Check if report.json was written (skip existsSync when --result-file is used,
+        // as the CLI guarantees the file exists)
+        if (!this.useResultFile && !existsSync(reportPath)) {
+          return {
+            success: false,
+            exitCode: result.exitCode ?? 1,
+            error: `Claude Code exited with code ${result.exitCode}. See agent.stdout.log and agent.stderr.log for full output.`,
+            stdoutPath,
+            stderrPath,
+            invocationPath,
+            durationMs,
+          };
+        }
 
-      // Validate report.json is valid JSON
-      try {
-        const reportText = await readFile(reportPath, "utf-8");
-        JSON.parse(reportText);
-      } catch {
-        return {
-          success: false,
-          exitCode: result.exitCode ?? 1,
-          error: `Claude Code wrote report.json but it contains invalid JSON at: ${reportPath}`,
-          stdoutPath,
-          stderrPath,
-          invocationPath,
-          durationMs,
-        };
+        // Validate report.json is valid JSON
+        try {
+          const reportText = await readFile(reportPath, "utf-8");
+          JSON.parse(reportText);
+        } catch {
+          return {
+            success: false,
+            exitCode: result.exitCode ?? 1,
+            error: `Claude Code wrote report.json but it contains invalid JSON at: ${reportPath}`,
+            stdoutPath,
+            stderrPath,
+            invocationPath,
+            durationMs,
+          };
+        }
       }
 
       return {

@@ -15,7 +15,7 @@
 
 import { join } from "node:path";
 
-import { loadAgentConfig, resolveBackendForStep, createBackend } from "../agent/config.js";
+import { loadAgentConfig, resolveBackendForStep, createBackend, type StepBackendOverride } from "../agent/config.js";
 import { runAll, type RunAllOpts, type RunAllSummary } from "../engine/runAll.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import { UserInputError } from "../utils/index.js";
@@ -146,11 +146,10 @@ export async function invokeAction(
   // ── 1. Load agent config and resolve backend ──────────────────────────
 
   const agentConfig = await loadAgentConfig(zigmaflowDir);
-  const resolved = resolveBackendForStep(agentConfig, undefined, options.backend);
-  const backend = createBackend(resolved.name, resolved.config);
+  const defaultResolved = resolveBackendForStep(agentConfig, undefined, options.backend);
 
-  console.log(`Agent backend: ${resolved.name}`);
-  console.log(`Command: ${resolved.config.command} ${(resolved.config.args ?? []).join(" ")}`);
+  console.log(`Agent backend: ${defaultResolved.name}`);
+  console.log(`Command: ${defaultResolved.config.command} ${(defaultResolved.config.args ?? []).join(" ")}`);
 
   // ── 2. SIGINT handler ─────────────────────────────────────────────────
 
@@ -171,7 +170,11 @@ export async function invokeAction(
     runsDir,
     zigmaflowDir,
     skillLockPath,
-    backendResolver: () => backend,
+    backendResolver: (stepBackend?: string | StepBackendOverride) => {
+      const stepDef = stepBackend !== undefined ? { backend: stepBackend } : undefined;
+      const resolved = resolveBackendForStep(agentConfig, stepDef, options.backend);
+      return createBackend(resolved.name, resolved.config);
+    },
     signal: abortController.signal,
     ...(options.trace
       ? {

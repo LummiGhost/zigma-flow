@@ -19,6 +19,65 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.7.0] — Execution Model (2026-07-16)
+
+### Execution Attempt Model (#234, #247)
+
+- [runtime] Introduce `Attempt` as a first-class immutable execution record with per-job monotonic numbering and hybrid state shape (summary fields in state, step detail in events).
+- [runtime] Add `FailureKind` taxonomy: 7 well-known values (`timeout`, `infrastructure_error`, `invalid_output`, `agent_error`, `cancelled`, `permission_denied`, `config_error`) + extension slot. `TRANSIENT_FAILURE_KINDS` constant for default retry policy.
+- [runtime] Add `RetryPolicy` with `when` whitelist conditions, `max_attempts`, and `on_exceeded`. Default retries on transient failures only (safe by default).
+- [runtime] Add `deriveJobConclusion` pure function mapping attempt history to job conclusion.
+- [runtime] Add `attempt_started`, `attempt_completed`, `attempt_failed` event types. Extend `job_failed`, `job_blocked`, `job_retrying` payloads with `failure_kind`.
+- [runtime] Engine integration: `createRun` emits `attempt_started` per ready job; `appendJobCompleted` seals attempt as success; `retryJob` and routing paths create new Attempt records on retry.
+- [runtime] Old `retry_job` router action internally translated to Attempt model (backward compatible).
+
+### Job Group Iteration Model (#233, #248)
+
+- [DSL] Add `group` field on `JobDefinition` and `job_groups` top-level section with `RepeatConfig` (`max_iterations`, `until` condition).
+- [DSL] Group-level DAG: `job_groups.<id>.needs` for inter-group dependencies, with cycle detection.
+- [runtime] Add `JobGroupState` and `IterationState` to `RunState`. Sequential iteration execution (N completes before N+1 starts).
+- [runtime] Add `iteration.previous.jobs.<id>.outputs.<key>` expression for feedback-driven rework across iterations.
+- [runtime] Add 7 new event types: `iteration_started`, `iteration_completed`, `iteration_condition_met`, `iteration_max_reached`, `group_completed`, `group_blocked`, `group_failed`.
+- [runtime] Backward compat: runtime implicit group creation for `goto_step`/`goto_job` on ungrouped jobs. `max_visits` maps to `max_iterations`. `goto_with` maps to `iteration.previous`.
+- [DSL] Validation: conflict detection (explicit `group` + `goto_step`/`goto_job`/`max_visits`), group reference checks, group DAG cycle detection.
+
+### Expression Extensions & Outcome/Conclusion Model (#235, #249, #250)
+
+- [DSL] Add `invocation` expression namespace (`trigger`, `backend`) and `attempt` namespace (`number`, `trigger`, `previous_outcome`).
+- [DSL] Extend `jobs` and `steps` expression context with `.status` and `.attempt` fields.
+- [DSL] Add status functions: `success()`, `failure()`, `always()`, `cancelled()` — pre-resolution strategy (no grammar change), condition-only scope, context-dependent semantics.
+- [DSL] Add centralized `buildExpressionContext()` helper to prevent context construction drift across 7 call sites.
+- [runtime] Add `AttemptOutcome`, `JobConclusion` (with `success_with_warnings`), and `IterationConclusion` enums.
+- [runtime] Add pure mapping functions: `computeJobConclusion`, `computeIterationConclusion`, `computeRunConclusion`.
+- [runtime] Add `failure_policy` field: `fail` (default), `continue`, `block` — job-level with step-level override. Hierarchical cascade: job → iteration → run.
+- [runtime] Backward compat: old `on_failure` string values normalized to `failure_policy`.
+- [runtime] Add Concurrency Group model: `concurrency` field on `JobDefinition` with static `group` key + `policy` (allow/queue/cancel_previous/reject).
+- [runtime] Concurrency group integration: `queue` filter in scheduler (pure function), `cancel_previous`/`reject` in pre-scheduler mutation step.
+
+### Event Catalog
+
+- Event types expanded from 45 to 55+: 3 attempt lifecycle + 7 iteration/group + updated payloads.
+
+### Internal Translation (v0.6 deprecation → v0.7 model)
+
+| Deprecated | Replaced By |
+|---|---|
+| `goto_step`, `goto_job` | Implicit Job Group Iteration |
+| `retry_job`, `retry_with` | Attempt model with `RetryPolicy.when` |
+| `max_visits` | `max_iterations` on implicit group |
+| `on_failure` (object form) | `failure_policy` |
+
+### Documentation
+
+- [docs] Phase documentation: `docs/phases/v0.7-execution-model/` — frozen development plan, 5 research reports (R1–R5), 3 workflow case documents.
+
+### Test Coverage
+
+- ~1670 tests across 105+ test files. New pure-function modules (`attemptModel`, `jobGroupModel`, `outcomeModel`) are independently testable.
+- 3 tracked technical debt items: TD-7.1-MIG (pre-v0.7 run migration), TD-7.1-STATUS (state transition diagram update), TD-7.2-001 (attempt counter reset per iteration).
+
+---
+
 ## [v0.6.3] — Scheduler Dispatch Fix (2026-07-14)
 
 ### Runtime

@@ -380,3 +380,167 @@ describe("JobConclusion backward compat (FP-1.4.7)", () => {
     }
   });
 });
+
+// ============================================================================
+// 8. Failure policy cascade: job -> iteration -> run (WF-7.3b)
+// ============================================================================
+
+describe("failure policy cascade (WF-7.3b)", () => {
+  // ── computeJobConclusion with failure_policy ──────────────────────────────
+
+  describe("computeJobConclusion with failure_policy", () => {
+    it("failure_policy 'continue' with all failures returns SuccessWithWarnings (T-FP-CONTINUE-1)", () => {
+      const result = computeJobConclusion(
+        [{ outcome: AttemptOutcome.Failure }, { outcome: AttemptOutcome.Failure }],
+        "continue",
+      );
+      expect(result).toBe(JobConclusion.SuccessWithWarnings);
+    });
+
+    it("failure_policy 'continue' with mixed failure+timeout returns SuccessWithWarnings (T-FP-CONTINUE-2)", () => {
+      const result = computeJobConclusion(
+        [{ outcome: AttemptOutcome.Failure }, { outcome: AttemptOutcome.Timeout }],
+        "continue",
+      );
+      expect(result).toBe(JobConclusion.SuccessWithWarnings);
+    });
+
+    it("failure_policy 'continue' with any success returns Success (T-FP-CONTINUE-3)", () => {
+      const result = computeJobConclusion(
+        [{ outcome: AttemptOutcome.Success }, { outcome: AttemptOutcome.Failure }],
+        "continue",
+      );
+      expect(result).toBe(JobConclusion.Success);
+    });
+
+    it("failure_policy 'fail' with all failures returns Failure (T-FP-FAIL-1)", () => {
+      const result = computeJobConclusion(
+        [{ outcome: AttemptOutcome.Failure }],
+        "fail",
+      );
+      expect(result).toBe(JobConclusion.Failure);
+    });
+
+    it("failure_policy 'fail' with cancelled returns Cancelled (T-FP-FAIL-2)", () => {
+      const result = computeJobConclusion(
+        [{ outcome: AttemptOutcome.Cancelled }],
+        "fail",
+      );
+      expect(result).toBe(JobConclusion.Cancelled);
+    });
+
+    it("failure_policy 'block' with all failures returns Blocked (T-FP-BLOCK-1)", () => {
+      const result = computeJobConclusion(
+        [{ outcome: AttemptOutcome.Failure }, { outcome: AttemptOutcome.Failure }],
+        "block",
+      );
+      expect(result).toBe(JobConclusion.Blocked);
+    });
+
+    it("failure_policy 'block' with any success returns Success (T-FP-BLOCK-2)", () => {
+      const result = computeJobConclusion(
+        [{ outcome: AttemptOutcome.Success }, { outcome: AttemptOutcome.Failure }],
+        "block",
+      );
+      expect(result).toBe(JobConclusion.Success);
+    });
+  });
+
+  // ── computeIterationConclusion with mixed failure policies ────────────────
+
+  describe("computeIterationConclusion with failure policies", () => {
+    it("critical job (fail policy) with Failure -> iteration Failure (T-FP-ITER-1)", () => {
+      const result = computeIterationConclusion([
+        { conclusion: JobConclusion.Success, failurePolicy: "fail" },
+        { conclusion: JobConclusion.Failure, failurePolicy: "fail" },
+      ]);
+      expect(result).toBe(IterationConclusion.Failure);
+    });
+
+    it("non-critical job (continue policy) with Failure -> iteration SuccessWithWarnings (T-FP-ITER-2)", () => {
+      const result = computeIterationConclusion([
+        { conclusion: JobConclusion.Success, failurePolicy: "fail" },
+        { conclusion: JobConclusion.Failure, failurePolicy: "continue" },
+      ]);
+      expect(result).toBe(IterationConclusion.SuccessWithWarnings);
+    });
+
+    it("all success -> iteration Success (T-FP-ITER-3)", () => {
+      const result = computeIterationConclusion([
+        { conclusion: JobConclusion.Success, failurePolicy: "fail" },
+        { conclusion: JobConclusion.Success, failurePolicy: "continue" },
+      ]);
+      expect(result).toBe(IterationConclusion.Success);
+    });
+
+    it("any blocked -> iteration Blocked (T-FP-ITER-4)", () => {
+      const result = computeIterationConclusion([
+        { conclusion: JobConclusion.Success, failurePolicy: "fail" },
+        { conclusion: JobConclusion.Blocked, failurePolicy: "fail" },
+      ]);
+      expect(result).toBe(IterationConclusion.Blocked);
+    });
+
+    it("non-critical SuccessWithWarnings + critical Success -> iteration SuccessWithWarnings (T-FP-ITER-5)", () => {
+      const result = computeIterationConclusion([
+        { conclusion: JobConclusion.SuccessWithWarnings, failurePolicy: "continue" },
+        { conclusion: JobConclusion.Success, failurePolicy: "fail" },
+      ]);
+      expect(result).toBe(IterationConclusion.SuccessWithWarnings);
+    });
+
+    it("empty jobs array -> iteration Success (T-FP-ITER-6)", () => {
+      const result = computeIterationConclusion([]);
+      expect(result).toBe(IterationConclusion.Success);
+    });
+  });
+
+  // ── computeRunConclusion ─────────────────────────────────────────────────
+
+  describe("computeRunConclusion", () => {
+    it("all iterations Success -> run Success (T-FP-RUN-1)", () => {
+      const result = computeRunConclusion([
+        IterationConclusion.Success,
+        IterationConclusion.Success,
+      ]);
+      expect(result).toBe(IterationConclusion.Success);
+    });
+
+    it("any iteration Failure -> run Failure (T-FP-RUN-2)", () => {
+      const result = computeRunConclusion([
+        IterationConclusion.Success,
+        IterationConclusion.Failure,
+      ]);
+      expect(result).toBe(IterationConclusion.Failure);
+    });
+
+    it("any iteration Blocked -> run Blocked (T-FP-RUN-3)", () => {
+      const result = computeRunConclusion([
+        IterationConclusion.Success,
+        IterationConclusion.Blocked,
+      ]);
+      expect(result).toBe(IterationConclusion.Blocked);
+    });
+
+    it("any iteration SuccessWithWarnings -> run SuccessWithWarnings (T-FP-RUN-4)", () => {
+      const result = computeRunConclusion([
+        IterationConclusion.Success,
+        IterationConclusion.SuccessWithWarnings,
+      ]);
+      expect(result).toBe(IterationConclusion.SuccessWithWarnings);
+    });
+
+    it("Blocked dominates Failure (T-FP-RUN-5)", () => {
+      const result = computeRunConclusion([
+        IterationConclusion.Blocked,
+        IterationConclusion.Failure,
+      ]);
+      expect(result).toBe(IterationConclusion.Blocked);
+    });
+
+    it("empty iterations -> run Success (T-FP-RUN-6)", () => {
+      const result = computeRunConclusion([]);
+      expect(result).toBe(IterationConclusion.Success);
+    });
+  });
+});

@@ -801,6 +801,13 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       return { jobId, success: false, action: "retried", detail: `Retrying job (attempt ${attempt + 1})` };
     }
 
+    // WF-7.3b: "continue" action means the job failed but the failure was handled
+    // by a "continue" failure policy. The job is marked as failed but the run
+    // should continue.
+    if (failureResult.action === "continue") {
+      return { jobId, success: false, action: "completed", detail: "Job failed but failure_policy is 'continue'" };
+    }
+
     const action = failureResult.action === "run_failed" ? "failed" : (failureResult.action as JobStepResult["action"]);
     return { jobId, success: false, action, detail: result.error ?? "Agent backend failed" };
   }
@@ -1215,6 +1222,12 @@ async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
 /**
  * Derive the run-level terminal status from job states.
  *
+ * Updated in WF-7.3b to account for failure_policy:
+ * - Jobs with failure_policy: "continue" whose status is "failed" do NOT
+ *   cause the run to fail (their failure is contained at the job level).
+ * - Jobs with failure_policy: "block" whose status is "blocked" still
+ *   block the run.
+ *
  * Only required (non-optional, non-manual) jobs are considered for failure
  * and blockage. Optional/manual jobs that are inactive are ignored.
  *
@@ -1229,7 +1242,7 @@ async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
  */
 function reconcileTerminalState(
   jobs: Record<string, { status: string }>,
-  jobDefs: Record<string, { activation?: string }>,
+  jobDefs: Record<string, { activation?: string; failure_policy?: "fail" | "continue" | "block" }>,
 ): "completed" | "failed" | "blocked" | null {
   const requiredJobIds = Object.entries(jobDefs)
     .filter(([, def]) => def.activation === undefined)
@@ -1237,10 +1250,17 @@ function reconcileTerminalState(
 
   if (requiredJobIds.length === 0) return null;
 
-  // Any required job failed → run_failed (highest priority)
-  if (requiredJobIds.some((id) => jobs[id]?.status === "failed")) {
-    return "failed";
-  }
+  // WF-7.3b: Check for critical job failures — jobs with failure_policy: "fail" (default)
+  // whose status is "failed". Jobs with failure_policy: "continue" do not fail the run.
+  const hasCriticalFailure = requiredJobIds.some((id) => {
+    const js = jobs[id];
+    const def = jobDefs[id];
+    if (!js || js.status !== "failed") return false;
+    // If failure_policy is "continue", the failure is contained
+    if (def?.failure_policy === "continue") return false;
+    return true;
+  });
+  if (hasCriticalFailure) return "failed";
 
   // Any required job blocked → run_blocked
   if (requiredJobIds.some((id) => jobs[id]?.status === "blocked")) {
@@ -1249,12 +1269,24 @@ function reconcileTerminalState(
 
   // All non-inactive jobs completed → run_completed
   const allNonInactiveCompleted = Object.values(jobs).every(
-    (js) => js.status === "completed" || js.status === "inactive",
+    (js) => js.status === "completed" || js.status === "inactive" || js.status === "failed",
   );
-  const hasCompletedJob = Object.values(jobs).some(
+  // When failure_policy: "continue" jobs are in "failed" status, treat them as
+  // completed for the purposes of run completion check
+  const allSettled = Object.entries(jobs).every(([id, js]) => {
+    if (js.status === "inactive") return true;
+    if (js.status === "completed") return true;
+    if (js.status === "failed") {
+      // Failed with "continue" policy is a settled state
+      const def = jobDefs[id];
+      if (def?.failure_policy === "continue") return true;
+    }
+    return false;
+  });
+  const hasAnyCompleted = Object.values(jobs).some(
     (js) => js.status === "completed",
   );
-  if (allNonInactiveCompleted && hasCompletedJob) return "completed";
+  if (allSettled && hasAnyCompleted) return "completed";
 
   return null;
 }
@@ -1354,6 +1386,97 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       state.status === "cancelled"
     ) {
       break;
+    }
+
+    // ── Pre-scheduler: concurrency group mutation policies (WF-7.3b) ─────
+
+    let concurrencyMutations = 0;
+
+    for (const [jobId, js] of Object.entries(state.jobs)) {
+      if (js.status !== "ready") continue;
+
+      const cc = wf.jobs[jobId]?.concurrency;
+      if (!cc) continue;
+
+      // Find running jobs in the same group
+      const runningInGroup = Object.entries(state.jobs)
+        .filter(([id, s]) =>
+          s.status === "running" &&
+          wf.jobs[id]?.concurrency?.group === cc.group
+        )
+        .map(([id]) => id);
+
+      if (cc.policy === "cancel_previous" && runningInGroup.length > 0) {
+        for (const rid of runningInGroup) {
+          const evtId = await nextSequentialEventId(runDir, eventWriter);
+          const evt: ZigmaFlowEvent = {
+            id: evtId,
+            type: "job_failed",
+            run_id: runId,
+            timestamp: clock.now(),
+            producer: "engine",
+            job: rid,
+            step: null,
+            attempt: null,
+            payload: {
+              job_id: rid,
+              reason: `concurrency_cancel_previous (replaced by ${jobId})`,
+            },
+          };
+          await eventWriter.appendEvent(runDir, evt);
+          onEvent?.(evt);
+
+          await stateStore.updateState(runDir, (cur) => ({
+            ...cur,
+            last_event_id: evtId,
+            jobs: {
+              ...cur.jobs,
+              [rid]: { ...cur.jobs[rid]!, status: "failed" as const },
+            },
+          }));
+          concurrencyMutations++;
+        }
+      }
+
+      if (cc.policy === "reject" && runningInGroup.length > 0) {
+        const evtId = await nextSequentialEventId(runDir, eventWriter);
+        const evt: ZigmaFlowEvent = {
+          id: evtId,
+          type: "job_failed",
+          run_id: runId,
+          timestamp: clock.now(),
+          producer: "engine",
+          job: jobId,
+          step: null,
+          attempt: null,
+          payload: {
+            job_id: jobId,
+            reason: `Concurrency group "${cc.group}" is occupied (policy: reject)`,
+          },
+        };
+        await eventWriter.appendEvent(runDir, evt);
+        onEvent?.(evt);
+
+        await stateStore.updateState(runDir, (cur) => ({
+          ...cur,
+          last_event_id: evtId,
+          jobs: {
+            ...cur.jobs,
+            [jobId]: { ...cur.jobs[jobId]!, status: "failed" as const },
+          },
+        }));
+        concurrencyMutations++;
+      }
+    }
+
+    // Re-read state if pre-scheduler made mutations before passing to scheduler
+    if (concurrencyMutations > 0) {
+      const mutatedState = await stateStore.readSnapshot(runDir);
+      if (mutatedState === null) {
+        throw new StateError(`state.json missing for run ${runId} after concurrency mutations`);
+      }
+      // Use the mutated state for scheduler
+      Object.assign(state, mutatedState);
     }
 
     // ── Scheduler-based batch selection ──────────────────────────────────

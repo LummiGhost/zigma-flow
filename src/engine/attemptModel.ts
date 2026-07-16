@@ -24,19 +24,32 @@ import { TRANSIENT_FAILURE_KINDS, WELL_KNOWN_FAILURE_KINDS } from "../run/index.
  * - Empty attempts → "failure" (defensive: should not happen)
  * - Last attempt success → "success"
  * - Last attempt cancelled → "cancelled"
- * - Last attempt failure → onExceeded ("blocked" or "failed", default "blocked")
+ * - Last attempt failure:
+ *   - failurePolicy === "continue" → "success_with_warnings"
+ *   - failurePolicy === "block" → "blocked"
+ *   - otherwise → onExceeded ("blocked" or "failed", default "blocked")
+ *
+ * When failurePolicy is "continue", return "success_with_warnings"
+ * regardless of onExceeded.
  */
 export function deriveJobConclusion(
   attempts: Attempt[],
   onExceeded: "blocked" | "failed" = "blocked",
-): "success" | "failure" | "blocked" | "cancelled" {
+  failurePolicy?: "fail" | "continue" | "block",
+): "success" | "failure" | "blocked" | "cancelled" | "success_with_warnings" {
   if (attempts.length === 0) return "failure";
 
   const last = attempts[attempts.length - 1]!;
   if (last.status === "success") return "success";
   if (last.status === "cancelled") return "cancelled";
-  // last.status === "failure"
-  // Map on_exceeded.status value "failed" to JobConclusion "failure"
+
+  // last.status === "failure" — apply failure policy
+  if (failurePolicy === "continue") return "success_with_warnings";
+
+  // When "block" policy, always return blocked (ignores onExceeded)
+  if (failurePolicy === "block") return "blocked";
+
+  // Default or "fail" policy: use existing onExceeded behavior
   return onExceeded === "failed" ? "failure" : onExceeded;
 }
 

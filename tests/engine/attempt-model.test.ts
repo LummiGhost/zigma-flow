@@ -28,10 +28,10 @@ import { describe, expect, it } from "vitest";
 import type {
   Attempt,
   FailureKind,
-  JobConclusion,
   RetryPolicy,
 } from "../../src/run/index.js";
 import {
+  JobConclusion,
   TRANSIENT_FAILURE_KINDS,
   WELL_KNOWN_FAILURE_KINDS,
 } from "../../src/run/index.js";
@@ -451,9 +451,15 @@ describe("RetryPolicy.on_exceeded defaults", () => {
 // ============================================================================
 
 describe("Type-level contracts", () => {
-  it("JobConclusion union covers all 4 values", () => {
-    const conclusions: JobConclusion[] = ["success", "failure", "blocked", "cancelled"];
-    expect(conclusions).toHaveLength(4);
+  it("JobConclusion enum covers all 4 original values plus success_with_warnings", () => {
+    const conclusions = [
+      JobConclusion.Success,
+      JobConclusion.Failure,
+      JobConclusion.Blocked,
+      JobConclusion.Cancelled,
+      JobConclusion.SuccessWithWarnings,
+    ];
+    expect(conclusions).toHaveLength(5);
   });
 
   it("Attempt.status union covers all 3 terminal values", () => {

@@ -70,6 +70,15 @@ export interface SignalDeclaration {
 }
 
 // ---------------------------------------------------------------------------
+// FailurePolicy schema (WF-7.3b) — defined before StepBaseSchema which uses it
+// ---------------------------------------------------------------------------
+
+/** @stability experimental — may change in any minor version release without deprecation */
+const FailurePolicySchema = z.enum(["fail", "continue", "block"]);
+
+export type FailurePolicySchemaType = "fail" | "continue" | "block";
+
+// ---------------------------------------------------------------------------
 // Step schemas
 // ---------------------------------------------------------------------------
 
@@ -135,6 +144,8 @@ const StepBaseSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
   /** @stability stable */
   on_failure: RouterActionSchema.optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  failure_policy: FailurePolicySchema.optional(),
   // Check step fields (D2 — WF-P7-CHECK)
   /** @stability stable */
   on_pass: RouterActionSchema.optional(),
@@ -280,6 +291,8 @@ export interface StepDefinition {
   cwd?: string;
   env?: Record<string, string>;
   on_failure?: RouterAction;
+  // WF-7.3b: Failure policy (override job-level)
+  failure_policy?: "fail" | "continue" | "block";
   // Check step fields (D2 — WF-P7-CHECK)
   on_pass?: RouterAction;
   on_fail?: RouterAction;
@@ -321,6 +334,28 @@ export interface StepDefinition {
   // Issue #238: Step-level backend override (string name or override object)
   backend?: string | StepBackendOverride;
   [key: string]: unknown;
+}
+
+// ---------------------------------------------------------------------------
+// ConcurrencyGroupConfig schema (WF-7.3b)
+// ---------------------------------------------------------------------------
+
+/** @stability experimental — may change in any minor version release without deprecation */
+const ConcurrencyGroupSchema = z.object({
+  /** Static group key for deduplication. Jobs with the same group key
+   *  share a concurrency slot governed by `policy`. */
+  group: z.string().min(1),
+  /** Concurrency policy for this group.
+   *  - allow: No restriction.
+   *  - queue: Serialize -- at most one job runs at a time in the group (default).
+   *  - cancel_previous: Cancel running jobs in the group when a new job starts.
+   *  - reject: Fail the new job if another is already running in the group. */
+  policy: z.enum(["allow", "queue", "cancel_previous", "reject"]).default("queue"),
+});
+
+export interface ConcurrencyGroupConfig {
+  group: string;
+  policy: "allow" | "queue" | "cancel_previous" | "reject";
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +456,10 @@ const JobSchema = z.object({
   permissions: z.record(z.string(), z.unknown()).optional(),
   /** @stability experimental — may change in any minor version release without deprecation */
   group: z.string().optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  concurrency: ConcurrencyGroupSchema.optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  failure_policy: FailurePolicySchema.optional(),
 });
 
 export interface JobDefinition {
@@ -434,6 +473,10 @@ export interface JobDefinition {
   permissions?: Record<string, unknown>;
   /** Job group id (WF-7.2). */
   group?: string;
+  /** Concurrency group config (WF-7.3b). */
+  concurrency?: ConcurrencyGroupConfig;
+  /** Failure policy at job level (WF-7.3b). Default: "fail". */
+  failure_policy?: "fail" | "continue" | "block";
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,6 +1088,47 @@ export function loadWorkflow(yamlText: string, options?: LoadWorkflowOptions): W
         console.warn(
           "[DEPRECATED] Step permission field 'context_blocks' is deprecated (see #206). Use artifacts for large data and job outputs for structured data. This will be removed in v1.0.",
         );
+      }
+    }
+  }
+
+  // 5c.vi. Backward compat: normalize step-level on_failure to failure_policy (WF-7.3b)
+  for (const [jobName, job] of Object.entries(wf.jobs)) {
+    for (const step of job.steps) {
+      // Skip if failure_policy is already explicitly set (new field takes precedence)
+      if (step.failure_policy !== undefined) continue;
+      if (step.on_failure === undefined) continue;
+
+      const of = step.on_failure;
+      if (typeof of === "string") {
+        // String forms: "fail" -> "fail", "continue" -> "continue", "block" -> "block"
+        step.failure_policy = of as "fail" | "continue" | "block";
+        if (!suppress) {
+          deprecationWarn(
+            `Step "${step.id}" in job "${jobName}" uses on_failure: "${of}". Use failure_policy: "${of}" instead.`,
+            "failure_policy",
+          );
+        }
+      } else if (typeof of === "object" && of !== null) {
+        // Object forms: { status: "failed" } -> "fail", { status: "blocked" } -> "block"
+        if ("status" in of && typeof of.status === "string") {
+          const mapped: Record<string, "fail" | "block"> = {
+            failed: "fail",
+            blocked: "block",
+          };
+          const mappedVal = mapped[of.status];
+          if (mappedVal !== undefined) {
+            step.failure_policy = mappedVal;
+            if (!suppress) {
+              deprecationWarn(
+                `Step "${step.id}" in job "${jobName}" uses on_failure object-form with status "${of.status}". Use failure_policy: "${mappedVal}" instead.`,
+                "failure_policy",
+              );
+            }
+          }
+        }
+        // Other object-form routing actions (retry_job, goto_step, etc.) are kept as-is
+        // and cannot be normalized to failure_policy
       }
     }
   }

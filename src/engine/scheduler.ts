@@ -116,6 +116,25 @@ export function selectExecutable(input: SchedulerInput): ExecutableBatch {
   }
 
   // -----------------------------------------------------------------------
+  // Step 2b: Build concurrency group state from running jobs (WF-7.3b).
+  // -----------------------------------------------------------------------
+  // Map<groupKey, Set<runningJobId>>
+  const runningByGroup = new Map<string, Set<string>>();
+  for (const [id, js] of Object.entries(state.jobs)) {
+    if (js.status === "running") {
+      const cc = workflow.jobs[id]?.concurrency;
+      if (cc) {
+        const set = runningByGroup.get(cc.group);
+        if (set) {
+          set.add(id);
+        } else {
+          runningByGroup.set(cc.group, new Set([id]));
+        }
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // Step 1: Collect ready jobs, classifying by mode.
   // -----------------------------------------------------------------------
   const readyReadOnly: string[] = [];
@@ -130,6 +149,21 @@ export function selectExecutable(input: SchedulerInput): ExecutableBatch {
         readyWritable.push(id);
         continue;
       }
+
+      // NEW (WF-7.3b): queue policy filter — skip ready jobs whose concurrency
+      // group has running members. cancel_previous and reject are handled
+      // pre-scheduler in runAll, so if a job with those policies reaches here
+      // it means no running sibling exists — treat as "allow".
+      const cc = workflow.jobs[id]?.concurrency;
+      if (cc && cc.policy === "queue") {
+        const runningSiblings = runningByGroup.get(cc.group);
+        if (runningSiblings && runningSiblings.size > 0) {
+          // Another job in this group is running — skip this job.
+          // It stays "ready" and will be reconsidered next iteration.
+          continue;
+        }
+      }
+
       if (getJobMode(id, workflow) === "read-only") {
         readyReadOnly.push(id);
       } else {

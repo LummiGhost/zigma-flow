@@ -477,3 +477,123 @@ describe("Type-level contracts", () => {
     expect(policy.max_delay_ms).toBe(5000);
   });
 });
+
+// ============================================================================
+// deriveJobConclusion with failurePolicy (WF-7.3b)
+// ============================================================================
+
+describe("deriveJobConclusion with failurePolicy (WF-7.3b)", () => {
+  it("failurePolicy 'continue' returns success_with_warnings when last attempt failed (T-AM-FP-1)", () => {
+    const attempts: Attempt[] = [
+      {
+        number: 1,
+        status: "failure",
+        started_at: "2026-07-16T00:00:00.000Z",
+        ended_at: "2026-07-16T00:01:00.000Z",
+        step_count: 1,
+      },
+    ];
+    expect(deriveJobConclusion(attempts, "blocked", "continue")).toBe("success_with_warnings");
+  });
+
+  it("failurePolicy 'continue' with onExceeded failed returns success_with_warnings (T-AM-FP-2)", () => {
+    const attempts: Attempt[] = [
+      {
+        number: 1,
+        status: "failure",
+        started_at: "2026-07-16T00:00:00.000Z",
+        ended_at: "2026-07-16T00:01:00.000Z",
+        step_count: 1,
+      },
+    ];
+    // When failurePolicy is "continue", onExceeded is ignored
+    expect(deriveJobConclusion(attempts, "failed", "continue")).toBe("success_with_warnings");
+  });
+
+  it("failurePolicy 'continue' with last success returns success (T-AM-FP-3)", () => {
+    const attempts: Attempt[] = [
+      {
+        number: 1,
+        status: "success",
+        started_at: "2026-07-16T00:00:00.000Z",
+        ended_at: "2026-07-16T00:01:00.000Z",
+        step_count: 1,
+      },
+    ];
+    expect(deriveJobConclusion(attempts, "blocked", "continue")).toBe("success");
+  });
+
+  it("failurePolicy 'block' returns blocked when last attempt failed (T-AM-FP-4)", () => {
+    const attempts: Attempt[] = [
+      {
+        number: 1,
+        status: "failure",
+        started_at: "2026-07-16T00:00:00.000Z",
+        ended_at: "2026-07-16T00:01:00.000Z",
+        step_count: 1,
+      },
+    ];
+    expect(deriveJobConclusion(attempts, "blocked", "block")).toBe("blocked");
+  });
+
+  it("failurePolicy 'block' with onExceeded failed still returns blocked (T-AM-FP-5)", () => {
+    const attempts: Attempt[] = [
+      {
+        number: 1,
+        status: "failure",
+        started_at: "2026-07-16T00:00:00.000Z",
+        ended_at: "2026-07-16T00:01:00.000Z",
+        step_count: 1,
+      },
+    ];
+    // When failurePolicy is "block", onExceeded is ignored
+    expect(deriveJobConclusion(attempts, "failed", "block")).toBe("blocked");
+  });
+
+  it("failurePolicy 'fail' (default) uses onExceeded (T-AM-FP-6)", () => {
+    const attempts: Attempt[] = [
+      {
+        number: 1,
+        status: "failure",
+        started_at: "2026-07-16T00:00:00.000Z",
+        ended_at: "2026-07-16T00:01:00.000Z",
+        step_count: 1,
+      },
+    ];
+    expect(deriveJobConclusion(attempts, "blocked", "fail")).toBe("blocked");
+  });
+
+  it("failurePolicy undefined (not provided) uses onExceeded default (T-AM-FP-7)", () => {
+    const attempts: Attempt[] = [
+      {
+        number: 1,
+        status: "failure",
+        started_at: "2026-07-16T00:00:00.000Z",
+        ended_at: "2026-07-16T00:01:00.000Z",
+        step_count: 1,
+      },
+    ];
+    // No failurePolicy passed — should use onExceeded default
+    const result = deriveJobConclusion(attempts);
+    expect(result).toBe("blocked");
+  });
+
+  it("failurePolicy 'continue' with cancelled last attempt returns cancelled (T-AM-FP-8)", () => {
+    const attempts: Attempt[] = [
+      {
+        number: 1,
+        status: "cancelled",
+        started_at: "2026-07-16T00:00:00.000Z",
+        ended_at: "2026-07-16T00:01:00.000Z",
+        step_count: 1,
+      },
+    ];
+    // Cancelled takes precedence over failure_policy
+    expect(deriveJobConclusion(attempts, "blocked", "continue")).toBe("cancelled");
+  });
+
+  it("failurePolicy 'continue' for empty attempts returns failure (T-AM-FP-9)", () => {
+    // Empty attempts always returns "failure"
+    expect(deriveJobConclusion([], "blocked", "continue")).toBe("failure");
+  });
+});

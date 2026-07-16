@@ -38,6 +38,9 @@ import type { WorkflowDefinition } from "../workflow/index.js";
 import { StateError } from "../utils/index.js";
 import { retryJob } from "./retryJob.js";
 import { classifyFailureKind } from "./attemptModel.js";
+import { AttemptOutcome, JobConclusion } from "../run/index.js";
+import type { Attempt } from "../run/index.js";
+import { computeJobConclusion } from "./outcomeModel.js";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -72,7 +75,7 @@ export interface RecordAgentFailureOpts {
 
 export interface RecordAgentFailureResult {
   /** What the caller (runAll) should do next. */
-  action: "retried" | "blocked" | "failed" | "run_failed";
+  action: "retried" | "blocked" | "failed" | "run_failed" | "continue";
   /** New attempt number when action is "retried". */
   newAttempt?: number;
   /** The status assigned to the job. */
@@ -272,14 +275,31 @@ export async function recordAgentFailure(
     return { action: "retried", newAttempt: attempt + 1, jobStatus: "ready" };
   }
 
-  // -- 5. Attempt >= max_attempts — apply on_exceeded ---------------------
+  // -- 5. Attempt >= max_attempts — apply failure_policy (WF-7.3b) ---------
 
+  // Read the failure_policy from the job definition (default: "fail")
+  const failurePolicy: "fail" | "continue" | "block" =
+    jobDef?.failure_policy ?? "fail";
+
+  // Read on_exceeded.status for the job-level terminal status (backward compat)
+  const onExceededStatus: "blocked" | "failed" =
+    retryConfig !== undefined &&
+    typeof retryConfig["on_exceeded"] === "object" &&
+    retryConfig["on_exceeded"] !== null &&
+    (retryConfig["on_exceeded"] as Record<string, unknown>)["status"] === "failed"
+      ? "failed"
+      : "blocked";
+
+  // Build attempt outcomes for computeJobConclusion
+  const jobStateForSeal = currentState.jobs[jobId];
   // WF-7.1: Seal the last open attempt as failure before terminal event
   let lastEventIdBeforeTerminal = stepFailedId;
-  const jobStateForSeal = currentState.jobs[jobId];
+  let sealedAttempts: Attempt[] = [];
+
   if (jobStateForSeal?.attempts && jobStateForSeal.attempts.length > 0) {
-    const lastIdx = jobStateForSeal.attempts.length - 1;
-    const lastAttempt = jobStateForSeal.attempts[lastIdx]!;
+    sealedAttempts = [...jobStateForSeal.attempts];
+    const lastIdx = sealedAttempts.length - 1;
+    const lastAttempt = sealedAttempts[lastIdx]!;
     if (!lastAttempt.status) {
       const attemptFailedId = await nextSequentialEventId(runDir, eventWriter);
       await eventWriter.appendEvent(runDir, {
@@ -301,67 +321,120 @@ export async function recordAgentFailure(
         },
       });
       lastEventIdBeforeTerminal = attemptFailedId;
+
+      // Build sealed attempt with failure status
+      sealedAttempts[lastIdx] = {
+        ...lastAttempt,
+        status: "failure" as const,
+        ended_at: clock.now(),
+        failure_kind: classifyFailureKind(errorType),
+        failure_reason: reason ?? "max attempts exceeded",
+      };
     }
-  }
 
-  const onExceededStatus: "blocked" | "failed" =
-    retryConfig !== undefined &&
-    typeof retryConfig["on_exceeded"] === "object" &&
-    retryConfig["on_exceeded"] !== null &&
-    (retryConfig["on_exceeded"] as Record<string, unknown>)["status"] === "failed"
-      ? "failed"
-      : "blocked";
+    // Determine terminal conclusion from failure policy via computeJobConclusion
+    const terminalConclusion = computeJobConclusion(
+      sealedAttempts.map((a) => {
+        if (a.status === "success") return { outcome: AttemptOutcome.Success };
+        if (a.status === "cancelled") return { outcome: AttemptOutcome.Cancelled };
+        return { outcome: AttemptOutcome.Failure };
+      }),
+      failurePolicy,
+    );
 
-  const terminalEventId = await nextSequentialEventId(runDir, eventWriter);
+    const terminalEventId = await nextSequentialEventId(runDir, eventWriter);
 
-  if (onExceededStatus === "failed") {
-    const jobFailedEvent: ZigmaFlowEvent = {
-      id: terminalEventId,
-      type: "job_failed",
-      run_id: runId,
-      timestamp: clock.now(),
-      producer: "engine",
-      job: jobId,
-      step: stepId,
-      attempt,
-      payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
-    };
-    await eventWriter.appendEvent(runDir, jobFailedEvent);
-  } else {
-    const jobBlockedEvent: ZigmaFlowEvent = {
-      id: terminalEventId,
-      type: "job_blocked",
-      run_id: runId,
-      timestamp: clock.now(),
-      producer: "engine",
-      job: jobId,
-      step: stepId,
-      attempt,
-      payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
-    };
-    await eventWriter.appendEvent(runDir, jobBlockedEvent);
-  }
+    if (terminalConclusion === JobConclusion.SuccessWithWarnings) {
+      // failure_policy: "continue" — job failed but run continues
+      const jobFailedEvent: ZigmaFlowEvent = {
+        id: terminalEventId,
+        type: "job_failed",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: stepId,
+        attempt,
+        payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
+      };
+      await eventWriter.appendEvent(runDir, jobFailedEvent);
 
-  await stateStore.updateState(runDir, (current) => {
-    const updatedJob = { ...current.jobs[jobId]! };
-    updatedJob.status = onExceededStatus;
-    if (updatedJob.attempts && updatedJob.attempts.length > 0) {
-      const li = updatedJob.attempts.length - 1;
-      const la = updatedJob.attempts[li]!;
-      if (!la.status) {
-        updatedJob.attempts = [
-          ...updatedJob.attempts.slice(0, li),
-          { ...la, status: "failure" as const, ended_at: clock.now(), failure_kind: classifyFailureKind(errorType), failure_reason: reason ?? "max attempts exceeded" },
-        ];
-      }
+      // Set job status but do NOT prematurely set run status (reconciliation handles it)
+      await stateStore.updateState(runDir, (current) => ({
+        ...current,
+        last_event_id: terminalEventId,
+        jobs: { ...current.jobs, [jobId]: { ...current.jobs[jobId]!, status: "failed" as const, attempts: sealedAttempts } },
+      }));
+
+      return { action: "continue" as const, jobStatus: "failed" };
     }
-    return {
+
+    // Fail or Block policy — job-level status determined by onExceededStatus
+    // (backward compat: default on_exceeded maps to "blocked")
+    const terminalStatus: "blocked" | "failed" =
+      terminalConclusion === JobConclusion.Blocked
+        ? "blocked"
+        : onExceededStatus;
+
+    if (terminalStatus === "failed") {
+      const jobFailedEvent: ZigmaFlowEvent = {
+        id: terminalEventId,
+        type: "job_failed",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: stepId,
+        attempt,
+        payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
+      };
+      await eventWriter.appendEvent(runDir, jobFailedEvent);
+    } else {
+      const jobBlockedEvent: ZigmaFlowEvent = {
+        id: terminalEventId,
+        type: "job_blocked",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: stepId,
+        attempt,
+        payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
+      };
+      await eventWriter.appendEvent(runDir, jobBlockedEvent);
+    }
+
+    await stateStore.updateState(runDir, (current) => ({
       ...current,
-      status: onExceededStatus,
+      status: terminalStatus,
       last_event_id: terminalEventId,
-      jobs: { ...current.jobs, [jobId]: updatedJob },
-    };
-  });
+      jobs: { ...current.jobs, [jobId]: { ...current.jobs[jobId]!, status: terminalStatus, attempts: sealedAttempts } },
+    }));
 
-  return { action: onExceededStatus, jobStatus: onExceededStatus };
+    return { action: terminalStatus, jobStatus: terminalStatus };
+  }
+
+  // Fallback: no attempts to seal (should not happen, but defensive)
+  const terminalEventId = await nextSequentialEventId(runDir, eventWriter);
+  const jobFailedEvent: ZigmaFlowEvent = {
+    id: terminalEventId,
+    type: "job_failed",
+    run_id: runId,
+    timestamp: clock.now(),
+    producer: "engine",
+    job: jobId,
+    step: stepId,
+    attempt,
+    payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
+  };
+  await eventWriter.appendEvent(runDir, jobFailedEvent);
+
+  await stateStore.updateState(runDir, (current) => ({
+    ...current,
+    status: "failed",
+    last_event_id: terminalEventId,
+    jobs: { ...current.jobs, [jobId]: { ...current.jobs[jobId]!, status: "failed" } },
+  }));
+
+  return { action: "failed", jobStatus: "failed" };
 }

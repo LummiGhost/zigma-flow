@@ -164,8 +164,36 @@ export interface RetryPolicy {
   max_delay_ms?: number;
 }
 
-/** Derived job conclusion from attempt history. */
-export type JobConclusion = "success" | "failure" | "blocked" | "cancelled";
+/** Technical outcome of a single attempt execution (WF-7.3a). */
+export enum AttemptOutcome {
+  Success = "success",
+  Failure = "failure",
+  Timeout = "timeout",
+  Cancelled = "cancelled",
+}
+
+/**
+ * Business-level conclusion after applying failure_policy to all attempt outcomes (WF-7.3a).
+ * The enum serves as both a type and a runtime value set.
+ */
+export enum JobConclusion {
+  Success = "success",
+  SuccessWithWarnings = "success_with_warnings",
+  Failure = "failure",
+  Blocked = "blocked",
+  Cancelled = "cancelled",
+}
+
+/**
+ * Aggregation of job conclusions within an iteration (WF-7.3a).
+ * Note: "cancelled" is excluded because cancellation is a run-level event.
+ */
+export enum IterationConclusion {
+  Success = "success",
+  SuccessWithWarnings = "success_with_warnings",
+  Failure = "failure",
+  Blocked = "blocked",
+}
 
 export interface JobState {
   status: "ready" | "waiting" | "inactive" | "running" | "done" | "completed" | "failed" | "blocked";

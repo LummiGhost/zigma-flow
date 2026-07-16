@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { discoverSkillPacks, loadSkillPack, resolveSkillLock, SkillLockSchema } from "../skill-pack/index.js";
 import { FilesystemError, WorkflowError } from "../utils/index.js";
 import { resolveExpression } from "../expression/index.js";
+import type { ExpressionContext } from "../expression/index.js";
 import type { WorkflowDefinition } from "../workflow/index.js";
 import type { RunState } from "../run/index.js";
 import type { ArtifactMetadata } from "../artifact/index.js";
@@ -825,4 +826,111 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     // Issue #106: Pass allow_generic_prompt from step definition
     ...(step.allow_generic_prompt !== undefined ? { allowGenericPrompt: step.allow_generic_prompt } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// buildExpressionContext — centralized ExpressionContext builder (WF-7.3a)
+// ---------------------------------------------------------------------------
+
+export interface BuildExpressionContextOpts {
+  /** Run state from state.json. */
+  state: RunState;
+  /** Workflow definition (needed for step resolution when jobId+stepIdx provided). */
+  workflow?: WorkflowDefinition;
+  /** Current job ID (needed for steps population). */
+  jobId?: string;
+  /** Current step index (prior steps get populated with status). */
+  stepIdx?: number;
+  /** Invocation metadata (trigger type and optional backend name). */
+  invocation?: ExpressionContext["invocation"];
+  /** Attempt metadata (number, trigger type, optional previous_outcome). */
+  attempt?: ExpressionContext["attempt"];
+}
+
+/**
+ * Build an ExpressionContext from run state and optional parameters.
+ *
+ * Centralizes the 7+ call sites that build ExpressionContext inline, preventing
+ * drift and ensuring consistent namespace population.
+ *
+ * Populates:
+ *   - inputs, run (always)
+ *   - invocation (when provided)
+ *   - attempt (when provided)
+ *   - jobs.<id>.outputs, .status, .attempt (from state.jobs)
+ *   - steps.<id>.status (prior steps when jobId + stepIdx + workflow provided)
+ *   - variables (from state.variables)
+ */
+export function buildExpressionContext(
+  opts: BuildExpressionContextOpts,
+): ExpressionContext {
+  const ctx: ExpressionContext = {
+    inputs: { task: opts.state.task },
+    run: {
+      id: opts.state.run_id,
+      workflow: opts.state.workflow,
+    },
+  };
+
+  // Populate run.status if present (exactOptionalPropertyTypes guard)
+  if (opts.state.status !== undefined) {
+    ctx.run.status = opts.state.status;
+  }
+
+  // FP-1.3.1/1.3.2: Invocation namespace
+  if (opts.invocation !== undefined) {
+    ctx.invocation = opts.invocation;
+  }
+
+  // FP-1.3.3/1.3.4: Attempt namespace
+  if (opts.attempt !== undefined) {
+    ctx.attempt = opts.attempt;
+  }
+
+  // FP-1.3.5/1.3.8: Jobs namespace with outputs, status, and attempt
+  if (opts.state.jobs && Object.keys(opts.state.jobs).length > 0) {
+    ctx.jobs = {};
+    for (const [jobId, jobState] of Object.entries(opts.state.jobs)) {
+      const entry: {
+        outputs?: Record<string, unknown>;
+        status?: string;
+        attempt?: number;
+      } = {};
+      if (jobState.outputs !== undefined) {
+        entry.outputs = jobState.outputs;
+      }
+      if (jobState.status !== undefined) {
+        entry.status = jobState.status;
+      }
+      if (jobState.attempt !== undefined) {
+        entry.attempt = jobState.attempt;
+      }
+      ctx.jobs[jobId] = entry;
+    }
+  }
+
+  // FP-1.3.6: Steps namespace from workflow definition
+  if (
+    opts.jobId !== undefined &&
+    opts.stepIdx !== undefined &&
+    opts.workflow !== undefined
+  ) {
+    const jobDef = opts.workflow.jobs[opts.jobId];
+    if (jobDef !== undefined) {
+      const priorSteps = jobDef.steps.slice(0, opts.stepIdx);
+      if (priorSteps.length > 0) {
+        ctx.steps = {};
+        for (const stepDef of priorSteps) {
+          ctx.steps[stepDef.id] = { status: "completed" };
+        }
+      }
+    }
+  }
+
+  // FP-1.3.7: Variables namespace
+  if (opts.state.variables !== undefined) {
+    ctx.variables = opts.state.variables;
+  }
+
+  return ctx;
 }

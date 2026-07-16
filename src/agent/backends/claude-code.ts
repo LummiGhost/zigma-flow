@@ -35,12 +35,22 @@ export class ClaudeCodeBackend implements AgentBackend {
   private readonly args: string[];
   private readonly timeout: number;
   private readonly env: Record<string, string | undefined>;
+  private readonly model: string | undefined;
+  private readonly useResultFile: boolean;
+  private readonly maxTurns: number | undefined;
+  private readonly allowedTools: string[] | undefined;
+  private readonly disallowedTools: string[] | undefined;
 
   constructor(config: AgentBackendConfig) {
     this.command = config.command;
     this.args = config.args ?? DEFAULT_ARGS;
     this.timeout = config.timeout ?? DEFAULT_TIMEOUT;
     this.env = this.interpolateEnv(config.env ?? {});
+    this.model = config.model;
+    this.useResultFile = config.use_result_file ?? false;
+    this.maxTurns = config.max_turns;
+    this.allowedTools = config.allowed_tools;
+    this.disallowedTools = config.disallowed_tools;
 
     this.backendCommand = this.command;
     this.backendArgs = this.args;
@@ -63,18 +73,43 @@ export class ClaudeCodeBackend implements AgentBackend {
     // a. Create stepDir if it doesn't exist (idempotent)
     await mkdir(stepDir, { recursive: true });
 
-    // Append output contract reminder to the prompt
-    const fullPrompt = [
-      prompt,
-      "",
-      "---",
-      "",
-      "CRITICAL: After completing your work, write a report.json file to this exact path:",
-      `\`${reportPath}\``,
-      "",
-      "The report.json must include these fields: outputs (object), artifacts (array), signals (array), summary (string).",
-      "Stop after writing report.json — do not continue to subsequent steps.",
-    ].join("\n");
+    // Build dynamic args from config fields (injected before existing args)
+    const dynamicArgs: string[] = [];
+    if (this.model !== undefined) {
+      dynamicArgs.push("--model", this.model);
+    }
+    if (this.maxTurns !== undefined) {
+      dynamicArgs.push("--max-turns", String(this.maxTurns));
+    }
+    if (this.allowedTools !== undefined && this.allowedTools.length > 0) {
+      dynamicArgs.push("--allowedTools", this.allowedTools.join(","));
+    }
+    if (this.disallowedTools !== undefined && this.disallowedTools.length > 0) {
+      dynamicArgs.push("--disallowedTools", this.disallowedTools.join(","));
+    }
+    if (this.useResultFile) {
+      dynamicArgs.push("--result-file", reportPath);
+    }
+
+    // Build prompt — when use_result_file is set, replace the CRITICAL block
+    // with a short JSON-only instruction since --result-file handles file output.
+    const fullPrompt = this.useResultFile
+      ? [
+          prompt,
+          "",
+          "Your final response must be valid JSON matching the report schema (outputs, artifacts, signals, summary).",
+        ].join("\n")
+      : [
+          prompt,
+          "",
+          "---",
+          "",
+          "CRITICAL: After completing your work, write a report.json file to this exact path:",
+          `\`${reportPath}\``,
+          "",
+          "The report.json must include these fields: outputs (object), artifacts (array), signals (array), summary (string).",
+          "Stop after writing report.json — do not continue to subsequent steps.",
+        ].join("\n");
 
     // b. Capture timing
     const startTime = Date.now();
@@ -103,7 +138,7 @@ export class ClaudeCodeBackend implements AgentBackend {
         execaOpts.cancelSignal = signal;
       }
 
-      const result = await execa(this.command, [...this.args, fullPrompt], execaOpts);
+      const result = await execa(this.command, [...dynamicArgs, ...this.args, fullPrompt], execaOpts);
 
       durationMs = Date.now() - startTime;
 
@@ -124,8 +159,9 @@ export class ClaudeCodeBackend implements AgentBackend {
       };
       await writeFile(invocationPath, JSON.stringify(invocationMeta, null, 2), "utf-8");
 
-      // Check if report.json was written
-      if (!existsSync(reportPath)) {
+      // Check if report.json was written (skip existsSync when --result-file is used,
+      // as the CLI guarantees the file exists)
+      if (!this.useResultFile && !existsSync(reportPath)) {
         return {
           success: false,
           exitCode: result.exitCode ?? 1,

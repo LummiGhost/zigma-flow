@@ -59,7 +59,15 @@ export type ZigmaFlowEventType =
   // WF-7.1: Attempt model event types
   | "attempt_started"
   | "attempt_completed"
-  | "attempt_failed";
+  | "attempt_failed"
+  // WF-7.2: Job Group Iteration event types
+  | "iteration_started"
+  | "iteration_completed"
+  | "iteration_condition_met"
+  | "iteration_max_reached"
+  | "group_completed"
+  | "group_blocked"
+  | "group_failed";
 
 /**
  * Runtime tuple of all event type tags.
@@ -115,6 +123,14 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "attempt_started",
   "attempt_completed",
   "attempt_failed",
+  // WF-7.2: Job Group Iteration event types
+  "iteration_started",
+  "iteration_completed",
+  "iteration_condition_met",
+  "iteration_max_reached",
+  "group_completed",
+  "group_blocked",
+  "group_failed",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -371,6 +387,49 @@ export interface StepVisitExceededPayload {
 }
 
 // ---------------------------------------------------------------------------
+// WF-7.2: Job Group Iteration payload interfaces
+// ---------------------------------------------------------------------------
+
+export interface IterationStartedPayload {
+  group_id: string;
+  iteration: number;
+  job_ids: string[];
+}
+
+export interface IterationCompletedPayload {
+  group_id: string;
+  iteration: number;
+  job_outputs: Record<string, Record<string, unknown>>;
+}
+
+export interface IterationConditionMetPayload {
+  group_id: string;
+  iteration: number;
+  condition: string;
+}
+
+export interface IterationMaxReachedPayload {
+  group_id: string;
+  iteration: number;
+  max_iterations: number;
+}
+
+export interface GroupCompletedPayload {
+  group_id: string;
+  total_iterations: number;
+}
+
+export interface GroupBlockedPayload {
+  group_id: string;
+  reason: string;
+}
+
+export interface GroupFailedPayload {
+  group_id: string;
+  reason: string;
+}
+
+// ---------------------------------------------------------------------------
 // WF-P15-HUMAN-GATE payload interfaces
 // ---------------------------------------------------------------------------
 
@@ -525,7 +584,15 @@ export type ZigmaFlowEvent =
   // WF-7.1: Attempt model event types
   | (EventEnvelope & { type: "attempt_started"; payload: AttemptStartedPayload })
   | (EventEnvelope & { type: "attempt_completed"; payload: AttemptCompletedPayload })
-  | (EventEnvelope & { type: "attempt_failed"; payload: AttemptFailedPayload });
+  | (EventEnvelope & { type: "attempt_failed"; payload: AttemptFailedPayload })
+  // WF-7.2: Job Group Iteration event types
+  | (EventEnvelope & { type: "iteration_started"; payload: IterationStartedPayload })
+  | (EventEnvelope & { type: "iteration_completed"; payload: IterationCompletedPayload })
+  | (EventEnvelope & { type: "iteration_condition_met"; payload: IterationConditionMetPayload })
+  | (EventEnvelope & { type: "iteration_max_reached"; payload: IterationMaxReachedPayload })
+  | (EventEnvelope & { type: "group_completed"; payload: GroupCompletedPayload })
+  | (EventEnvelope & { type: "group_blocked"; payload: GroupBlockedPayload })
+  | (EventEnvelope & { type: "group_failed"; payload: GroupFailedPayload });
 
 // ---------------------------------------------------------------------------
 // nextEventId — sequential event id formatter

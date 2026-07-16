@@ -104,7 +104,7 @@ function runEnvelope(id: string, type: ZigmaFlowEventType): EventEnvelope {
 // ---------------------------------------------------------------------------
 
 describe("ZigmaFlowEventType", () => {
-  it("enumerates all 48 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
+  it("enumerates all 55 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
     const expected: ZigmaFlowEventType[] = [
       "run_created",
       "job_ready",
@@ -155,12 +155,20 @@ describe("ZigmaFlowEventType", () => {
       "attempt_started",
       "attempt_completed",
       "attempt_failed",
+      // WF-7.2: Job Group Iteration event types
+      "iteration_started",
+      "iteration_completed",
+      "iteration_condition_met",
+      "iteration_max_reached",
+      "group_completed",
+      "group_blocked",
+      "group_failed",
     ];
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(48);
-    expect(expected.length).toBe(48);
+    expect(EVENT_TYPES.length).toBe(55);
+    expect(expected.length).toBe(55);
   });
 });
 
@@ -344,6 +352,20 @@ describe("ZigmaFlowEvent", () => {
           return "attempt_completed";
         case "attempt_failed":
           return "attempt_failed";
+        case "iteration_started":
+          return "iteration_started";
+        case "iteration_completed":
+          return "iteration_completed";
+        case "iteration_condition_met":
+          return "iteration_condition_met";
+        case "iteration_max_reached":
+          return "iteration_max_reached";
+        case "group_completed":
+          return "group_completed";
+        case "group_blocked":
+          return "group_blocked";
+        case "group_failed":
+          return "group_failed";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;

@@ -32,6 +32,12 @@ export interface ExpressionContext {
   variables?: Record<string, unknown>;
   jobs?: Record<string, { outputs?: Record<string, unknown> }>;
   steps?: Record<string, { outputs?: Record<string, unknown> }>;
+  /** Previous iteration's job outputs (WF-7.2). */
+  iteration?: {
+    previous?: {
+      jobs: Record<string, { outputs?: Record<string, unknown> }>;
+    };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +163,27 @@ export function resolveExpression(template: string, ctx: ExpressionContext): str
           Object.prototype.hasOwnProperty.call(ctx.steps[stepId]!.outputs, key)
         ) {
           const val = ctx.steps[stepId]!.outputs![key];
+          return val !== undefined ? String(val) : fullMatch;
+        }
+      }
+      return fullMatch;
+    }
+
+    // ${{ iteration.previous.jobs.<id>.outputs.<key> }}  (WF-7.2)
+    if (expr.startsWith("iteration.previous.jobs.")) {
+      const after = expr.slice("iteration.previous.jobs.".length);
+      const parts = after.split(".");
+      // Expected: <id>.outputs.<key>
+      if (parts.length >= 3 && parts[1] === "outputs") {
+        const jobId = parts[0]!;
+        const key = parts.slice(2).join(".");
+        if (
+          ctx.iteration?.previous?.jobs !== undefined &&
+          Object.prototype.hasOwnProperty.call(ctx.iteration.previous.jobs, jobId) &&
+          ctx.iteration.previous.jobs[jobId]?.outputs !== undefined &&
+          Object.prototype.hasOwnProperty.call(ctx.iteration.previous.jobs[jobId]!.outputs, key)
+        ) {
+          const val = ctx.iteration.previous.jobs[jobId]!.outputs![key];
           return val !== undefined ? String(val) : fullMatch;
         }
       }

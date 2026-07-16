@@ -20,6 +20,7 @@ import { readFile, stat } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
 import type { AgentBackend } from "../agent/index.js";
+import type { StepBackendOverride } from "../agent/config.js";
 import { buildContext } from "../context/index.js";
 import type { ZigmaFlowEvent } from "../events/index.js";
 import { nextSequentialEventId } from "../events/sequence.js";
@@ -158,11 +159,13 @@ export interface RunAllOpts {
   /** Additional named inputs from CLI --input flags. */
   inputs?: Record<string, string>;
   /**
-   * Resolver that returns an AgentBackend for a given step-level backend name.
+   * Resolver that returns an AgentBackend for a given step-level backend declaration.
    * Called with `undefined` when no step-level backend is declared — the
    * resolver should return the default backend.
+   * When called with a string, it selects a named backend.
+   * When called with a StepBackendOverride object, it merges overrides into the default config.
    */
-  backendResolver: (stepBackendName?: string) => AgentBackend;
+  backendResolver: (stepBackend?: string | StepBackendOverride) => AgentBackend;
   /** Injectable clock (defaults to SystemClock). */
   clock?: Clock;
   /** Optional AbortSignal for cancellation support. */
@@ -256,7 +259,7 @@ interface ExecuteJobOnceCtx {
   jobId: string;
   wf: import("../workflow/index.js").WorkflowDefinition;
   state: RunState;
-  backendResolver: (stepBackendName?: string) => AgentBackend;
+  backendResolver: (stepBackend?: string | StepBackendOverride) => AgentBackend;
   stateStore: LocalStateStore;
   eventWriter: JsonlEventWriter;
   clock: Clock;
@@ -539,10 +542,10 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
 
   // Resolve the agent backend (cached per job+step for retry continuity)
   let backend: AgentBackend;
-  const cacheKey = `${jobId}::${stepDef.backend ?? ""}`;
+  const cacheKey = `${jobId}::${JSON.stringify(stepDef.backend ?? null)}`;
   if (backendCache === undefined || backendCache.key !== cacheKey) {
     try {
-      const bk = backendResolver(stepDef.backend as string | undefined);
+      const bk = backendResolver(stepDef.backend as string | StepBackendOverride | undefined);
       backendCache = { key: cacheKey, backend: bk };
       backend = bk;
     } catch (err) {

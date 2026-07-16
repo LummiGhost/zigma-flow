@@ -12,6 +12,7 @@ import { z } from "zod";
 
 import { detectCycles, validateNeedsReferences } from "../dag/index.js";
 import { deprecationWarn, FilesystemError, ValidationError, WorkflowError } from "../utils/index.js";
+import type { StepBackendOverride } from "../agent/config.js";
 
 // ---------------------------------------------------------------------------
 // RouterAction schema
@@ -71,6 +72,25 @@ export interface SignalDeclaration {
 // ---------------------------------------------------------------------------
 // Step schemas
 // ---------------------------------------------------------------------------
+
+const StepBackendOverrideSchema = z.object({
+  /** @stability experimental */
+  name: z.string().optional(),
+  /** @stability experimental */
+  model: z.string().optional(),
+  /** @stability experimental */
+  use_result_file: z.boolean().optional(),
+  /** @stability experimental */
+  use_output_format_json: z.boolean().optional(),
+  /** @stability experimental */
+  max_turns: z.number().int().positive().optional(),
+  /** @stability experimental */
+  allowed_tools: z.array(z.string()).optional(),
+  /** @stability experimental */
+  disallowed_tools: z.array(z.string()).optional(),
+  /** @stability experimental */
+  timeout: z.number().int().positive().optional(),
+});
 
 const StepBaseSchema = z.object({
   /** @stability stable */
@@ -238,6 +258,9 @@ const StepBaseSchema = z.object({
   // Issue #106: Allow generic prompt fallback when no primary prompt is found
   /** @stability experimental — may change in any minor version release without deprecation — not yet in published language spec */
   allow_generic_prompt: z.boolean().optional(),
+  // Issue #238: Step-level backend override
+  /** @stability experimental — may change in any minor version release without deprecation */
+  backend: z.union([z.string(), StepBackendOverrideSchema]).optional(),
 });
 
 export interface StepDefinition {
@@ -295,6 +318,8 @@ export interface StepDefinition {
   signal_policy?: { allowed?: string[]; required_evidence?: string[] };
   // Issue #106: Allow generic prompt fallback when no primary prompt is found
   allow_generic_prompt?: boolean;
+  // Issue #238: Step-level backend override (string name or override object)
+  backend?: string | StepBackendOverride;
   [key: string]: unknown;
 }
 

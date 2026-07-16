@@ -71,4 +71,6 @@ export interface AgentBackendConfig {
   allowed_tools?: string[];
   /** Tools the agent is not allowed to use. Injected as --disallowedTools before the prompt. */
   disallowed_tools?: string[];
+  /** When true, inject --output-format json and parse the agent's stdout as the report. */
+  use_output_format_json?: boolean;
 }

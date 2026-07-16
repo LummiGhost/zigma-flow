@@ -633,7 +633,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     readyTargetState.status = newTargetStatus;
 
     // WF-7.1: Initialize attempt for jobs that become ready via goto_job
-    let lastEventId = jobSkippedId;
+    lastEventId = jobSkippedId;
     if (newTargetStatus === "ready") {
       const openAttempt = createOpenAttempt(1, clock.now());
       readyTargetState.attempt = 1;

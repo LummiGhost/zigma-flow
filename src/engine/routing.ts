@@ -25,6 +25,7 @@ import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import { StateError, WorkflowError } from "../utils/index.js";
 import { createOpenAttempt } from "./attemptModel.js";
+import { createImplicitGroup, startNextIteration } from "./jobGroupModel.js";
 
 // ---------------------------------------------------------------------------
 // ApplyRoutingActionOpts
@@ -566,6 +567,43 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       payload: { job_id: sourceJobId, target: targetJobId, reason },
     });
 
+    // WF-7.2: Create implicit group for ungrouped source job on goto_job
+    // Only when the workflow already has explicit job_groups (backward compat).
+    let updatedJobGroups = state.job_groups ? { ...state.job_groups } : undefined;
+    let lastEventId = jobSkippedId;
+    if (state.job_groups !== undefined && sourceJobState.group === undefined) {
+      const sourceJobDef = wf.jobs[sourceJobId];
+      const maxVisits = sourceJobDef?.steps.reduce((max, s) => {
+        return s.max_visits !== undefined ? Math.max(max, s.max_visits) : max;
+      }, 0) || undefined;
+      const { groupId, groupState } = createImplicitGroup(sourceJobId, targetJobId, maxVisits);
+      updatedJobGroups = updatedJobGroups ?? {};
+      if (!updatedJobGroups[groupId]) {
+        updatedJobGroups[groupId] = groupState;
+        const started = startNextIteration(updatedJobGroups[groupId]!, clock.now(), [sourceJobId]);
+        updatedJobGroups[groupId] = started;
+
+        const iterStartedId = getNextEventId();
+        await eventWriter.appendEvent(runDir, {
+          id: iterStartedId,
+          run_id: runId,
+          type: "iteration_started",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: sourceJobId,
+          step: null,
+          attempt,
+          payload: {
+            group_id: groupId,
+            iteration: 1,
+            job_ids: [sourceJobId],
+          },
+        });
+        lastEventId = iterStartedId;
+      }
+      sourceJobState.group = groupId;
+    }
+
     // Complete source job, clear current_step
     const completedSourceState = { ...sourceJobState };
     completedSourceState.status = "completed";
@@ -595,7 +633,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     readyTargetState.status = newTargetStatus;
 
     // WF-7.1: Initialize attempt for jobs that become ready via goto_job
-    let lastEventId = jobSkippedId;
+    lastEventId = jobSkippedId;
     if (newTargetStatus === "ready") {
       const openAttempt = createOpenAttempt(1, clock.now());
       readyTargetState.attempt = 1;
@@ -713,13 +751,47 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       delete updatedJobState.retry_inputs;
     }
 
+    // WF-7.2: Create implicit group for ungrouped job on goto_step
+    // Only when the workflow already has explicit job_groups (backward compat).
+    let updatedJobGroups = state.job_groups ? { ...state.job_groups } : undefined;
+    let finalEventId = revisitedEventId;
+    if (state.job_groups !== undefined && sourceJobState.group === undefined) {
+      const { groupId, groupState } = createImplicitGroup(sourceJobId, undefined, maxVisits);
+      updatedJobGroups = updatedJobGroups ?? {};
+      if (!updatedJobGroups[groupId]) {
+        updatedJobGroups[groupId] = groupState;
+        const started = startNextIteration(updatedJobGroups[groupId]!, clock.now(), [sourceJobId]);
+        updatedJobGroups[groupId] = started;
+
+        const iterStartedId = getNextEventId();
+        await eventWriter.appendEvent(runDir, {
+          id: iterStartedId,
+          run_id: runId,
+          type: "iteration_started",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: sourceJobId,
+          step: sourceStepId,
+          attempt,
+          payload: {
+            group_id: groupId,
+            iteration: 1,
+            job_ids: [sourceJobId],
+          },
+        });
+        finalEventId = iterStartedId;
+      }
+      sourceJobState.group = groupId;
+    }
+
     const updatedState: RunState = {
       ...state,
-      last_event_id: revisitedEventId,
+      last_event_id: finalEventId,
       jobs: {
         ...state.jobs,
         [sourceJobId]: updatedJobState,
       },
+      ...(updatedJobGroups !== undefined ? { job_groups: updatedJobGroups } : {}),
     };
     await stateStore.writeSnapshot(runDir, updatedState);
     return;

@@ -419,6 +419,8 @@ const JobSchema = z.object({
   retry: RetryConfigSchema,
   /** @stability stable */
   permissions: z.record(z.string(), z.unknown()).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  group: z.string().optional(),
 });
 
 export interface JobDefinition {
@@ -430,6 +432,8 @@ export interface JobDefinition {
   activation?: string;
   retry?: Record<string, unknown>;
   permissions?: Record<string, unknown>;
+  /** Job group id (WF-7.2). */
+  group?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +503,34 @@ export interface InputDefinition {
 }
 
 // ---------------------------------------------------------------------------
+// JobGroupDefinition schema (WF-7.2)
+// ---------------------------------------------------------------------------
+
+const RepeatConfigSchema = z.object({
+  /** @stability experimental — may change in any minor version release without deprecation */
+  max_iterations: z.number().int().positive().optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  until: z.string().optional(),
+});
+
+const JobGroupSchema = z.object({
+  /** @stability experimental — may change in any minor version release without deprecation */
+  repeat: RepeatConfigSchema.optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  needs: z.array(z.string()).optional(),
+});
+
+export interface RepeatConfig {
+  max_iterations: number;
+  until?: string;
+}
+
+export interface JobGroupDefinition {
+  repeat?: Partial<RepeatConfig>;
+  needs?: string[];
+}
+
+// ---------------------------------------------------------------------------
 // WorkflowDefinition schema
 // ---------------------------------------------------------------------------
 
@@ -551,6 +583,8 @@ const WorkflowSchema = z.object({
   jobs: z.record(z.string(), JobSchema),
   /** @stability experimental — may change in any minor version release without deprecation */
   traverse: z.record(z.string(), TraverseSchema).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  job_groups: z.record(z.string(), JobGroupSchema).optional(),
 });
 
 export interface WorkflowDefinition {
@@ -573,6 +607,7 @@ export interface WorkflowDefinition {
   }>;
   jobs: Record<string, JobDefinition>;
   traverse?: Record<string, TraverseDefinition>;
+  job_groups?: Record<string, JobGroupDefinition>;
 }
 
 // ---------------------------------------------------------------------------
@@ -635,11 +670,13 @@ function checkForbiddenExpressions(value: string, fieldPath: string): void {
       );
     }
 
-    // Property chain depth: at most 3 dots (4 parts).
+    // Property chain depth: at most 3 dots (4 parts) by default.
     // "jobs.foo.outputs.bar" = 4 parts = depth 3 → OK.
     // "inputs.a.b.c.d" = 5 parts = depth 4 → rejected.
+    // Exception: "iteration.previous.jobs.<id>.outputs.<key>" = 6 parts = depth 5 → allowed (WF-7.2).
     const parts = inner.split(".");
-    if (parts.length > 4) {
+    const maxParts = inner.startsWith("iteration.previous.jobs.") ? 6 : 4;
+    if (parts.length > maxParts) {
       throw new ValidationError(
         `Expression depth exceeds limit of 3: ${inner}`,
         { details: { field: fieldPath, expression: inner, depth: parts.length - 1 } },
@@ -731,6 +768,15 @@ function validateExpressions(workflow: WorkflowDefinition): void {
       }
     }
   }
+
+  // WF-7.2: Scan job_groups.repeat.until expressions
+  if (workflow.job_groups) {
+    for (const [groupId, groupDef] of Object.entries(workflow.job_groups)) {
+      if (groupDef.repeat?.until) {
+        checkForbiddenExpressions(groupDef.repeat.until, `job_groups.${groupId}.repeat.until`);
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -741,6 +787,55 @@ function validateExpressions(workflow: WorkflowDefinition): void {
  * Emit a deprecation warning to stderr.
  *
  * Format: [DEPRECATED] <message>. Use <alternative>. This will be removed in v1.0.
+ */
+
+/**
+ * Detect cycles in a group-level DAG (WF-7.2).
+ * Returns the first cycle path as a string array, or null if no cycle exists.
+ * Uses DFS with white/grey/black coloring.
+ */
+function detectGroupDagCycles(needsMap: Record<string, string[]>): string[] | null {
+  const color = new Map<string, "white" | "grey" | "black">();
+  for (const groupId of Object.keys(needsMap)) {
+    color.set(groupId, "white");
+  }
+
+  function dfs(nodeId: string, stack: string[]): string[] | null {
+    color.set(nodeId, "grey");
+    stack.push(nodeId);
+
+    const neighbors = needsMap[nodeId] ?? [];
+    for (const neighborId of neighbors) {
+      const neighborColor = color.get(neighborId);
+      if (neighborColor === "grey") {
+        // Found a cycle
+        const cycleStart = stack.indexOf(neighborId);
+        const cyclePath = cycleStart >= 0
+          ? [...stack.slice(cycleStart), neighborId]
+          : [neighborId, neighborId];
+        return cyclePath;
+      }
+      if (neighborColor === "white") {
+        const result = dfs(neighborId, stack);
+        if (result !== null) return result;
+      }
+    }
+
+    stack.pop();
+    color.set(nodeId, "black");
+    return null;
+  }
+
+  for (const groupId of Object.keys(needsMap)) {
+    if (color.get(groupId) === "white") {
+      const result = dfs(groupId, []);
+      if (result !== null) return result;
+    }
+  }
+
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Known trigger types per host
 // ---------------------------------------------------------------------------
@@ -1143,6 +1238,218 @@ export function loadWorkflow(yamlText: string, options?: LoadWorkflowOptions): W
     }
   }
 
+  // 8c. WF-7.2: Job group validation
+  const groupIds = new Set(Object.keys(wf.job_groups ?? {}));
+
+  // 8c.iii. Job group reference validation: every job.group must reference an existing group
+  for (const [jobName, jobDef] of Object.entries(wf.jobs)) {
+    if (jobDef.group !== undefined && !groupIds.has(jobDef.group)) {
+      throw new WorkflowError(
+        `Job "${jobName}" references nonexistent job_group "${jobDef.group}"`,
+        { details: { job: jobName, group: jobDef.group, availableGroups: [...groupIds] } }
+      );
+    }
+  }
+
+  if (wf.job_groups) {
+    // 8c.i. Group-level needs must reference existing groups
+    for (const [groupId, groupDef] of Object.entries(wf.job_groups)) {
+      if (groupDef.needs) {
+        for (const need of groupDef.needs) {
+          if (!groupIds.has(need)) {
+            throw new WorkflowError(
+              `job_groups "${groupId}" has unmet need: "${need}" does not exist in job_groups`,
+              { details: { groupId, need, availableGroups: [...groupIds] } }
+            );
+          }
+        }
+      }
+    }
+
+    // 8c.ii. Group-level DAG cycle detection
+    const groupNeedsMap: Record<string, string[]> = {};
+    for (const [groupId, groupDef] of Object.entries(wf.job_groups)) {
+      groupNeedsMap[groupId] = groupDef.needs ?? [];
+    }
+    const groupCycles = detectGroupDagCycles(groupNeedsMap);
+    if (groupCycles !== null) {
+      throw new WorkflowError(
+        `Job group DAG contains a cycle: ${groupCycles.join(" -> ")}`,
+        { details: { cycle: groupCycles } }
+      );
+    }
+
+    // 8c.iv. Conflict detection: jobs with explicit group cannot use goto_step/goto_job/max_visits
+    for (const [jobName, jobDef] of Object.entries(wf.jobs)) {
+      if (jobDef.group === undefined) continue;
+
+      for (const step of jobDef.steps) {
+        // Check max_visits
+        if (step.max_visits !== undefined) {
+          throw new WorkflowError(
+            `Job "${jobName}" with group "${jobDef.group}" has max_visits on step "${step.id}" — use group iteration instead`,
+            { details: { job: jobName, group: jobDef.group, step: step.id, field: "max_visits" } }
+          );
+        }
+
+        // Check router cases
+        if (step.type === "router" && step.cases) {
+          for (const [caseName, action] of Object.entries(step.cases)) {
+            if (typeof action === "object" && action !== null) {
+              if ("goto_step" in action) {
+                throw new WorkflowError(
+                  `Job "${jobName}" with group "${jobDef.group}" has goto_step in router "${step.id}" case "${caseName}" — use group iteration instead`,
+                  { details: { job: jobName, group: jobDef.group, step: step.id, case: caseName, action: "goto_step" } }
+                );
+              }
+              if ("goto_job" in action) {
+                throw new WorkflowError(
+                  `Job "${jobName}" with group "${jobDef.group}" has goto_job in router "${step.id}" case "${caseName}" — use group iteration instead`,
+                  { details: { job: jobName, group: jobDef.group, step: step.id, case: caseName, action: "goto_job" } }
+                );
+              }
+            }
+          }
+        }
+
+        // Check on_failure
+        if (step.on_failure !== undefined && typeof step.on_failure === "object" && step.on_failure !== null) {
+          if ("goto_step" in step.on_failure) {
+            throw new WorkflowError(
+              `Job "${jobName}" with group "${jobDef.group}" has goto_step in on_failure of step "${step.id}" — use group iteration instead`,
+              { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_failure", action: "goto_step" } }
+            );
+          }
+          if ("goto_job" in step.on_failure) {
+            throw new WorkflowError(
+              `Job "${jobName}" with group "${jobDef.group}" has goto_job in on_failure of step "${step.id}" — use group iteration instead`,
+              { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_failure", action: "goto_job" } }
+            );
+          }
+        }
+
+        // Check on_pass
+        if (step.on_pass !== undefined && typeof step.on_pass === "object" && step.on_pass !== null) {
+          if ("goto_step" in step.on_pass) {
+            throw new WorkflowError(
+              `Job "${jobName}" with group "${jobDef.group}" has goto_step in on_pass of step "${step.id}" — use group iteration instead`,
+              { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_pass", action: "goto_step" } }
+            );
+          }
+          if ("goto_job" in step.on_pass) {
+            throw new WorkflowError(
+              `Job "${jobName}" with group "${jobDef.group}" has goto_job in on_pass of step "${step.id}" — use group iteration instead`,
+              { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_pass", action: "goto_job" } }
+            );
+          }
+        }
+
+        // Check on_fail
+        if (step.on_fail !== undefined && typeof step.on_fail === "object" && step.on_fail !== null) {
+          if ("goto_step" in step.on_fail) {
+            throw new WorkflowError(
+              `Job "${jobName}" with group "${jobDef.group}" has goto_step in on_fail of step "${step.id}" — use group iteration instead`,
+              { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_fail", action: "goto_step" } }
+            );
+          }
+          if ("goto_job" in step.on_fail) {
+            throw new WorkflowError(
+              `Job "${jobName}" with group "${jobDef.group}" has goto_job in on_fail of step "${step.id}" — use group iteration instead`,
+              { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_fail", action: "goto_job" } }
+            );
+          }
+        }
+
+        // Check on_output
+        if (step.on_output) {
+          for (const [outputName, outputActions] of Object.entries(step.on_output)) {
+            for (const [key, action] of Object.entries(outputActions)) {
+              if (typeof action === "object" && action !== null) {
+                if ("goto_step" in action) {
+                  throw new WorkflowError(
+                    `Job "${jobName}" with group "${jobDef.group}" has goto_step in on_output of step "${step.id}" — use group iteration instead`,
+                    { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_output", action: "goto_step" } }
+                  );
+                }
+                if ("goto_job" in action) {
+                  throw new WorkflowError(
+                    `Job "${jobName}" with group "${jobDef.group}" has goto_job in on_output of step "${step.id}" — use group iteration instead`,
+                    { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_output", action: "goto_job" } }
+                  );
+                }
+              }
+            }
+          }
+        }
+
+        // Check on_return
+        if (step.on_return) {
+          for (const [key, action] of Object.entries(step.on_return)) {
+            if (typeof action === "object" && action !== null) {
+              if ("goto_step" in action) {
+                throw new WorkflowError(
+                  `Job "${jobName}" with group "${jobDef.group}" has goto_step in on_return of step "${step.id}" — use group iteration instead`,
+                  { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_return", action: "goto_step" } }
+                );
+              }
+              if ("goto_job" in action) {
+                throw new WorkflowError(
+                  `Job "${jobName}" with group "${jobDef.group}" has goto_job in on_return of step "${step.id}" — use group iteration instead`,
+                  { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_return", action: "goto_job" } }
+                );
+              }
+            }
+          }
+        }
+
+        // Check on_submit
+        if (step.on_submit) {
+          for (const [inputName, inputActions] of Object.entries(step.on_submit)) {
+            for (const [key, action] of Object.entries(inputActions)) {
+              if (typeof action === "object" && action !== null) {
+                if ("goto_step" in action) {
+                  throw new WorkflowError(
+                    `Job "${jobName}" with group "${jobDef.group}" has goto_step in on_submit of step "${step.id}" — use group iteration instead`,
+                    { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_submit", action: "goto_step" } }
+                  );
+                }
+                if ("goto_job" in action) {
+                  throw new WorkflowError(
+                    `Job "${jobName}" with group "${jobDef.group}" has goto_job in on_submit of step "${step.id}" — use group iteration instead`,
+                    { details: { job: jobName, group: jobDef.group, step: step.id, location: "on_submit", action: "goto_job" } }
+                  );
+                }
+              }
+            }
+          }
+        }
+
+        // Check outputs_schema.on_value
+        if (step.outputs_schema) {
+          for (const [outputName, outputSchema] of Object.entries(step.outputs_schema)) {
+            if (outputSchema.on_value) {
+              for (const [key, action] of Object.entries(outputSchema.on_value)) {
+                if (typeof action === "object" && action !== null) {
+                  if ("goto_step" in action) {
+                    throw new WorkflowError(
+                      `Job "${jobName}" with group "${jobDef.group}" has goto_step in outputs_schema of step "${step.id}" — use group iteration instead`,
+                      { details: { job: jobName, group: jobDef.group, step: step.id, location: "outputs_schema", action: "goto_step" } }
+                    );
+                  }
+                  if ("goto_job" in action) {
+                    throw new WorkflowError(
+                      `Job "${jobName}" with group "${jobDef.group}" has goto_job in outputs_schema of step "${step.id}" — use group iteration instead`,
+                      { details: { job: jobName, group: jobDef.group, step: step.id, location: "outputs_schema", action: "goto_job" } }
+                    );
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
   // 9. WF-P13-VARIABLES: Validate allowed_writers reference real steps
   // Build a set of valid <job>.<step> references from the workflow definition
   const validStepRefs = new Set<string>();

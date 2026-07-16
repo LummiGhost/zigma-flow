@@ -36,6 +36,7 @@ import { evaluateCondition } from "../expression/index.js";
 import type { ExpressionContext } from "../expression/index.js";
 import type { CallerContext } from "../caller-context.js";
 import { createPermissionSnapshot } from "../caller-context.js";
+import { initializeJobGroups } from "./jobGroupModel.js";
 
 export { applyRoutingAction } from "./routing.js";
 export type { ApplyRoutingActionOpts } from "./routing.js";
@@ -76,6 +77,28 @@ export {
   sealAttempt,
 } from "./attemptModel.js";
 export type { OpenAttempt } from "./attemptModel.js";
+
+// WF-7.2: Job Group Iteration Model exports
+export {
+  resolveRepeatConfig,
+  createIterationState,
+  sealIteration,
+  createJobGroupState,
+  createJobGroupStateFromDef,
+  initializeJobGroups,
+  startNextIteration,
+  completeCurrentIteration,
+  finalizeGroup,
+  blockGroup,
+  failGroup,
+  isGroupReady,
+  filterReadyGroupJobs,
+  deriveGroupConclusion,
+  createImplicitGroup,
+  detectGroupConflicts,
+  evaluateUntilCondition,
+  snapshotIterationOutputs,
+} from "./jobGroupModel.js";
 
 export interface CreateRunInputs {
   workflowPath: string;
@@ -161,6 +184,10 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     } else {
       jobs[jobId] = { status: "waiting" };
     }
+    // WF-7.2: Set group id if job belongs to a group
+    if (jobDef.group !== undefined) {
+      jobs[jobId]!.group = jobDef.group;
+    }
   }
 
   // ── RC-R06b: Initialize variables from workflow definition ─────────────────
@@ -192,6 +219,9 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
       }
     }
   }
+
+  // ── RC-R06d: Initialize job_groups from workflow definition (WF-7.2) ────────
+  const jobGroups = initializeJobGroups(wf.job_groups);
 
   // RC-R09/R10: Event counter — sequential evt-NNN ids
   let eventCounter = 1;
@@ -267,6 +297,7 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     jobs,
     ...(initialVariables !== undefined ? { variables: initialVariables } : {}),
     ...(initialContextBlocks !== undefined ? { context_blocks: initialContextBlocks } : {}),
+    ...(jobGroups !== undefined ? { job_groups: jobGroups } : {}),
   };
 
   // RC-R07/R11: Atomically write state.json via StateStore (Engine is sole writer)

@@ -187,6 +187,8 @@ export interface JobState {
   attempts?: Attempt[];
   /** Resolved retry policy for this job (from workflow config). */
   retry_policy?: RetryPolicy;
+  /** Job group id (WF-7.2). */
+  group?: string;
 }
 
 /** Item-level result from a traverse execution (WF-P16-TRAVERSE, Issue #179). */
@@ -215,6 +217,36 @@ export interface TraverseState {
   aggregated_outputs?: Record<string, unknown[]>;
 }
 
+// ---------------------------------------------------------------------------
+// WF-7.2: Job Group Iteration types
+// ---------------------------------------------------------------------------
+
+export interface RepeatConfig {
+  max_iterations: number;
+  until?: string;
+}
+
+export interface JobGroupDefinition {
+  repeat?: Partial<RepeatConfig>;
+  needs?: string[];
+}
+
+export interface IterationState {
+  index: number;
+  started_at: string;
+  job_ids: string[];
+  completed_at?: string;
+  job_outputs?: Record<string, Record<string, unknown>>;
+}
+
+export interface JobGroupState {
+  group_id: string;
+  status: "pending" | "iterating" | "completed" | "failed" | "blocked";
+  current_iteration: number;
+  iterations: IterationState[];
+  iterations_remaining: number;
+}
+
 export interface RunState {
   run_id: string;
   workflow: string;      // workflow name (NOT path)
@@ -226,6 +258,7 @@ export interface RunState {
   variables?: Record<string, unknown>; // WF-P13-VARIABLES
   context_blocks?: Record<string, { current_version: number; current_artifact: string }>; // WF-P13-VARIABLES
   traverses?: Record<string, TraverseState>; // WF-P16-TRAVERSE
+  job_groups?: Record<string, JobGroupState>; // WF-7.2
 }
 
 export interface RunYamlMeta {

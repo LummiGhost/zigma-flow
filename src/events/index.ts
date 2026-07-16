@@ -54,6 +54,7 @@ export {
   type TraverseCompletedPayload,
   type ExecutionPausedPayload,
   type ExecutionStoppedPayload,
+  type JobStateOverridePayload,
   type ZigmaFlowEvent,
   type ZigmaFlowEventType,
 } from "./eventTypes.js";

@@ -148,12 +148,13 @@ describe("ZigmaFlowEventType", () => {
       "traverse_completed",
       "execution_paused",
       "execution_stopped",
+      "job_state_override",
     ];
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(43);
-    expect(expected.length).toBe(43);
+    expect(EVENT_TYPES.length).toBe(44);
+    expect(expected.length).toBe(44);
   });
 });
 
@@ -326,6 +327,8 @@ describe("ZigmaFlowEvent", () => {
           return "execution_paused";
         case "execution_stopped":
           return "execution_stopped";
+        case "job_state_override":
+          return "job_state_override";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;

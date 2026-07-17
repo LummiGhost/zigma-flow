@@ -19,6 +19,16 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.7.1] — Patch (2026-07-17)
+
+### Engine Fixes
+
+- [runtime] Fix engine deadlock when jobs with `failure_policy: continue` exhaust retries: downstream dependents are now correctly unblocked. `computeReadyJobs` treats failed+continue deps as satisfied, and readiness is propagated immediately after the failure is recorded (#253).
+- [runtime] Fix post-loop deadlock resolution to skip failed upstream deps with `failure_policy: continue` instead of erroneously marking dependents as blocked (#253).
+- [DSL] Replace deprecated `on_failure` syntax with `failure_policy` in issue-fix workflow templates (#252).
+
+---
+
 ## [v0.7.0] — Execution Model (2026-07-16)
 
 ### Execution Attempt Model (#234, #247)

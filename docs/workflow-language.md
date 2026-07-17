@@ -1,6 +1,6 @@
 # Zigma Flow Workflow Language Specification
 
-Version: 0.3.0 (published 2026-07-03)
+Version: 0.7.0 (published 2026-07-17)
 Status: Published
 
 ## 1. Introduction
@@ -15,6 +15,7 @@ This specification defines every legal field, type, constraint, and execution se
 - **The DSL is not a general-purpose programming language.** There is no `while`, `for`, arbitrary expression evaluation, or runtime YAML mutation.
 - **Skill Packs are capability packages, not workflow steps.** They expose knowledge, prompts, tools, scripts, and checks but never own workflow state.
 - **All state changes are auditable.** Every transition produces a structured event in the event log.
+- **Execution is forward-only.** The Engine never mutates completed state backward. Retry and re-execution always produce new immutable records (Attempts and Iterations), never overwrite history.
 
 ### 1.2 Stability labels
 
@@ -27,6 +28,19 @@ Each field carries one of three stability labels:
 | `reserved` | Recognised by the parser but not executed by the current runtime. Using a reserved field or type produces a validation warning; its content must not affect run behaviour. |
 
 > **Note on experimental fields:** Fields marked as `experimental` may change or be removed in any minor version release without a deprecation period. Avoid depending on experimental field behavior in production workflows.
+
+### 1.3 v0.7 deprecation notice
+
+The following fields are **deprecated** in v0.7 and internally translated to the new Execution Model (Attempt, Job Group Iteration, failure_policy). They continue to work but will be removed in v1.0:
+
+| Deprecated field | v0.7 replacement | Translation |
+|------------------|------------------|-------------|
+| `retry_job` (router/signal action) | `retry` with `when` conditions | Router `retry_job` triggers a new Attempt via the Attempt model |
+| `goto_step` (router action) | `repeat` block in job group | `goto_step` creates an implicit Job Group Iteration |
+| `goto_job` (router action) | `repeat` block in job group | `goto_job` creates an implicit Job Group Iteration |
+| `max_visits` (step field) | `repeat.max_iterations` | `max_visits` translated to iteration cap on implicit group |
+| `on_failure` (object form with `retry_job`) | `failure_policy` + `retry.when` | Object-form `on_failure` normalised to `failure_policy` |
+| `retry_with` (router action) | `retry.when` conditions | Retry inputs passed via Attempt context |
 
 ---
 
@@ -44,6 +58,7 @@ Each field carries one of three stability labels:
    - [variables](#37-variables)
    - [context_blocks](#38-context_blocks)
    - [jobs](#39-jobs)
+   - [job_groups](#310-job_groups)
 4. [Job Fields](#4-job-fields)
    - [needs](#41-needs)
    - [optional_needs](#42-optional_needs)
@@ -52,6 +67,9 @@ Each field carries one of three stability labels:
    - [permissions (job-level)](#45-permissions-job-level)
    - [workspace](#46-workspace)
    - [steps](#47-steps)
+   - [group](#48-group)
+   - [concurrency](#49-concurrency)
+   - [failure_policy](#410-failure_policy)
 5. [Step Reference](#5-step-reference)
    - [Common step fields](#51-common-step-fields)
    - [Agent Step](#52-agent-step)
@@ -64,7 +82,8 @@ Each field carries one of three stability labels:
    - [Variable references](#61-variable-references)
    - [Context block references](#62-context-block-references)
    - [Conditional expressions](#63-conditional-expressions)
-   - [Forbidden constructs](#64-forbidden-constructs)
+   - [Status functions](#64-status-functions)
+   - [Forbidden constructs](#65-forbidden-constructs)
 7. [What the Workflow DSL Is NOT](#7-what-the-workflow-dsl-is-not)
 8. [Validation Rules](#8-validation-rules)
 9. [Abstract Data Layer](#9-abstract-data-layer)
@@ -354,7 +373,7 @@ context_blocks:
 | Stability | `stable` |
 | Required | Yes |
 
-The set of jobs that make up the workflow. Each job is a named group of steps with its own dependencies, permissions, workspace mode, and retry policy. The job keys form the nodes of the workflow DAG.
+The set of jobs that make up the workflow. Each job is a named group of steps with its own dependencies, permissions, workspace mode, retry policy, and optional group membership. The job keys form the nodes of the workflow DAG.
 
 See [§4 Job Fields](#4-job-fields) for the full job definition.
 
@@ -362,6 +381,89 @@ See [§4 Job Fields](#4-job-fields) for the full job definition.
 - At least one job must be declared.
 - Job IDs must be unique within the workflow.
 - Job IDs must be valid identifiers: lowercase letters, digits, and hyphens (`[a-z0-9-]+`).
+- A job's `group` field, if set, must reference a key in the top-level `job_groups` map.
+
+### 3.10 `job_groups`
+
+| Attribute | Value |
+|-----------|-------|
+| Type | `map<string, JobGroupDef>` |
+| Stability | `stable` |
+| Required | No |
+| Version | v0.7 |
+
+Declares job groups that enable iteration-based re-execution. A job group collects one or more jobs into a unit that can repeat as a whole. Each iteration runs all jobs in the group to completion before the next iteration begins.
+
+**JobGroupDef fields:**
+
+| Field | Type | Stability | Required | Description |
+|-------|------|-----------|----------|-------------|
+| `needs` | `string[]` | `stable` | No | Other job groups that must complete before this group starts. Translates to first-iteration job readiness. |
+| `repeat` | `RepeatConfig` | `stable` | No | Iteration configuration. When omitted, the group executes exactly once. |
+
+**RepeatConfig fields:**
+
+| Field | Type | Stability | Required | Description |
+|-------|------|-----------|----------|-------------|
+| `max_iterations` | `integer` | `stable` | Yes | Maximum number of iterations (inclusive upper bound). |
+| `until` | `string` | `stable` | No | A `${{ }}` expression evaluated after each iteration. When it resolves to `true`, iteration stops early. Must not reference forbidden constructs (see [§6.5](#65-forbidden-constructs)). |
+
+**Constraints:**
+- `max_iterations` must be a positive integer.
+- `until` is evaluated after all jobs in the iteration reach a terminal status.
+- Iterations are sequential: iteration N+1 starts only after iteration N fully completes.
+- `repeat` on a singleton job group replaces `max_visits` on individual steps.
+- `needs` between groups must not create a cycle (DAG level).
+
+**Example:**
+```yaml
+job_groups:
+  implement-review:
+    needs:
+      - intake-plan
+    repeat:
+      max_iterations: 3
+      until: "${{ success() }}"
+```
+
+**Iteration data access:**
+
+Within a job group iteration, steps may reference outputs from the previous iteration using the `iteration.previous` namespace:
+
+```
+${{ iteration.previous.jobs.<id>.outputs.<key> }}
+```
+
+This path has a maximum depth of 4 (one more than the standard depth limit of 3) to accommodate the extra `iteration.previous` prefix.
+
+**Backward compatibility:**
+- Jobs without a `group` field that use `goto_step` or `goto_job` are automatically wrapped in an implicit job group at runtime. The implicit group has a `max_iterations` derived from the step's `max_visits`.
+- This internal translation is transparent to workflow authors; existing v0.6 workflows continue to work without modification.
+
+**Example (full group with repeat):**
+```yaml
+job_groups:
+  code-review-loop:
+    repeat:
+      max_iterations: 3
+      until: "${{ success() }}"
+
+jobs:
+  implement:
+    group: code-review-loop
+    steps:
+      - id: edit
+        type: agent
+        # ...
+  review:
+    group: code-review-loop
+    needs:
+      - implement
+    steps:
+      - id: review
+        type: agent
+        # ...
+```
 
 ---
 
@@ -442,31 +544,55 @@ activation: optional
 | Type | `map` |
 | Stability | `stable` |
 | Required | No |
+| Version | v0.1 (updated v0.7) |
 
-Configures automatic retry behaviour for the job when a router or signal triggers `retry_job`.
+Configures automatic retry behaviour for the job when a step failure occurs or when a router triggers retry.
 
 **Retry fields:**
 
 | Field | Type | Stability | Required | Description |
 |-------|------|-----------|----------|-------------|
-| `max_attempts` | `integer` | `stable` | Yes | Maximum number of execution attempts. Default is `3` if retry is declared. |
+| `max_attempts` | `integer` | `stable` | Yes | Maximum number of execution attempts. |
+| `when` | `string[]` | `stable` | No | v0.7: Whitelist of `FailureKind` values that trigger retry. When omitted, defaults to transient failures only: `["timeout", "infrastructure_error", "agent_error"]`. |
 | `on_exceeded` | `map` | `stable` | Yes | Action when `max_attempts` is reached. |
 
 **`on_exceeded` fields:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status` | `blocked` \| `failed` | The job/run status after exceeding max attempts. |
+| `status` | `blocked` \| `failed` | The job status after exceeding max attempts. |
+
+**`when` — FailureKind values (v0.7):**
+
+The `when` array accepts any of the following well-known failure kinds, plus extension values:
+
+| Value | Description |
+|-------|-------------|
+| `timeout` | The step or agent backend exceeded its configured timeout. |
+| `infrastructure_error` | A system-level failure (network, filesystem, subprocess crash). |
+| `invalid_output` | The agent produced a report that failed schema validation. |
+| `agent_error` | The agent backend returned a non-zero exit code. |
+| `cancelled` | The step was cancelled (SIGINT, AbortSignal, or fail-fast abort). |
+| `permission_denied` | The agent attempted an operation it lacks permission for. |
+| `config_error` | The step or backend configuration is invalid (e.g. missing command). |
+
+Additional string values are accepted via the extension slot for forward compatibility.
 
 **Constraints:**
 - `max_attempts` must be a positive integer.
 - Each attempt produces a separate artifact directory (`attempts/<N>/`).
 - Retry does not delete or overwrite historical attempts.
+- `when` values not in the well-known list produce a validation warning but are accepted.
+- Config errors (`config_error`) and permission errors (`permission_denied`) default to **not** retrying (excluded from the default `when`).
 
 **Example:**
 ```yaml
 retry:
   max_attempts: 3
+  when:
+    - timeout
+    - infrastructure_error
+    - agent_error
   on_exceeded:
     status: blocked
 ```
@@ -532,7 +658,102 @@ An ordered list of steps that execute sequentially within the job. See [§5 Step
 **Constraints:**
 - At least one step must be declared.
 - Step `id` values must be unique within the job.
-- Steps execute in the order listed, subject to `if:` conditions and `goto_step` jumps.
+- Steps execute in the order listed, subject to `if:` conditions.
+
+### 4.8 `group`
+
+| Attribute | Value |
+|-----------|-------|
+| Type | `string` |
+| Stability | `stable` |
+| Required | No |
+| Version | v0.7 |
+
+Assigns this job to a Job Group declared in the top-level [`job_groups`](#310-job_groups) map. Jobs in the same group execute together within each iteration.
+
+**Constraints:**
+- The value must match a key in the top-level `job_groups` map.
+- Jobs without a `group` field execute exactly once (single-iteration, no repeat).
+- `group` is incompatible with `goto_step` and `goto_job` router actions (validation error).
+
+**Example:**
+```yaml
+group: code-review-loop
+```
+
+### 4.9 `concurrency`
+
+| Attribute | Value |
+|-----------|-------|
+| Type | `map` |
+| Stability | `stable` |
+| Required | No |
+| Version | v0.7 |
+
+Controls concurrency behaviour for this job within a concurrency group. Concurrency groups prevent conflicting jobs from running simultaneously.
+
+**Concurrency fields:**
+
+| Field | Type | Stability | Required | Description |
+|-------|------|-----------|----------|-------------|
+| `group` | `string` | `stable` | Yes | Concurrency group key (static string). Jobs with the same key share the concurrency slot. |
+| `policy` | `allow` \| `queue` \| `cancel_previous` \| `reject` | `stable` | Yes | Behaviour when another job in the same group is already running. |
+
+**Policy behaviours:**
+
+| Policy | Behaviour |
+|--------|-----------|
+| `allow` | Run immediately. Multiple jobs in the same group may run concurrently. |
+| `queue` | Wait until the currently-running job in the group completes. The scheduler will not start this job until the slot is free. |
+| `cancel_previous` | Cancel the currently-running job in the group and start this one. The interrupted job enters `cancelled` status with a `failure_kind` of `cancelled`. |
+| `reject` | Fail immediately. The job transitions to `failed` without executing. A `job_rejected` event is written. |
+
+**Constraints:**
+- `cancel_previous` only cancels currently-running jobs in the same group; completed jobs are not affected.
+- `cancel_previous` and `reject` are enforced in a **pre-scheduler mutation step** (state changes before the scheduler selects jobs).
+- `queue` and `allow` are enforced in the **scheduler** (pure filter function, no state mutation).
+
+**Example:**
+```yaml
+concurrency:
+  group: writable-jobs
+  policy: queue
+```
+
+### 4.10 `failure_policy`
+
+| Attribute | Value |
+|-----------|-------|
+| Type | `fail` \| `continue` \| `block` |
+| Stability | `stable` |
+| Required | No |
+| Default | `fail` |
+| Version | v0.7 |
+
+Controls how the Engine handles job failure within a Job Group iteration.
+
+| Policy | Behaviour |
+|--------|-----------|
+| `fail` (default) | The job failure propagates up. The current iteration fails and no further iterations are started. |
+| `continue` | The failed job is marked `failed` but the iteration continues through remaining jobs. DAG dependents of the failed job are correctly blocked. The job's conclusion is `success_with_warnings` if the iteration otherwise succeeds. |
+| `block` | The job and its iteration are blocked immediately. A `job_blocked` event is written. |
+
+**Cascade (v0.7):**
+
+Failure policies cascade hierarchically: **job → iteration → run**. Each level can contain or escalate the failure:
+
+- A job with `failure_policy: fail` causes the iteration to evaluate its own failure handling.
+- An iteration where all jobs complete (possibly with `continue` on some) evaluates the `repeat` block's `until` condition.
+- A run composed of multiple groups/iterations completes with the most severe conclusion across all iterations.
+
+**Backward compatibility:**
+
+The v0.6 `on_failure` object form (`on_failure: { status: failed }` or `on_failure: { status: blocked }`) is internally normalised to the equivalent `failure_policy` value. Workflow authors should migrate to `failure_policy` for new workflows.
+
+**Example:**
+```yaml
+failure_policy: continue
+```
 
 ---
 
@@ -547,8 +768,8 @@ Every step, regardless of type, supports the following fields.
 | `id` | `string` | `stable` | Yes | Unique identifier within the job. |
 | `type` | `agent` \| `script` \| `check` \| `router` \| `human` \| `workflow` | `stable` | Yes | The step type. |
 | `if` | `string` | `experimental ⚠` | No | v0.2: A conditional expression. When it evaluates to `false`, the step is skipped (`step_skipped` event). |
-| `max_visits` | `integer` | `experimental ⚠` | No | v0.2: Maximum number of times this step can be entered (via `goto_step`). Default `3`. |
-| `on_failure` | `map` | `stable` | No | Action when the step fails. |
+| `max_visits` | `integer` | `deprecated` | No | **Deprecated in v0.7.** Internally translated to `repeat.max_iterations` on an implicit job group. Use `repeat` blocks in `job_groups` instead. Will be removed in v1.0. |
+| `on_failure` | `fail` \| `map` | `stable` | No | Action when the step fails. The shorthand `fail` or `block` string form is stable. The object form `{ status: ... }` is **deprecated in v0.7** — use job-level [`failure_policy`](#410-failure_policy) instead. |
 | `outputs` | `map<string, string>` | `stable` | No | Mapping from output keys to report/result paths. |
 | `prompt` | `string` | `stable` | No | The primary prompt (Markdown). Used as the step-level instruction for agent and human steps. |
 
@@ -613,10 +834,10 @@ An Agent Step is the only step type that involves an LLM. The Engine generates a
 | Field | Type | Description |
 |-------|------|-------------|
 | `continue` | `"continue"` | Advance to the next step. |
-| `retry_job` | `string` | Retry the named job. Optionally paired with `retry_with: map` to pass additional context. |
+| `retry_job` | `string` | **Deprecated in v0.7.** Retry the named job. Internally translated to an Attempt. Use job-level `retry.when` instead. |
 | `activate_job` | `string` | Activate the named optional job. |
-| `goto_job` | `string` | Jump to the named job. |
-| `goto_step` | `string` | Jump to the named step within the current job. Optionally paired with `goto_with: map` to pass additional context. |
+| `goto_job` | `string` | **Deprecated in v0.7.** Jump to the named job. Internally translated to an implicit Job Group Iteration. |
+| `goto_step` | `string` | **Deprecated in v0.7.** Jump to the named step within the current job. Internally translated to an implicit Job Group Iteration. |
 | `fail` | `"fail"` | Mark the step as failed. |
 | `block` | `"block"` | Block the run. |
 
@@ -815,10 +1036,10 @@ A Router Step evaluates a value and branches to a flow-control action. It does n
 | `continue` | `"continue"` | Advance to the next step. | `stable` |
 | `fail` | `"fail"` | Mark the step as failed. | `stable` |
 | `block` | `"block"` | Block the run. | `stable` |
-| `retry_job` | `string` | Retry the named job. Optionally paired with `retry_with: map` to pass additional context. | `stable` |
+| `retry_job` | `string` | **Deprecated in v0.7.** Retry the named job. Internally translated to an Attempt via the Attempt model. Use job-level `retry.when` instead. | `deprecated` |
 | `activate_job` | `string` | Activate the named optional job. | `stable` |
-| `goto_job` | `string` | Jump to the named job. | `stable` |
-| `goto_step` | `string` | v0.2: Jump to the named step within the current job. Optionally paired with `goto_with: map` to pass additional context. | `experimental ⚠` |
+| `goto_job` | `string` | **Deprecated in v0.7.** Jump to the named job. Internally translated to an implicit Job Group Iteration. Use `repeat` blocks in `job_groups` instead. | `deprecated` |
+| `goto_step` | `string` | **Deprecated in v0.7.** Jump to the named step within the current job. Internally translated to an implicit Job Group Iteration. Use `repeat` blocks in `job_groups` instead. | `deprecated` |
 | `status` | `failed` \| `blocked` | Set the job/run status. | `stable` |
 
 #### Execution semantics
@@ -943,11 +1164,21 @@ The following reference namespaces are available in `${{ }}` expressions.
 | Run | `${{ run.id }}` | The current run identifier. | `stable` | v0.1 |
 | Run | `${{ run.workflow }}` | The workflow name from the workflow definition. | `stable` | v0.1 |
 | Job outputs | `${{ jobs.<id>.outputs.<key> }}` | Output from a completed job. | `stable` | v0.1 |
+| Job status | `${{ jobs.<id>.status }}` | Current status of a job (`pending`, `ready`, `running`, `completed`, `failed`, `blocked`, `cancelled`). | `stable` | v0.7 |
+| Job attempt | `${{ jobs.<id>.attempt }}` | Current attempt number for the job (integer). | `stable` | v0.7 |
 | Step outputs | `${{ steps.<id>.outputs.<key> }}` | Output from a step in the same job. | `stable` | v0.2 |
-| Retry inputs | `${{ retry.inputs.<key> }}` | Additional inputs passed during retry. | `stable` | v0.1 |
+| Step status | `${{ steps.<id>.status }}` | Current status of a step in the same job. | `stable` | v0.7 |
+| Step attempt | `${{ steps.<id>.attempt }}` | Attempt number during which this step executed. | `stable` | v0.7 |
+| Invocation | `${{ invocation.trigger }}` | How the run was triggered: `"manual"`, `"scheduled"`, or `"resume"`. | `stable` | v0.7 |
+| Invocation | `${{ invocation.backend }}` | The agent backend name (e.g. `"claude-code"`). | `stable` | v0.7 |
+| Attempt | `${{ attempt.number }}` | The current attempt number (integer, starting at 1). | `stable` | v0.7 |
+| Attempt | `${{ attempt.trigger }}` | What triggered this attempt: `"initial"` or `"retry"`. | `stable` | v0.7 |
+| Attempt | `${{ attempt.previous_outcome }}` | The outcome of the previous attempt (`"success"`, `"failure"`, `"cancelled"`). `undefined` on attempt 1. | `stable` | v0.7 |
+| Iteration | `${{ iteration.previous.jobs.<id>.outputs.<key> }}` | Outputs from a job in the previous iteration. `undefined` on iteration 1. Maximum depth 4. | `stable` | v0.7 |
+| Retry inputs | `${{ retry.inputs.<key> }}` | Additional inputs passed during retry. | `deprecated` | v0.1 |
 | Signals | `${{ signals.<name> }}` | Current signal state (boolean). Not yet implemented in the expression resolver. | `reserved` | v0.1 |
 | Signal detail | `${{ signals.<name>.reason }}` | Reason string from a signal. Not yet implemented in the expression resolver. | `reserved` | v0.1 |
-| Variables | `${{ variables.<name> }}` | Current value of a workflow variable. | `experimental ⚠` | v0.2 |
+| Variables | `${{ variables.<name> }}` | Current value of a workflow variable. | `deprecated` | v0.2 |
 | Context blocks | `${{ context.<block>.<key> }}` | Context block content is injected into agent prompts via Context Builder, not via `${{ }}` expression substitution. | `reserved` | v0.2 |
 
 > ⚠ Experimental fields may change in any minor version release.
@@ -978,29 +1209,71 @@ The `if:` field on steps and switch expressions in routers support a restricted 
 | `!` | Logical NOT |
 | `( ... )` | Grouping parentheses |
 
-**Reference depth limit:** Object property access is limited to a maximum depth of 3 (e.g. `${{ jobs.foo.outputs.bar }}` is depth 3). Deeper access is rejected at validation time.
+**Reference depth limit:** Object property access is limited to a maximum depth of 3 (e.g. `${{ jobs.foo.outputs.bar }}` is depth 3). The `iteration.previous.jobs.<id>.outputs.<key>` path has a relaxed limit of depth 4 to accommodate the extra `iteration.previous` prefix. All other paths exceeding depth 3 are rejected at validation time.
 
 **Examples of legal conditional expressions:**
 ```yaml
 if: "${{ variables.plan_status == 'ready' }}"
 if: "${{ steps.review.outputs.decision == 'approved' && variables.iteration_count != 3 }}"
 if: "${{ variables.plan_status == 'blocked' }}"
+if: "${{ iteration.previous.jobs.implement.outputs.summary != '' }}"
+if: "${{ attempt.previous_outcome == 'failure' }}"
 ```
 
-### 6.4 Forbidden constructs
+### 6.4 Status functions
+
+v0.7 introduces four **status functions** that provide context-dependent evaluation in `if:` conditions (step-level) and `when:` conditions (retry policy). These are not general function calls; they are resolved via pre-resolution before tokenization — the function name is replaced with a boolean literal (`true` or `false`) based on the current run state.
+
+| Function | Scope | Meaning in step `if:` | Meaning in retry `when:` |
+|----------|-------|-----------------------|--------------------------|
+| `success()` | `step-if` / `retry-when` | All prior steps in the current job completed successfully. | The previous Attempt succeeded. |
+| `failure()` | `step-if` / `retry-when` | At least one prior step in the current job failed. | The previous Attempt failed. |
+| `always()` | `step-if` / `retry-when` | Always `true` (used as unconditional trigger). | Always `true`. |
+| `cancelled()` | `step-if` / `retry-when` | The current job or step was cancelled. | The previous Attempt was cancelled. |
+
+**Constraints:**
+- Status functions are **only valid in `if:` conditions and retry `when:` conditions**. They are rejected in general `${{ }}` interpolation expressions.
+- Status functions take no arguments. `success(foo)` is illegal and rejected at validation time.
+- Pre-resolution happens before tokenization — no grammar change, no general function call support.
+- Status functions must appear as standalone tokens; they cannot be nested inside other expressions.
+
+**Examples:**
+```yaml
+# Repeat until all jobs pass
+repeat:
+  max_iterations: 3
+  until: "${{ success() }}"
+
+# Retry only on transient failures
+retry:
+  max_attempts: 3
+  when:
+    - timeout
+    - infrastructure_error
+  on_exceeded:
+    status: failed
+
+# Step condition: only run if prior steps passed
+- id: deploy
+  type: script
+  if: "${{ success() }}"
+  run: "pnpm deploy"
+```
+
+### 6.5 Forbidden constructs
 
 The following constructs are **explicitly forbidden** in `${{ }}` expressions. Any expression containing them must be rejected at validation time.
 
 | Forbidden construct | Example of illegal syntax |
 |---------------------|---------------------------|
-| Function calls | `${{ len(inputs.task) }}` |
+| Function calls (except status functions) | `${{ len(inputs.task) }}` |
 | Arithmetic operators (`+`, `-`, `*`, `/`, `%`) | `${{ variables.count + 1 }}` |
 | String concatenation | `${{ inputs.a + inputs.b }}` |
 | Method calls | `${{ inputs.list.join(',') }}` |
 | Array/object literals | `${{ [1, 2, 3] }}` |
 | JavaScript evaluation | `${{ eval('...') }}` |
 | Ternary operator | `${{ x ? y : z }}` |
-| Object property depth > 3 | `${{ jobs.a.outputs.b.c.d }}` |
+| Object property depth > 3 (except `iteration.previous`) | `${{ jobs.a.outputs.b.c.d }}` |
 | Template literals / string interpolation | `` ${{ `hello ${name}` }} `` |
 
 ---
@@ -1011,7 +1284,7 @@ This section mirrors the architecture's "Rejected methods" rationale and the PRD
 
 ### 7.1 NOT a general-purpose programming language
 
-The DSL has no `while` loops, no `for` iteration, no variable assignment (in the imperative sense), no function definitions, and no arbitrary script evaluation. Control flow is limited to the router actions listed in [§5.5](#55-router-step). The only looping construct is `goto_step` with a `max_visits` hard limit — a bounded safety valve, not a general loop primitive.
+The DSL has no `while` loops, no `for` iteration, no variable assignment (in the imperative sense), no function definitions, and no arbitrary script evaluation. The only iteration construct is the `repeat` block on job groups — a bounded iteration with a hard `max_iterations` cap and an optional `until` condition. This is a structured re-execution mechanism, not a general loop primitive.
 
 ### 7.2 NOT a YAML-based scripting runtime
 
@@ -1019,7 +1292,7 @@ Workflow definitions are immutable during a run. There is no runtime YAML patch,
 
 ### 7.3 NOT an expression language
 
-`${{ }}` expressions are reference lookups, not an expression evaluator. They resolve named values from a fixed set of namespaces. They do not support arithmetic, string manipulation, type coercion, or function application. See [§6.4](#64-forbidden-constructs) for the complete list of forbidden constructs.
+`${{ }}` expressions are reference lookups, not an expression evaluator. They resolve named values from a fixed set of namespaces. They do not support arithmetic, string manipulation, type coercion, or arbitrary function application. The four status functions (`success()`, `failure()`, `always()`, `cancelled()`) are pre-resolved to boolean literals before tokenization — they are not a function-call mechanism. See [§6.5](#65-forbidden-constructs) for the complete list of forbidden constructs.
 
 ### 7.4 NOT a state-machine bypass
 
@@ -1031,7 +1304,7 @@ The Workflow DSL orchestrates. Skill Packs provide capabilities. A workflow file
 
 ### 7.6 NOT a concurrent agent dispatcher
 
-While the runtime supports parallel execution of read-only jobs, the DSL itself does not contain concurrency primitives (no `parallel`, `fork`, `join`, or `barrier` keywords). Concurrency is derived from the DAG: jobs whose `needs` are all met are eligible to run in parallel, subject to the Engine's scheduler.
+While the runtime supports parallel execution of read-only jobs, the DSL provides concurrency **control** (via the `concurrency` field on jobs) but not concurrency **primitives** (`parallel`, `fork`, `join`, `barrier`). Job-level concurrency is derived from the DAG: jobs whose `needs` are all met are eligible to run in parallel, subject to the Engine's scheduler and concurrency group policies.
 
 ### 7.7 NOT a workflow template engine
 
@@ -1105,6 +1378,27 @@ The following rules are enforced by the workflow validator. Any violation produc
 | # | Rule |
 |---|------|
 | V28 | `type: workflow` passes validation but produces a warning. The runtime must not execute it. |
+
+### Job Group rules (v0.7)
+
+| # | Rule |
+|---|------|
+| V29 | `job.group` must reference a key in the top-level `job_groups` map. |
+| V30 | `job_groups` keys must be valid identifiers: lowercase letters, digits, and hyphens (`[a-z0-9-]+`). |
+| V31 | Job Group `needs` must reference existing job group keys. |
+| V32 | The job group DAG must not contain a cycle. |
+| V33 | A job with a `group` field must not use `goto_step`, `goto_job`, or `retry_job` router actions. |
+| V34 | `repeat.max_iterations` must be a positive integer. |
+| V35 | `repeat.until` must be a valid conditional expression (see [§6.3](#63-conditional-expressions)). |
+| V36 | `concurrency.group` must be a non-empty string. |
+| V37 | `concurrency.policy` must be one of `allow`, `queue`, `cancel_previous`, `reject`. |
+
+### Failure policy rules (v0.7)
+
+| # | Rule |
+|---|------|
+| V38 | `failure_policy` must be one of `fail`, `continue`, `block`. |
+| V39 | `retry.when` values must be non-empty strings; each value should match a known `FailureKind` (see [§4.4](#44-retry)). Unknown values produce a validation warning. |
 
 ---
 
@@ -1212,11 +1506,11 @@ The caller (typically `acceptAgentReport`) should catch this error and treat it 
 
 ## 11. Appendix: Full Example
 
-The following is a complete, validated workflow definition demonstrating most stable fields.
+The following is a complete, validated workflow definition demonstrating v0.7 features including job groups, repeat blocks, concurrency control, failure policies, retry with `when` conditions, and expression extensions.
 
 ```yaml
 name: code-change
-version: 0.3.0
+version: 0.7.0
 
 on:
   manual:
@@ -1235,26 +1529,17 @@ permissions:
   commands: none
   workflow_state: none
 
-signals:
-  needs_architecture_design:
-    severity: medium
-    priority: 50
-    allowed_from:
-      - plan
-      - review
-    action:
-      activate_job: architecture-design
-
-  review_rejected:
-    severity: high
-    priority: 100
-    allowed_from:
-      - review
-    action:
-      retry_job: implement
+job_groups:
+  implement-review:
+    needs:
+      - intake-plan
+    repeat:
+      max_iterations: 3
+      until: "${{ success() }}"
 
 jobs:
   intake:
+    group: intake-plan
     workspace:
       mode: read-only
     steps:
@@ -1270,6 +1555,7 @@ jobs:
             - code
 
   code-map:
+    group: intake-plan
     needs:
       - intake
     workspace:
@@ -1287,6 +1573,7 @@ jobs:
             - code
 
   risk-scan:
+    group: intake-plan
     needs:
       - code-map
     workspace:
@@ -1300,6 +1587,7 @@ jobs:
         on_fail: fail
 
   plan:
+    group: intake-plan
     needs:
       - risk-scan
     workspace:
@@ -1332,19 +1620,28 @@ jobs:
             - code
 
   implement:
+    group: implement-review
     needs:
       - plan
     optional_needs:
       - architecture-design
     retry:
       max_attempts: 3
+      when:
+        - timeout
+        - infrastructure_error
+        - agent_error
       on_exceeded:
         status: failed
+    concurrency:
+      group: writable-jobs
+      policy: queue
     steps:
       - id: implement
         type: agent
         with:
           task: "${{ inputs.task }}"
+          previous_summary: "${{ iteration.previous.jobs.implement.outputs.summary }}"
         outputs:
           summary: {}
           files_changed: {}
@@ -1357,10 +1654,12 @@ jobs:
         on_failure: fail
 
   static-check:
+    group: implement-review
     needs:
       - implement
     workspace:
       mode: read-only
+    failure_policy: continue
     steps:
       - id: check
         type: script
@@ -1368,10 +1667,12 @@ jobs:
         on_failure: fail
 
   unit-test:
+    group: implement-review
     needs:
       - implement
     workspace:
       mode: read-only
+    failure_policy: continue
     steps:
       - id: test
         type: script
@@ -1379,6 +1680,7 @@ jobs:
         on_failure: fail
 
   review:
+    group: implement-review
     needs:
       - static-check
       - unit-test
@@ -1389,6 +1691,7 @@ jobs:
         type: agent
         with:
           task: "${{ inputs.task }}"
+          attempt_number: "${{ attempt.number }}"
         outputs:
           verdict: {}
           issues: {}
@@ -1420,5 +1723,6 @@ jobs:
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-07-17 | 0.7.0 | v0.7 Execution Model. Added `job_groups` top-level field with `repeat` blocks (§3.10), `group` field on jobs (§4.8), `concurrency` with four policies (§4.9), `failure_policy` with cascade semantics (§4.10). Updated `retry` with `when` FailureKind whitelist (§4.4). Extended expression namespaces: `invocation`, `attempt`, `iteration.previous`, job/step status and attempt (§6.1). Added status functions `success()`, `failure()`, `always()`, `cancelled()` with pre-resolution semantics (§6.4). Relaxed depth limit to 4 for `iteration.previous` paths. Marked `goto_step`, `goto_job`, `retry_job`, `max_visits`, `retry_with`, `on_failure` object form as deprecated with internal translation notes. Added validation rules V29–V39 for job groups, concurrency, and failure policies. Updated full example to demonstrate v0.7 features. |
 | 2026-07-03 | 0.3.0 | Initial published language specification. Covers all top-level fields, all 5 step types, reserved `workflow` type, expression syntax, forbidden constructs, and validation rules. |
 | 2026-07-03 | 0.3.1 | Added §9 Abstract Data Layer and §10 Agent Report: context_patches. Documents patch schema, permissions model, batch atomicity, reserved fields, and rollback semantics. |

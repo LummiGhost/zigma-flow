@@ -26,11 +26,12 @@ This process ensures workflow authors have time to migrate before stable fields 
 
 ## Backward Compatibility Guarantee
 
-- All workflows valid under v0.2 must be valid under v0.3 without modification, unless the specific change is explicitly documented in `docs/migration.md`.
+- All workflows valid under v0.3–v0.6 must be valid under v0.7 without modification, unless the specific change is explicitly documented in `docs/migration.md`.
+- **v0.7 internal translation:** Deprecated features (`goto_step`, `goto_job`, `retry_job`, `max_visits`, `on_failure` object form) are internally translated to the new Execution Model (Attempt, Job Group Iteration, failure_policy). They continue to work without any workflow changes.
 - Validation errors on previously-valid workflows are treated as bugs and must be fixed in a patch release.
 - New required fields added in a minor version must have a default value or be gated behind an opt-in mechanism. A workflow that omits a newly-added required field must not break.
 
-This guarantee applies to **stable** fields. Experimental fields may change in minor versions and are excluded from this guarantee.
+This guarantee applies to **stable** fields. Experimental and deprecated fields may change in minor versions and are excluded from this guarantee.
 
 ## Versioning Convention
 
@@ -38,20 +39,27 @@ This guarantee applies to **stable** fields. Experimental fields may change in m
 - **Minor version** (0.3, 0.4): New features, experimental field changes, new step types, new validation rules for experimental fields. Stable fields are additive-only in minor releases.
 - **Patch version** (0.2.1, 0.2.2): Bug fixes only. No schema changes, no new fields, no new validation rules. A patch release that rejects a previously-valid workflow is itself a bug.
 
-## v0.2 Compatibility Verification
+## v0.7 Compatibility Verification
 
-The v0.2 canonical workflow (`code-change.yml`) was validated against the v0.3 schema on 2026-07-03. Every field in the workflow is defined and accepted by the v0.3 Zod schema in `src/workflow/index.ts`. The workflow test suite (`tests/workflow/workflow.test.ts`, T-WF-1) confirms that the canonical workflow passes validation without errors.
+v0.7 extends backward compatibility with **internal translation** for all deprecated v0.6 features. The backward compat test suite (`tests/workflow/backward-compat-failure-policy.test.ts`, 238 lines) confirms:
 
-Representative check using the canonical v0.2 workflow (`code-change.yml`). All workflows following the v0.2 DSL are expected to be compatible.
+- `on_failure` object form (`{ status: failed }`, `{ status: blocked }`) is correctly normalized to `failure_policy`
+- v0.6 workflows using `goto_step`, `goto_job`, `retry_job`, `max_visits` are accepted and internally translated
+- Implicit group creation (`__implicit__` prefix) for ungrouped jobs with goto/retry
+
+Representative check using v0.6 workflows:
 
 | Validation step | Result |
 |-----------------|--------|
 | YAML parse | Pass |
-| Zod schema validation (top-level fields: `name`, `version`, `on`, `skills`, `permissions`, `signals`, `jobs`) | Pass |
-| Job schema validation (`steps`, `workspace`, `needs`, `optional_needs`, `activation`, `retry`) | Pass |
-| Step schema validation (all step types: `agent`, `script`, `check`) | Pass |
-| Signal schema validation (`severity`, `priority`, `allowed_from`, `action`) | Pass |
-| DAG validation (no cycles, all references resolvable) | Pass |
-| Skill alias validation (`expose.skills` declared in workflow `skills`) | Pass |
+| Zod schema validation (new v0.7 fields: `job_groups`, `group`, `concurrency`, `failure_policy`, `retry.when`) | Pass |
+| v0.6 workflow with `goto_step` / `goto_job` — accepted & translated | Pass |
+| v0.6 workflow with `retry_job` / `retry_with` — accepted & translated | Pass |
+| v0.6 workflow with `max_visits` — accepted & translated | Pass |
+| v0.6 workflow with `on_failure` object form — accepted & normalized | Pass |
+| DAG validation (including group-level `needs`) | Pass |
+| New v0.7 workflow with `job_groups` + `repeat` + `concurrency` + `failure_policy` | Pass |
+| Expression validation (new namespaces: `invocation`, `attempt`, `iteration.previous`) | Pass |
+| Status functions pre-resolution (`success()`, `failure()`, `always()`, `cancelled()`) | Pass |
 
-The v0.2 workflow uses only stable fields. No modifications are needed for v0.3 compatibility.
+All v0.6 workflows are compatible with v0.7 without modification. Deprecated features produce runtime warnings (suppressible via `ZIGMA_SUPPRESS_DEPRECATION=1`) and will be removed in v1.0.

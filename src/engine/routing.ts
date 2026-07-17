@@ -491,7 +491,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         (id) => id !== targetJobId && !completedJobIds.has(id)
       )
     );
-    const readyAfterActivation = new Set(computeReadyJobs(wf.jobs, completedJobIds, activeJobIds));
+    const readyAfterActivation = new Set(computeReadyJobs(wf.jobs, completedJobIds, activeJobIds, state.jobs));
     const newStatus = readyAfterActivation.has(targetJobId) ? "ready" : "waiting";
 
     const activatedJobState = { ...targetJobState };
@@ -626,7 +626,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         (id) => id !== targetJobId && !completedJobIdsForGoto.has(id)
       )
     );
-    const readyAfterGoto = new Set(computeReadyJobs(wf.jobs, completedJobIdsForGoto, activeJobIdsForGoto));
+    const readyAfterGoto = new Set(computeReadyJobs(wf.jobs, completedJobIdsForGoto, activeJobIdsForGoto, state.jobs));
     const newTargetStatus = readyAfterGoto.has(targetJobId) ? "ready" : "waiting";
 
     const readyTargetState = { ...targetJobState };

@@ -380,7 +380,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
         (id) => !completedJobIds.has(id) && finalState.jobs[id]!.status !== "waiting"
       )
     );
-    const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds);
+    const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds, finalState.jobs);
 
     for (const readyId of nowReadyIds) {
       const waitingJobState = finalState.jobs[readyId];

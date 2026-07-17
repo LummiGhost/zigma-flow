@@ -25,6 +25,8 @@ export interface DagJobs {
      * start as inactive and can be activated at runtime.
      */
     activation?: string;
+    /** Failure policy (WF-7.3b). Default: "fail". */
+    failure_policy?: "fail" | "continue" | "block";
   };
 }
 
@@ -151,7 +153,8 @@ export function detectCycles(jobs: DagJobs): string[][] | null {
 export function computeReadyJobs(
   jobs: DagJobs,
   completedJobIds: Set<string>,
-  activeJobIds: Set<string>
+  activeJobIds: Set<string>,
+  stateJobs?: Record<string, { status: string }>,
 ): string[] {
   const ready: string[] = [];
 
@@ -166,6 +169,11 @@ export function computeReadyJobs(
       // treated as satisfied dependencies so they don't block readiness.
       const depDef = jobs[dep];
       if (depDef?.activation === "optional" || depDef?.activation === "manual") {
+        return true;
+      }
+      // WF-7.3b: jobs that failed with failure_policy: "continue" satisfy
+      // their dependents' needs (Issue #253).
+      if (stateJobs && stateJobs[dep]?.status === "failed" && depDef?.failure_policy === "continue") {
         return true;
       }
       return false;

@@ -96,7 +96,7 @@ jobs:
         type: script
         shell: pwsh
         run: "$wt = (Get-Content .zigma-flow/fix-worktree.txt -Raw).Trim(); git -C $wt diff origin/main"
-        on_failure: continue
+        failure_policy: continue
 
   static-check:
     group: fix-verify
@@ -133,7 +133,7 @@ jobs:
         type: script
         shell: pwsh
         run: "$wt = (Get-Content .zigma-flow/fix-worktree.txt -Raw).Trim(); Set-Location $wt; pnpm typecheck; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; pnpm lint; exit $LASTEXITCODE"
-        on_failure: fail
+        failure_policy: fail
 
   unit-test:
     group: fix-verify
@@ -170,7 +170,7 @@ jobs:
         type: script
         shell: pwsh
         run: "$wt = (Get-Content .zigma-flow/fix-worktree.txt -Raw).Trim(); Set-Location $wt; pnpm test:ci; exit $LASTEXITCODE"
-        on_failure: fail
+        failure_policy: fail
 
   review:
     group: fix-verify

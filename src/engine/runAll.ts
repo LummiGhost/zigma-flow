@@ -44,6 +44,7 @@ import {
   WorkflowError,
 } from "../utils/index.js";
 import { advanceJob, createRun, executeCurrentStep, resolveJobWorkingDirectory } from "./index.js";
+import { computeReadyJobs } from "../dag/index.js";
 import { validateReportShape } from "./accept.js";
 import { enterHumanGate } from "./humanGate.js";
 import { recordAgentFailure } from "./recordAgentFailure.js";
@@ -803,8 +804,37 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
 
     // WF-7.3b: "continue" action means the job failed but the failure was handled
     // by a "continue" failure policy. The job is marked as failed but the run
-    // should continue.
+    // should continue. Propagate readiness to downstream jobs (Issue #253).
     if (failureResult.action === "continue") {
+      const snapshot = await stateStore.readSnapshot(runDir);
+      if (snapshot) {
+        const completedJobIds = new Set<string>(
+          Object.entries(snapshot.jobs)
+            .filter(([, js]) => js.status === "completed")
+            .map(([id]) => id)
+        );
+        const activeJobIds = new Set<string>(
+          Object.keys(snapshot.jobs).filter(
+            (id) => !completedJobIds.has(id) && snapshot.jobs[id]!.status !== "waiting"
+          )
+        );
+        const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds, snapshot.jobs);
+
+        if (nowReadyIds.length > 0) {
+          await stateStore.updateState(runDir, (cur) => {
+            const updatedJobs = { ...cur.jobs };
+            let changed = false;
+            for (const readyId of nowReadyIds) {
+              if (updatedJobs[readyId]?.status === "waiting") {
+                updatedJobs[readyId] = { ...updatedJobs[readyId]!, status: "ready" as const };
+                changed = true;
+              }
+            }
+            return changed ? { ...cur, jobs: updatedJobs } : cur;
+          });
+        }
+      }
+
       return { jobId, success: false, action: "completed", detail: "Job failed but failure_policy is 'continue'" };
     }
 
@@ -1778,7 +1808,14 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         const needs = wf.jobs[jobId]?.needs ?? [];
         return needs.length > 0 && needs.some((dep) => {
           const s = finalState!.jobs[dep]?.status;
-          return s === "failed" || s === "blocked";
+          if (s === "blocked") return true;
+          if (s === "failed") {
+            // WF-7.3b: failed deps with failure_policy: "continue" don't block
+            // downstream jobs (Issue #253).
+            const depDef = wf.jobs[dep];
+            return depDef?.failure_policy !== "continue";
+          }
+          return false;
         });
       })
       .map(([id]) => id);

@@ -184,7 +184,7 @@ export async function forceSetJob(opts: ForceSetJobOpts): Promise<void> {
           (id) => !completedJobIds.has(id) && current.jobs[id]!.status !== "waiting"
         )
       );
-      const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds);
+      const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds, current.jobs);
 
       let newState = { ...current };
 
@@ -218,7 +218,7 @@ export async function forceSetJob(opts: ForceSetJobOpts): Promise<void> {
           (id) => !updatedCompletedIds.has(id) && updatedState.jobs[id]!.status !== "waiting"
         )
       );
-      const updatedReadyIds = computeReadyJobs(wf.jobs, updatedCompletedIds, updatedActiveIds);
+      const updatedReadyIds = computeReadyJobs(wf.jobs, updatedCompletedIds, updatedActiveIds, updatedState.jobs);
 
       for (const readyId of updatedReadyIds) {
         if (updatedState.jobs[readyId]?.status === "ready") {

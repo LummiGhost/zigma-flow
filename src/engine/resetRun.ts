@@ -221,7 +221,7 @@ export async function resetRun(opts: ResetRunOpts): Promise<ResetRunResult> {
       .map(([id]) => id)
   );
 
-  const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds);
+  const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds, newJobs);
 
   // Apply readiness to waiting jobs that are now eligible
   let jobsReady = 0;

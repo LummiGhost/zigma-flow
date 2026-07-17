@@ -781,7 +781,7 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
       (id) => !completedJobIds.has(id) && state.jobs[id]!.status !== "waiting"
     )
   );
-  const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds);
+  const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds, state.jobs);
 
   for (const readyId of nowReadyIds) {
     const waitingJobState = state.jobs[readyId];
@@ -847,7 +847,7 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
         (id) => !curCompletedIds.has(id) && newState.jobs[id]!.status !== "waiting"
       )
     );
-    const curReadyIds = computeReadyJobs(wf.jobs, curCompletedIds, curActiveIds);
+    const curReadyIds = computeReadyJobs(wf.jobs, curCompletedIds, curActiveIds, newState.jobs);
 
     for (const readyId of curReadyIds) {
       const waitingJobState = newState.jobs[readyId];

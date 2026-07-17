@@ -1,5 +1,5 @@
 name: release-candidate
-version: 0.6.0
+version: 0.7.0
 
 inputs:
   version:
@@ -35,6 +35,7 @@ jobs:
   typecheck:
     needs:
       - build
+    failure_policy: continue
     steps:
       - id: typecheck
         type: script
@@ -44,6 +45,7 @@ jobs:
   unit:
     needs:
       - build
+    failure_policy: continue
     steps:
       - id: unit-tests
         type: script

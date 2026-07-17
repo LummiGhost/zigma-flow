@@ -1,5 +1,5 @@
 name: bugfix
-version: 0.6.0
+version: 0.7.0
 
 inputs:
   bug_report:
@@ -18,6 +18,12 @@ permissions:
   edits: write
   commands: none
   workflow_state: none
+
+job_groups:
+  fix-verify:
+    repeat:
+      max_iterations: 3
+      until: "${{ jobs.review.outputs.verdict == 'approved' }}"
 
 jobs:
   intake:
@@ -79,10 +85,15 @@ jobs:
             - code
 
   implement:
+    group: fix-verify
     needs:
       - plan
     retry:
       max_attempts: 3
+      when:
+        - timeout
+        - infrastructure_error
+        - agent_error
       on_exceeded:
         status: failed
     steps:
@@ -90,6 +101,7 @@ jobs:
         type: agent
         with:
           task: "${{ inputs.bug_report }}"
+          previous_summary: "${{ iteration.previous.jobs.implement.outputs.summary }}"
         outputs:
           summary: {}
           files_changed: {}
@@ -102,8 +114,10 @@ jobs:
         on_failure: fail
 
   regression-test:
+    group: fix-verify
     needs:
       - implement
+    failure_policy: continue
     steps:
       - id: run-tests
         type: script
@@ -121,6 +135,7 @@ jobs:
             - code
 
   review:
+    group: fix-verify
     needs:
       - regression-test
     steps:
@@ -128,6 +143,7 @@ jobs:
         type: agent
         with:
           task: "${{ inputs.bug_report }}"
+          attempt: "${{ attempt.number }}"
         outputs:
           verdict: {}
           issues: {}
@@ -135,7 +151,8 @@ jobs:
           status:
             values: [approved, rejected]
         on_return:
-          rejected: { retry_job: implement }
+          approved: continue
+          rejected: continue
         expose:
           skills:
             - code

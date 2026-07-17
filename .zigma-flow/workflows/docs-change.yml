@@ -1,5 +1,5 @@
 name: docs-change
-version: 0.6.0
+version: 0.7.0
 
 inputs:
   task:
@@ -60,6 +60,7 @@ jobs:
   consistency-check:
     needs:
       - draft
+    failure_policy: continue
     steps:
       - id: check
         type: script

@@ -1,5 +1,5 @@
 name: issue-fix
-version: 0.6.0
+version: 0.7.0
 
 inputs:
   task:
@@ -26,6 +26,12 @@ permissions:
   commands: write
   workflow_state: none
 
+job_groups:
+  fix-verify:
+    repeat:
+      max_iterations: 3
+      until: "${{ jobs.review.outputs.verdict != 'rejected' }}"
+
 jobs:
   issue-context:
     steps:
@@ -51,10 +57,15 @@ jobs:
             - issue-fix
 
   fix:
+    group: fix-verify
     needs:
       - issue-context
     retry:
       max_attempts: 3
+      when:
+        - timeout
+        - infrastructure_error
+        - agent_error
       on_exceeded:
         status: failed
     steps:
@@ -70,6 +81,7 @@ jobs:
           fix_scope: "${{ jobs.issue-context.outputs.fix_scope }}"
           related_issues: "${{ jobs.issue-context.outputs.related_issues }}"
           complexity: "${{ jobs.issue-context.outputs.complexity }}"
+          previous_summary: "${{ iteration.previous.jobs.fix.outputs.summary }}"
         outputs:
           summary: {}
           files_changed: {}
@@ -87,12 +99,18 @@ jobs:
         on_failure: continue
 
   static-check:
+    group: fix-verify
     needs:
       - fix
     retry:
       max_attempts: 3
+      when:
+        - timeout
+        - infrastructure_error
+        - agent_error
       on_exceeded:
         status: failed
+    failure_policy: continue
     steps:
       - id: autofix
         type: agent
@@ -118,12 +136,18 @@ jobs:
         on_failure: fail
 
   unit-test:
+    group: fix-verify
     needs:
       - fix
     retry:
       max_attempts: 3
+      when:
+        - timeout
+        - infrastructure_error
+        - agent_error
       on_exceeded:
         status: failed
+    failure_policy: continue
     steps:
       - id: autofix
         type: agent
@@ -149,6 +173,7 @@ jobs:
         on_failure: fail
 
   review:
+    group: fix-verify
     needs:
       - static-check
       - unit-test
@@ -168,6 +193,7 @@ jobs:
           fix_approach: "${{ jobs.fix.outputs.fix_approach }}"
           branch_name: "${{ jobs.fix.outputs.branch_name }}"
           worktree_path: "${{ jobs.fix.outputs.worktree_path }}"
+          attempt: "${{ attempt.number }}"
         outputs:
           verdict: {}
           issue_resolved: {}
@@ -182,7 +208,7 @@ jobs:
             required: true
         on_return:
           approved: continue
-          rejected: { retry_job: fix }
+          rejected: continue
           needs_human: { activate_job: human-escalation }
         expose:
           skills:

@@ -1,5 +1,5 @@
 name: code-change
-version: 0.6.0
+version: 0.7.0
 
 inputs:
   task:
@@ -15,6 +15,12 @@ permissions:
   edits: write
   commands: none
   workflow_state: none
+
+job_groups:
+  implement-review:
+    repeat:
+      max_iterations: 3
+      until: "${{ jobs.review.outputs.verdict == 'approved' }}"
 
 jobs:
   intake:
@@ -88,11 +94,16 @@ jobs:
             - code
 
   implement:
+    group: implement-review
     needs:
       - plan
       - architecture-design
     retry:
       max_attempts: 3
+      when:
+        - timeout
+        - infrastructure_error
+        - agent_error
       on_exceeded:
         status: failed
     steps:
@@ -100,6 +111,7 @@ jobs:
         type: agent
         with:
           task: "${{ inputs.task }}"
+          previous_summary: "${{ iteration.previous.jobs.implement.outputs.summary }}"
         outputs:
           summary: {}
           files_changed: {}
@@ -112,8 +124,10 @@ jobs:
         on_failure: fail
 
   static-check:
+    group: implement-review
     needs:
       - implement
+    failure_policy: continue
     steps:
       - id: check
         type: script
@@ -121,8 +135,10 @@ jobs:
         on_failure: fail
 
   unit-test:
+    group: implement-review
     needs:
       - implement
+    failure_policy: continue
     steps:
       - id: test
         type: script
@@ -130,6 +146,7 @@ jobs:
         on_failure: fail
 
   review:
+    group: implement-review
     needs:
       - static-check
       - unit-test
@@ -138,6 +155,7 @@ jobs:
         type: agent
         with:
           task: "${{ inputs.task }}"
+          attempt: "${{ attempt.number }}"
         outputs:
           verdict: {}
           issues: {}
@@ -145,7 +163,8 @@ jobs:
           status:
             values: [approved, rejected]
         on_return:
-          rejected: { retry_job: implement }
+          approved: continue
+          rejected: continue
         expose:
           skills:
             - code

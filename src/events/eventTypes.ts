@@ -436,9 +436,11 @@ export interface GroupFailedPayload {
 export interface HumanGateWaitingPayload {
   job_id: string;
   step_id: string;
+  external_gate_id: string;
   prompt: string;
   approvers?: string[];
   instructions?: string;
+  input_schema?: Record<string, unknown>;
   step_artifact_dir: string;
 }
 

@@ -195,9 +195,9 @@ describe("invokeAction", () => {
   it("produces verbose output when --trace is set", async () => {
     await invokeAction(sandbox.workflowPath, { task: "trace test", trace: true });
 
-    const logs = logSpy.mock.calls.map((c: unknown[]) => String(c[0] ?? "")).join("\n");
-    // Should contain event IDs
-    expect(logs).toMatch(/\[evt-/);
+    // v0.7: trace output now goes to stderr (keep stdout clean for --json mode)
+    const errLogs = errorSpy.mock.calls.map((c: unknown[]) => String(c[0] ?? "")).join("\n");
+    expect(errLogs).toMatch(/\[evt-/);
   });
 
   // ── Parallelism ─────────────────────────────────────────────────────────

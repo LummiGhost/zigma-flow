@@ -138,6 +138,7 @@ export async function enterHumanGate(opts: EnterHumanGateOpts): Promise<void> {
 
   // 1. Write human_gate_waiting event
   const eventId = await nextSequentialEventId(runDir, eventWriter);
+  const externalGateId = `${runId}::${jobId}::${stepId}`;
   const event: ZigmaFlowEvent = {
     id: eventId,
     type: "human_gate_waiting",
@@ -150,6 +151,7 @@ export async function enterHumanGate(opts: EnterHumanGateOpts): Promise<void> {
     payload: {
       job_id: jobId,
       step_id: stepId,
+      external_gate_id: externalGateId,
       prompt: stepPrompt,
       ...(stepApprovers !== undefined ? { approvers: stepApprovers } : {}),
       ...(stepInstructions !== undefined ? { instructions: stepInstructions } : {}),

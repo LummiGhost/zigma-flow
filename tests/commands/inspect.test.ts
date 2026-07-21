@@ -238,11 +238,16 @@ describe("inspectAction", () => {
 
     const logs = logSpy.mock.calls.map((c: unknown[]) => String(c[0] ?? "")).join("\n");
     const parsed = JSON.parse(logs) as Record<string, unknown>;
+    // v0.7: JSON output is now wrapped in CommandJsonResult envelope
+    expect(parsed["contractVersion"]).toBe(1);
+    expect(parsed["command"]).toBe("inspect");
+    expect(parsed["status"]).toBe("success");
     expect(parsed["runId"]).toBe(sandbox.runId);
-    expect(parsed["status"]).toBe("completed");
-    expect(parsed["jobs"]).toBeDefined();
-    expect(parsed["events"]).toBeDefined();
-    expect(parsed["artifacts"]).toBeDefined();
+    const data = parsed["data"] as Record<string, unknown>;
+    expect(data["status"]).toBe("completed");
+    expect(data["jobs"]).toBeDefined();
+    expect(data["events"]).toBeDefined();
+    expect(data["artifacts"]).toBeDefined();
   });
 
   // ── Combined views ──────────────────────────────────────────────────────

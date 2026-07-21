@@ -19,6 +19,19 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.7.2] — Patch (2026-07-21)
+
+### Platform Integration
+
+- [CLI] Add `--json` flag to `invoke`, `abort`, `resume`, and `inspect` commands with versioned machine-readable output (#254).
+- [CLI] Add `--event-file <path>` flag to `invoke` for NDJSON event sink with stable dedup IDs (#254).
+- [CLI] Add `--context-file <path>` flag to `invoke` for caller context transport (#254).
+- [runtime] Human gate events now include `external_gate_id`, `input_schema`, and structured metadata (#254).
+- [runtime] `RunAllSummary` now exposes `pausedGate` info when a human gate pauses execution (#254).
+- [CLI] Structured error codes (RUN_NOT_FOUND, STEP_NOT_AWAITING, etc.) for `abort`, `resume`, and `inspect` JSON output (#254).
+- [docs] Document machine-readable CLI contract (v1) in `docs/mvp-contracts.md` section 9 (#254).
+- [tests] Add test suites for platform event mapping, caller context validation, invoke/abort/resume JSON output (#254).
+
 ## [v0.7.1] — Patch (2026-07-17)
 
 ### Engine Fixes

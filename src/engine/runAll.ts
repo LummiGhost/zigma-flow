@@ -16,7 +16,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, appendFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
 import type { AgentBackend } from "../agent/index.js";
@@ -24,6 +24,8 @@ import type { StepBackendOverride } from "../agent/config.js";
 import { buildContext } from "../context/index.js";
 import type { ZigmaFlowEvent } from "../events/index.js";
 import { nextSequentialEventId } from "../events/sequence.js";
+import { mapZigmaFlowEventToPlatformEvent } from "../events/platformEvent.js";
+import type { FlowPlatformEvent } from "../events/platformEvent.js";
 import {
   buildPromptPacket,
   renderPromptPacket,
@@ -54,6 +56,7 @@ import type { ArtifactMetadata } from "../artifact/artifactMetadata.js";
 import { selectExecutable } from "./scheduler.js";
 import type { ExecutableBatch } from "./scheduler.js";
 import { checkAndExecuteTraverses, parseVirtualJobId } from "./traverse.js";
+import type { CallerContext } from "../caller-context.js";
 
 /** Fallback timeout when backend does not expose a timeout value. */
 const DEFAULT_BACKEND_TIMEOUT = 600_000;
@@ -208,6 +211,18 @@ export interface RunAllOpts {
    * without interruption. This is useful for prompt auditing.
    */
   saveAllPrompts?: boolean;
+  /**
+   * Absolute path to an NDJSON event sink file (ISSUE #254).
+   * When provided, every ZigmaFlowEvent is mapped to a FlowPlatformEvent
+   * and appended to this file for platform consumption.
+   */
+  eventSinkPath?: string;
+  /**
+   * Parsed caller context from --context-file (ISSUE #254).
+   * When provided, stored in the run directory for audit and passed through
+   * to createRun.
+   */
+  callerContext?: CallerContext;
 }
 
 export interface RunAllSummary {
@@ -219,6 +234,19 @@ export interface RunAllSummary {
   jobs: Array<{ id: string; status: string; attempts: number }>;
   /** Number of loop iterations completed. */
   iterations: number;
+  /**
+   * Human gate pause info (ISSUE #254).
+   * Populated when the run is paused on a human step.
+   */
+  pausedGate?: {
+    jobId: string;
+    stepId: string;
+    prompt: string;
+    externalGateId: string;
+    inputSchema?: Record<string, unknown>;
+    deadline?: string;
+    artifactRefs?: string[];
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1344,7 +1372,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
     clock = new SystemClock(),
     signal,
     maxIterations = 100,
-    onEvent,
+    onEvent: rawOnEvent,
     stateStore = new LocalStateStore(),
     eventWriter = new JsonlEventWriter(),
     parallelism: rawParallelism,
@@ -1352,10 +1380,33 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
     pauseBefore,
     stopAfter,
     saveAllPrompts,
+    eventSinkPath,
+    callerContext,
   } = opts;
 
   // Clamp parallelism to at least 1
   const parallelism = Math.max(1, rawParallelism ?? 4);
+
+  // ── Event sink: fire-and-forget write to event sink file ───────────────
+
+  function writeToEventSink(e: ZigmaFlowEvent): void {
+    if (eventSinkPath === undefined) return;
+    try {
+      const platformEvent = mapZigmaFlowEventToPlatformEvent(e);
+      appendFile(eventSinkPath, JSON.stringify(platformEvent) + "\n", "utf-8").catch(() => {
+        // Best-effort: silently drop sink write failures
+      });
+    } catch {
+      // Best-effort
+    }
+  }
+
+  const onEvent = eventSinkPath !== undefined || rawOnEvent !== undefined
+    ? (e: ZigmaFlowEvent) => {
+        rawOnEvent?.(e);
+        writeToEventSink(e);
+      }
+    : undefined;
 
   // ── Validate: exactly one of task or runId ─────────────────────────────
 
@@ -1395,6 +1446,8 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
   let iteration = 0;
   // Reset module-level backendCache for fresh execution/resume
   backendCache = undefined;
+  // Capture paused gate info for structured output (ISSUE #254)
+  let pausedGateInfo: RunAllSummary["pausedGate"] | undefined;
 
   while (iteration < maxIterations) {
     // Check abort signal
@@ -1743,9 +1796,10 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       if (awaitingHumanJobs.length > 0) {
         // Print human gate instructions to console
         const [hjId, hjState] = awaitingHumanJobs[0]!;
+        const hjStepId = hjState.current_step ?? "?";
         console.log();
         console.log(`Run ${runId} paused on human gate.`);
-        console.log(`  Job: ${hjId} / Step: ${hjState.current_step ?? "?"}`);
+        console.log(`  Job: ${hjId} / Step: ${hjStepId}`);
         console.log();
         console.log("To decide (unified, v0.6+):");
         console.log(`  zigma-flow resume ${runId} --job ${hjId} --input decision=approve`);
@@ -1757,6 +1811,38 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         console.log(`Then continue:`);
         console.log(`  zigma-flow run-all <workflow> --resume ${runId}`);
         console.log();
+
+        // Capture structured paused gate info for --json output (ISSUE #254)
+        try {
+          const eventsPath = join(runDir, "events.jsonl");
+          const eventsText = await readFile(eventsPath, "utf-8");
+          const lines = eventsText.split("\n").filter((l) => l.trim().length > 0);
+          for (let i = lines.length - 1; i >= 0; i--) {
+            try {
+              const evt = JSON.parse(lines[i]!) as { type?: string; payload?: Record<string, unknown> };
+              if (evt.type === "human_gate_waiting" && evt.payload) {
+                const p = evt.payload;
+                const stepDef = wf.jobs[hjId]?.steps.find((s) => s.id === hjStepId);
+                pausedGateInfo = {
+                  jobId: hjId,
+                  stepId: hjStepId,
+                  prompt: typeof p["prompt"] === "string" ? p["prompt"] : "",
+                  externalGateId: `${runId}::${hjId}::${hjStepId}`,
+                  ...(p["input_schema"] !== undefined ? { inputSchema: p["input_schema"] as Record<string, unknown> } : {}),
+                  ...(stepDef?.timeout_minutes !== undefined ? {
+                    deadline: new Date(Date.now() + stepDef.timeout_minutes * 60_000).toISOString(),
+                  } : {}),
+                };
+                break;
+              }
+            } catch {
+              // Skip malformed lines
+            }
+          }
+        } catch {
+          // Best-effort — if we can't read events, leave pausedGateInfo undefined
+        }
+
         break;
       }
     }
@@ -1958,5 +2044,6 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
     ...(finalState?.status !== undefined ? { status: finalState.status } : {}),
     jobs,
     iterations: iteration,
+    ...(pausedGateInfo !== undefined ? { pausedGate: pausedGateInfo } : {}),
   };
 }

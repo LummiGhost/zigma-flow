@@ -234,8 +234,11 @@ async function runProgram(
     .option("--pause-before <job.step>", "Pause before a specific step (debugging).")
     .option("--stop-after <job.step>", "Stop after a specific step (debugging).")
     .option("--save-all-prompts", "Save all prompts to artifacts without pausing (debugging mode).")
+    .option("--json", "Machine-readable JSON output to stdout (ISSUE #254).")
+    .option("--event-file <path>", "NDJSON event sink file for platform integration (ISSUE #254).")
+    .option("--context-file <path>", "Caller context JSON file for platform integration (ISSUE #254).")
     .exitOverride()
-    .action(async (workflowPath: string, options: { task?: string; resume?: string; backend?: string; parallelism?: number; failFast?: boolean; input?: string[]; dryRun?: boolean; trace?: boolean; pauseBefore?: string; stopAfter?: string; saveAllPrompts?: boolean }) => {
+    .action(async (workflowPath: string, options: { task?: string; resume?: string; backend?: string; parallelism?: number; failFast?: boolean; input?: string[]; dryRun?: boolean; trace?: boolean; pauseBefore?: string; stopAfter?: string; saveAllPrompts?: boolean; json?: boolean; eventFile?: string; contextFile?: string }) => {
       if (options.task === undefined && options.resume === undefined && options.dryRun !== true) {
         console.error("Error: Either --task <description>, --resume <run-id>, or --dry-run is required.");
         process.exit(2);
@@ -258,6 +261,9 @@ async function runProgram(
         ...(options.pauseBefore !== undefined ? { pauseBefore: options.pauseBefore } : {}),
         ...(options.stopAfter !== undefined ? { stopAfter: options.stopAfter } : {}),
         ...(options.saveAllPrompts !== undefined ? { saveAllPrompts: options.saveAllPrompts } : {}),
+        ...(options.json !== undefined ? { json: options.json } : {}),
+        ...(options.eventFile !== undefined ? { eventFile: options.eventFile } : {}),
+        ...(options.contextFile !== undefined ? { contextFile: options.contextFile } : {}),
       });
     });
 
@@ -448,14 +454,16 @@ async function runProgram(
     .option("--reason <reason>", "Human-readable reason for the abort.")
     .option("--run <run_id>", "Target a specific run instead of the active run.")
     .option("--latest", "Use the most recently created run.")
+    .option("--json", "Output result as JSON (for programmatic use).")
     .exitOverride()
-    .action(async (options: { reason?: string; run?: string; latest?: boolean }) => {
+    .action(async (options: { reason?: string; run?: string; latest?: boolean; json?: boolean }) => {
       await abortAction({
         zigmaflowDir: cwd(),
         clock: new SystemClock(),
         ...(options.reason !== undefined ? { reason: options.reason } : {}),
         ...(options.run !== undefined ? { runId: options.run } : {}),
         ...(options.latest !== undefined ? { latest: options.latest } : {}),
+        ...(options.json !== undefined ? { json: options.json } : {}),
       });
     });
 
@@ -556,8 +564,9 @@ async function runProgram(
     .requiredOption("--job <job>", "Job id to resume.")
     .option("--step <step>", "Step id to resume (auto-detected if only one awaiting).")
     .option("--input <key=value>", "Structured input for the human step (repeatable).", collectInputs, [] as string[])
+    .option("--json", "Output result as JSON (for programmatic use).")
     .exitOverride()
-    .action(async (runId: string | undefined, options: { job: string; step?: string; input?: string[] }) => {
+    .action(async (runId: string | undefined, options: { job: string; step?: string; input?: string[]; json?: boolean }) => {
       const inputs = parseInputs(options.input);
       if (inputs === undefined || Object.keys(inputs).length === 0) {
         console.error("Error: At least one --input key=value is required (e.g. --input decision=approve).");
@@ -571,6 +580,7 @@ async function runProgram(
         ...(options.step !== undefined ? { stepId: options.step } : {}),
         input: inputs,
         clock: new SystemClock(),
+        ...(options.json !== undefined ? { json: options.json } : {}),
       });
     });
 

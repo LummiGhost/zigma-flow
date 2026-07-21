@@ -23,8 +23,16 @@ import {
   ConfigError,
   FilesystemError,
   UserInputError,
+  ZigmaFlowError,
 } from "../utils/index.js";
 import { findRun } from "./status.js";
+import {
+  COMMAND_CONTRACT_VERSION,
+  successResult,
+  errorResult,
+  type CommandJsonResult,
+  type ErrorCode,
+} from "./command-result.js";
 
 // ---------------------------------------------------------------------------
 // InspectOptions
@@ -67,6 +75,8 @@ export interface InspectResult {
   state: RunState | null;
   events: EventEnvelope[];
   artifacts: ArtifactEntry[];
+  /** Structured JSON result for --json mode (ISSUE #254). */
+  jsonResult?: CommandJsonResult;
 }
 
 interface EventEnvelope {
@@ -188,9 +198,8 @@ export async function inspectAction(
   const showSummary = showDefaults || renderSummary || renderJson;
 
   if (renderJson) {
-    // JSON output: all data in machine-readable form
-    const output = {
-      runId,
+    // JSON output: versioned, machine-readable contract (ISSUE #254)
+    const result = successResult("inspect", runId, {
       workflow: state.workflow,
       task: state.task,
       created_at: state.created_at,
@@ -200,9 +209,9 @@ export async function inspectAction(
       artifacts: opts.artifactJob
         ? artifacts.filter((a) => a.producer?.job === opts.artifactJob)
         : artifacts,
-    };
-    print(JSON.stringify(output, null, 2));
-    return { runId, runDir, state, events, artifacts };
+    });
+    print(JSON.stringify(result, null, 2));
+    return { runId, runDir, state, events, artifacts, jsonResult: result };
   }
 
   if (showSummary) {

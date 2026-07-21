@@ -442,3 +442,216 @@ MVP 错误类型用于 exit code、测试断言和用户提示。最小分类：
 | P0.2 | `P0.2.3` 错误分类 | 本文第 7 章 |
 
 P0 完成后，P1 及之后的 Project item 必须把本文作为实现前置约束。
+
+## 9. Machine-Readable CLI Contract (v1)
+
+> Added v0.7 (ISSUE #254). This section defines the versioned JSON protocol for
+> platform-to-runtime integration. All new behavior is gated behind `--json`,
+> `--event-file`, or `--context-file` flags; interactive CLI output is unchanged.
+
+### 9.1 Contract Versioning
+
+All machine-readable output carries a `contractVersion` field set to `1`. The
+version increments when the output shape changes in a way that would break a
+consumer. Additive changes (new optional fields, new status values) do not bump
+the version. Removal or re-interpretation of existing fields does.
+
+### 9.2 `invoke --json` Output
+
+The `invokeAction` handler writes a single `InvokeJsonOutput` object to stdout
+when `--json` is passed. All human-readable output goes to stderr.
+
+```ts
+interface InvokeJsonOutput {
+  contractVersion: number;   // always 1
+  runId: string;             // engine-assigned run identifier
+  status: InvokeJsonStatus;  // terminal or paused status
+  exitCode: number;          // POSIX exit code (0 = ok, 1 = error)
+  pausedGate: PausedGateInfo | null;  // non-null when awaiting human input
+  artifacts: ArtifactRef[];  // output artifacts produced by the run
+  eventLogUri: string;       // file:// URI to the full events.jsonl
+}
+```
+
+**Status values:**
+
+| Status | Meaning |
+|---|---|
+| `running` | Run still in progress (max iterations reached or timed out) |
+| `awaiting_human` | Run paused on a human gate — caller must resume |
+| `completed` | All jobs completed successfully |
+| `failed` | One or more jobs failed with `failure_policy: fail` |
+| `cancelled` | Run was cancelled via abort or signal |
+
+**PausedGateInfo:**
+
+```ts
+interface PausedGateInfo {
+  jobId: string;
+  stepId: string;
+  prompt: string;
+  externalGateId?: string;   // "runId::jobId::stepId" stable reference
+  inputSchema?: Record<string, unknown>;  // expected input shape
+  deadline?: string;         // ISO 8601 if gate has a deadline
+}
+```
+
+**Error output:** When `invoke` fails before or during engine execution in JSON
+mode, it outputs a JSON object with `contractVersion`, `runId: "(error)"`,
+`status: "failed"`, and `exitCode: 1`.
+
+### 9.3 `abort --json` Output
+
+The `abortAction` handler returns a `CommandJsonResult` envelope:
+
+```ts
+interface CommandJsonResult {
+  contractVersion: number;   // always 1
+  command: string;           // "abort"
+  status: "success" | "error";
+  runId: string;
+  data: Record<string, unknown>;  // on success: { reason? }
+  error?: {
+    code: string;            // stable error code
+    message: string;         // human-readable description
+    details?: Record<string, unknown>;
+  };
+}
+```
+
+**Error codes for abort:** `RUN_NOT_FOUND`, `RUN_ALREADY_TERMINAL`, `INTERNAL_ERROR`.
+
+### 9.4 `resume --json` Output
+
+Returns a `CommandJsonResult` with `command: "resume"`. Success `data` includes:
+
+| Field | Type | Description |
+|---|---|---|
+| `jobId` | string | Job that received input |
+| `stepId` | string | Step that received input |
+| `outcome` | string | Decision value recorded |
+| `nextAction` | string | Action the engine will take next |
+| `recordedAt` | string | ISO 8601 timestamp |
+| `effects` | unknown | Engine-reported effects of the decision |
+
+**Error codes for resume:** `RUN_NOT_FOUND`, `JOB_NOT_FOUND`, `STEP_NOT_AWAITING`,
+`ALREADY_DECIDED`, `INVALID_INPUT`, `STATE_CORRUPT`, `INTERNAL_ERROR`.
+
+Idempotency: submitting the same decision twice returns `status: "success"` with
+the original outcome and no side effects. The human-readable output includes an
+`[IDEMPOTENT]` prefix in this case.
+
+### 9.5 `inspect --json` Output
+
+Returns a `CommandJsonResult` with `command: "inspect"`. Success `data` includes:
+
+| Field | Type | Description |
+|---|---|---|
+| `workflow` | string | Workflow name |
+| `task` | string | Task description |
+| `created_at` | string | ISO 8601 creation timestamp |
+| `status` | string | Run status |
+| `jobs` | object | Map of job ID to job state |
+| `events` | array | Event envelopes (truncated by `--event-limit`) |
+| `artifacts` | array | Artifact entries (filtered by `--artifact-job`) |
+
+**Error codes for inspect:** `RUN_NOT_FOUND`, `STATE_CORRUPT`, `INTERNAL_ERROR`.
+
+### 9.6 Event Sink (`--event-file`)
+
+When `--event-file <path>` is provided, the engine writes each event as an
+NDJSON line to the specified file. Events use the `FlowPlatformEvent` envelope:
+
+```ts
+interface FlowPlatformEvent {
+  eventId: string;       // "runId::evt-NNN" — stable for dedup
+  runId: string;
+  type: FlowPlatformEventType;
+  occurredAt: string;    // ISO 8601
+  status?: string;       // current run status
+  summary?: string;      // human-readable one-liner
+  payload: Record<string, unknown>;
+}
+```
+
+**Platform event types (6):**
+
+| Type | Maps from internal events |
+|---|---|
+| `run.started` | `run_created` |
+| `run.progress` | All step/job/attempt/iteration progress events |
+| `run.awaiting-human` | `human_gate_waiting` |
+| `run.completed` | `run_completed` |
+| `run.failed` | `run_failed`, `run_blocked` |
+| `run.cancelled` | `run_cancelled` |
+
+**Dedup contract:** Event IDs are composite keys `"<runId>::<internalEventId>"`
+where `internalEventId` is the engine's sequential ID (e.g. `evt-042`). Consumers
+deduplicate by `eventId`. Delivery is at-least-once. The event sink is written
+fire-and-forget (no backpressure from sink to engine).
+
+### 9.7 Caller Context Transport (`--context-file`)
+
+The `--context-file <path>` flag loads a JSON file that identifies the calling
+platform. The file is parsed, validated, and passed through to the engine as a
+`CallerContext` object. Validation rejects:
+
+- Non-object or null top-level values
+- Missing required fields (`user.id`, `user.name`, `user.email`, `actor.type`,
+  `actor.id`, `source.system`, `project.id`)
+- Wrong types on optional platform fields (`coreTaskId`, `flowRunId`, `repository`,
+  `branch`, etc.)
+- Invalid `callbackConfig.type` (must be `webhook`, `file`, or `none`)
+
+**Context file schema:**
+
+```json
+{
+  "user": { "id": "...", "name": "...", "email": "..." },
+  "actor": { "type": "user", "id": "..." },
+  "source": { "system": "zigma-host", "version": "1.0.0" },
+  "permissions": ["..."],
+  "project": { "id": "...", "scope": "..." },
+  "coreTaskId": "...",
+  "flowRunId": "...",
+  "repository": "owner/repo",
+  "branch": "main",
+  "workflow": "...",
+  "tool": "...",
+  "callbackConfig": { "type": "webhook", "uri": "https://..." }
+}
+```
+
+All fields except the `coreTaskId` / `flowRunId` / `permissionSnapshot*` /
+`repository` / `branch` / `workflow` / `tool` / `callbackConfig` block are
+required.
+
+### 9.8 Human Gate Structured Data
+
+The `human_gate_waiting` event payload includes:
+
+| Field | Description |
+|---|---|
+| `external_gate_id` | Stable gate reference: `"<runId>::<jobId>::<stepId>"` |
+| `input_schema` | Expected input shape (from step definition `with.inputs`) |
+| `prompt` | Human-readable prompt for the decision-maker |
+| `deadline` | ISO 8601 if the step defines a deadline |
+
+When the run pauses on a human gate, `invoke --json` populates `pausedGate`
+with `jobId`, `stepId`, `prompt`, `externalGateId`, `inputSchema`, and
+`deadline`. The platform can use `externalGateId` to track this gate across
+retries and use `inputSchema` to render a structured form.
+
+### 9.9 Backward Compatibility
+
+All machine-readable modes are opt-in via flags. The following behaviors are
+preserved:
+
+- **`invoke` without `--json`**: interactive output unchanged (console.log lines)
+- **`abort` without `--json`**: prints `Run <id> cancelled.` to console
+- **`resume` without `--json`**: prints decision text, throws on error to console
+- **`inspect` without `--json`**: text table output unchanged. The existing
+  `--json` flag output is wrapped in a `CommandJsonResult` envelope (additive
+  change — `contractVersion` and `command` fields are new).
+- **Without `--event-file`**: no NDJSON file is written
+- **Without `--context-file`**: caller context is not injected

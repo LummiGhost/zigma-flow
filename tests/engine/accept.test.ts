@@ -2133,3 +2133,183 @@ describe("acceptAgentReport — status present dispatches via applyStatusReturn 
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// T-ACCEPT-21: outputs.status satisfies returns.status (Issue #256)
+// ---------------------------------------------------------------------------
+//
+// Regression test for Issue #256: when an agent writes status into
+// outputs.status instead of a top-level status field, the engine must still
+// recognize it as satisfying returns.status.required: true and dispatch via
+// applyStatusReturn (on_return.fixed: continue).
+// ---------------------------------------------------------------------------
+
+const AGENT_RETURNS_OUTPUTS_STATUS_YAML = `\
+name: accept-returns-outputs-status
+version: "0.1.0"
+jobs:
+  static-check:
+    steps:
+      - id: autofix
+        type: agent
+        uses: zigma/autofix-skill
+        returns:
+          status:
+            values:
+              - fixed
+              - unfixable
+            required: true
+        on_return:
+          fixed: continue
+          unfixable: fail
+`;
+
+describe("acceptAgentReport — outputs.status satisfies returns.status (T-ACCEPT-21, Issue #256)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "outputs.status: 'fixed' satisfies required returns.status, dispatches on_return.fixed: continue (T-ACCEPT-21, Issue #256)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_RETURNS_OUTPUTS_STATUS_YAML,
+        "accept-returns-outputs-status"
+      );
+
+      await setJobState(runDir, "static-check", {
+        status: "running",
+        current_step: "autofix",
+        attempt: 1,
+      });
+
+      // Agent writes status in outputs (not at top level) — this is the bug scenario
+      await writeReport(runDir, "static-check", 1, "autofix", {
+        outputs: {
+          status: "fixed",
+          gate: "static-check",
+        },
+        artifacts: [],
+        signals: [],
+        summary: "typecheck and lint passed",
+      });
+
+      await callAcceptAgentReport({
+        runDir,
+        runId,
+        jobId: "static-check",
+        clock: new FakeClock(),
+      });
+
+      // step_returned must be emitted (applyStatusReturn was invoked)
+      const events = await readEvents(runDir);
+      const returnedEvent = events.find((e) => e.type === "step_returned");
+      expect(returnedEvent).toBeDefined();
+      expect(returnedEvent!.payload).toMatchObject({
+        status: "fixed",
+        mapped_action: "continue",
+      });
+
+      // Job must advance — on_return.fixed: continue → job completed
+      const snap = await readStateSnapshot(runDir);
+      expect(snap.jobs["static-check"]!.status).toBe("completed");
+
+      // NO agent_report_accepted on the status-return path
+      expect(events.filter((e) => e.type === "agent_report_accepted")).toHaveLength(0);
+    }
+  );
+
+  it(
+    "outputs.status: 'unfixable' dispatches on_return.unfixable: fail and fails the job (T-ACCEPT-21b, Issue #256)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_RETURNS_OUTPUTS_STATUS_YAML,
+        "accept-returns-outputs-status"
+      );
+
+      await setJobState(runDir, "static-check", {
+        status: "running",
+        current_step: "autofix",
+        attempt: 1,
+      });
+
+      await writeReport(runDir, "static-check", 1, "autofix", {
+        outputs: {
+          status: "unfixable",
+          gate: "static-check",
+        },
+        artifacts: [],
+        signals: [],
+        summary: "typecheck failed, cannot fix",
+      });
+
+      await callAcceptAgentReport({
+        runDir,
+        runId,
+        jobId: "static-check",
+        clock: new FakeClock(),
+      });
+
+      const events = await readEvents(runDir);
+      const returnedEvent = events.find((e) => e.type === "step_returned");
+      expect(returnedEvent).toBeDefined();
+      expect(returnedEvent!.payload).toMatchObject({
+        status: "unfixable",
+        mapped_action: "fail",
+      });
+
+      const snap = await readStateSnapshot(runDir);
+      expect(snap.jobs["static-check"]!.status).toBe("failed");
+    }
+  );
+
+  it(
+    "report with neither top-level status nor outputs.status still fails when required=true (T-ACCEPT-21c, Issue #256)",
+    async () => {
+      const { runId, runDir } = await bootstrapAcceptRun(
+        sandbox,
+        AGENT_RETURNS_OUTPUTS_STATUS_YAML,
+        "accept-returns-outputs-status"
+      );
+
+      await setJobState(runDir, "static-check", {
+        status: "running",
+        current_step: "autofix",
+        attempt: 1,
+      });
+
+      // Report with no status anywhere — should still fail
+      await writeReport(runDir, "static-check", 1, "autofix", {
+        outputs: { gate: "static-check" },
+        artifacts: [],
+        signals: [],
+        summary: "no status provided",
+      });
+
+      const eventsBefore = await readEventsBytes(runDir);
+      const stateBefore = await readStateBytes(runDir);
+
+      await expect(
+        callAcceptAgentReport({
+          runDir,
+          runId,
+          jobId: "static-check",
+          clock: new FakeClock(),
+        })
+      ).rejects.toMatchObject({ kind: "ValidationError" });
+
+      const eventsAfter = await readEventsBytes(runDir);
+      const stateAfter = await readStateBytes(runDir);
+      expect(eventsAfter).toBe(eventsBefore);
+      expect(stateAfter).toBe(stateBefore);
+    }
+  );
+});

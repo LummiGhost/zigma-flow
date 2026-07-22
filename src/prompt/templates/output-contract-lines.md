@@ -19,7 +19,7 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 ### Artifact Rules
 
 {{artifactRulesLines}}
-{{outputsSchemaSection}}{{artifactPolicySection}}{{signalPolicySection}}{{artifactReferenceSchemaSection}}
+{{outputsSchemaSection}}{{artifactPolicySection}}{{signalPolicySection}}{{returnStatusSection}}{{artifactReferenceSchemaSection}}
 ### Report Schema
 
 The file must be valid JSON with exactly these required top-level fields:

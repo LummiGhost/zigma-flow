@@ -132,6 +132,8 @@ export interface OutputContract {
   outputsSchema?: Record<string, { type: string }>;
   artifactPolicy?: { required?: string[]; forbidden?: string[] };
   signalPolicy?: { allowed?: string[]; required_evidence?: string[] };
+  // Issue #256: returns.status contract propagated from step definition
+  returnStatus?: { values: string[]; required: boolean };
 }
 
 export interface PromptPacket {
@@ -224,7 +226,7 @@ const TEMPLATE_PLACEHOLDERS: Record<TemplateName, readonly string[]> = {
   "step-prompt": ["jobId", "stepId", "attempt", "promptSource", "promptId", "promptPath", "promptContent"],
   "step-prompt-fallback": ["jobId", "stepId", "attempt"],
   "output-contract": ["reportPath", "requiredOutputs", "requiredArtifacts", "allowedSignals", "stopRequirement"],
-  "output-contract-lines": ["reportPath", "requiredOutputsLines", "requiredArtifactsLines", "allowedSignalsLines", "artifactRulesLines", "stopRequirement", "outputsSchemaSection", "artifactPolicySection", "signalPolicySection", "signalTableSection", "artifactReferenceSchemaSection"],
+  "output-contract-lines": ["reportPath", "requiredOutputsLines", "requiredArtifactsLines", "allowedSignalsLines", "artifactRulesLines", "stopRequirement", "outputsSchemaSection", "artifactPolicySection", "signalPolicySection", "signalTableSection", "artifactReferenceSchemaSection", "returnStatusSection"],
   "context-block": ["id", "type", "source", "priority", "freshness", "extraLines", "summary"],
   "permission-boundary": ["modePermissionLine", "contentReadLine", "commandsLine"],
   "allowed-actions-matrix": ["allowedActionsMatrixRows"],
@@ -863,6 +865,9 @@ function buildOutputContract(bundle: ContextBundle, reportPath: string): OutputC
     ...(bundle.outputsSchema !== undefined ? { outputsSchema: bundle.outputsSchema } : {}),
     ...(bundle.artifactPolicy !== undefined ? { artifactPolicy: bundle.artifactPolicy } : {}),
     ...(bundle.signalPolicy !== undefined ? { signalPolicy: bundle.signalPolicy } : {}),
+    ...(bundle.stepReturns?.status !== undefined
+      ? { returnStatus: { values: bundle.stepReturns.status.values, required: bundle.stepReturns.status.required === true } }
+      : {}),
   };
 }
 
@@ -998,6 +1003,14 @@ function renderOutputContractLines(output: OutputContract): string[] {
   // Issue #108: Artifact reference schema
   const artifactReferenceSchemaSection = renderArtifactReferenceSchema(output);
 
+  // Issue #256: Return status section
+  let returnStatusSection = "";
+  if (output.returnStatus !== undefined) {
+    const req = output.returnStatus.required ? " (required)" : " (optional)";
+    const values = output.returnStatus.values.map((v) => `\`${v}\``).join(", ");
+    returnStatusSection = `\n### Return Status${req}\n\nSet \`outputs.status\` to one of: ${values}\n`;
+  }
+
   const rendered = renderTemplate(TEMPLATES["output-contract-lines"], {
     reportPath: output.reportPath,
     requiredOutputsLines,
@@ -1010,6 +1023,7 @@ function renderOutputContractLines(output: OutputContract): string[] {
     signalPolicySection,
     signalTableSection,
     artifactReferenceSchemaSection,
+    returnStatusSection,
   }, "output-contract-lines");
   return [...rendered.split("\n"), ""];
 }

@@ -160,7 +160,12 @@ export function validateReportShape(parsed: unknown): AgentReport {
     artifacts: (obj["artifacts"] ?? []) as unknown[],
     signals,
     summary: obj["summary"] as string,
-    status: obj["status"] !== undefined ? String(obj["status"]) : undefined,
+    // Issue #256: accept status from outputs["status"] when not at top level.
+    status: obj["status"] !== undefined
+      ? String(obj["status"])
+      : (typeof obj["outputs"] === "object" && obj["outputs"] !== null && !Array.isArray(obj["outputs"]) && (obj["outputs"] as Record<string, unknown>)["status"] !== undefined)
+        ? String((obj["outputs"] as Record<string, unknown>)["status"])
+        : undefined,
     ...(obj["context_patches"] !== undefined ? { context_patches: obj["context_patches"] as unknown[] } : {}),
   };
 }

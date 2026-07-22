@@ -136,6 +136,8 @@ export interface ContextBundle {
   signalPolicy?: { allowed?: string[]; required_evidence?: string[] };
   // Issue #106: Allow generic prompt fallback when no primary prompt is found
   allowGenericPrompt?: boolean;
+  // Issue #256: returns.status contract for output-contract propagation
+  stepReturns?: { status?: { values: string[]; required?: boolean } };
 }
 
 export interface BuildContextOpts {
@@ -825,6 +827,8 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     ...(bundleContextBlocks !== undefined ? { contextBlocks: bundleContextBlocks } : {}),
     // Issue #106: Pass allow_generic_prompt from step definition
     ...(step.allow_generic_prompt !== undefined ? { allowGenericPrompt: step.allow_generic_prompt } : {}),
+    // Issue #256: Propagate returns.status into the output contract
+    ...(step.returns !== undefined ? { stepReturns: step.returns } : {}),
   };
 }
 

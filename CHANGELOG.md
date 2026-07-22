@@ -19,6 +19,12 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.7.3] — Patch (2026-07-22)
+
+### Agent Reports
+
+- [runtime] Fix agent report parsing: recognize `outputs.status` as `returns.status` so that agent report outputs are correctly merged into job outputs (#256).
+
 ## [v0.7.2] — Patch (2026-07-21)
 
 ### Platform Integration

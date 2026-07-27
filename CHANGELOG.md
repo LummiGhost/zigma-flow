@@ -19,6 +19,16 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.8.0] — Codex CLI Backend (2026-07-27)
+
+### Agent Backends
+
+- [runtime] Add `codex-cli` as a built-in native agent backend using non-interactive `codex exec`.
+- [runtime] Transport composed prompts over stdin, capture Codex JSONL events separately, and write the final response directly to the canonical `report.json`.
+- [runtime] Add Codex-specific backend configuration for model, profile, sandbox, reasoning effort, web search, and ephemeral sessions.
+- [docs] Document the complete Codex CLI 0.144.6 command/parameter research and the selected prompt/context transport design.
+- [tests] Add Codex backend contract coverage for stdin transport, structured output artifacts, invocation metadata, and missing-command diagnostics.
+
 ## [v0.7.3] — Patch (2026-07-22)
 
 ### Agent Reports

@@ -73,4 +73,14 @@ export interface AgentBackendConfig {
   disallowed_tools?: string[];
   /** When true, inject --output-format json and parse the agent's stdout as the report. */
   use_output_format_json?: boolean;
+  /** Codex CLI sandbox policy. Only used by the built-in codex-cli backend. */
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  /** Codex CLI config profile layered over the user's base config. */
+  profile?: string;
+  /** Codex reasoning effort override, passed through as a config value. */
+  reasoning_effort?: string;
+  /** Enable Codex live web search for this invocation. */
+  search?: boolean;
+  /** Run Codex without persisting a reusable session. Defaults to true. */
+  ephemeral?: boolean;
 }

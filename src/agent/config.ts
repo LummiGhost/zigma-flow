@@ -14,7 +14,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { AgentBackend } from "./types.js";
-import { agentFactory, ClaudeCodeBackend } from "./index.js";
+import { agentFactory, ClaudeCodeBackend, CodexCliBackend } from "./index.js";
 import { ConfigError } from "../utils/index.js";
 
 // ---------------------------------------------------------------------------
@@ -38,6 +38,11 @@ export interface AgentBackendConfigEntry {
   allowed_tools?: string[];
   /** Tools the agent is not allowed to use. Injected as --disallowedTools before the prompt. */
   disallowed_tools?: string[];
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  profile?: string;
+  reasoning_effort?: string;
+  search?: boolean;
+  ephemeral?: boolean;
 }
 
 /**
@@ -62,6 +67,11 @@ export interface StepBackendOverride {
   allowed_tools?: string[];
   /** Override --disallowedTools for this step. */
   disallowed_tools?: string[];
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  profile?: string;
+  reasoning_effort?: string;
+  search?: boolean;
+  ephemeral?: boolean;
   /** Override timeout (ms) for this step. */
   timeout?: number;
 }
@@ -109,6 +119,14 @@ const DEFAULT_CLAUDE_CODE_CONFIG: AgentBackendConfigEntry = {
   // max_turns: 50,                       // optional: set --max-turns
   // allowed_tools: ["Read", "Write"],    // optional: set --allowedTools
   // disallowed_tools: ["Bash"],          // optional: set --disallowedTools
+};
+
+const DEFAULT_CODEX_CLI_CONFIG: AgentBackendConfigEntry = {
+  command: "codex",
+  args: ["exec", "-", "--json", "--color", "never"],
+  timeout: 600_000,
+  sandbox: "workspace-write",
+  ephemeral: true,
 };
 
 /** Default parallelism when config.json does not specify one (AD-P14-007). */
@@ -207,9 +225,11 @@ export function resolveBackendForStep(
 
   // Resolve base config for the named backend
   let baseConfig: AgentBackendConfigEntry;
-  const isBuiltin = backendName === "claude-code";
+  const isBuiltin = backendName === "claude-code" || backendName === "codex-cli";
   if (isBuiltin && !(backendName in backends)) {
-    baseConfig = { ...DEFAULT_CLAUDE_CODE_CONFIG };
+    baseConfig = backendName === "codex-cli"
+      ? { ...DEFAULT_CODEX_CLI_CONFIG }
+      : { ...DEFAULT_CLAUDE_CODE_CONFIG };
   } else {
     const entry = backends[backendName];
     if (entry === undefined) {
@@ -233,6 +253,11 @@ export function resolveBackendForStep(
     if (overrideObj.max_turns !== undefined) baseConfig.max_turns = overrideObj.max_turns;
     if (overrideObj.allowed_tools !== undefined) baseConfig.allowed_tools = overrideObj.allowed_tools;
     if (overrideObj.disallowed_tools !== undefined) baseConfig.disallowed_tools = overrideObj.disallowed_tools;
+    if (overrideObj.sandbox !== undefined) baseConfig.sandbox = overrideObj.sandbox;
+    if (overrideObj.profile !== undefined) baseConfig.profile = overrideObj.profile;
+    if (overrideObj.reasoning_effort !== undefined) baseConfig.reasoning_effort = overrideObj.reasoning_effort;
+    if (overrideObj.search !== undefined) baseConfig.search = overrideObj.search;
+    if (overrideObj.ephemeral !== undefined) baseConfig.ephemeral = overrideObj.ephemeral;
     if (overrideObj.timeout !== undefined) baseConfig.timeout = overrideObj.timeout;
   }
 
@@ -262,6 +287,9 @@ export function createBackend(
   if (!agentFactory.get("claude-code")) {
     agentFactory.register("claude-code", ClaudeCodeBackend);
   }
+  if (!agentFactory.get("codex-cli")) {
+    agentFactory.register("codex-cli", CodexCliBackend);
+  }
   // Register any configured custom backend using ClaudeCodeBackend as its generic implementation
   if (!agentFactory.get(name)) {
     agentFactory.register(name, ClaudeCodeBackend);
@@ -278,5 +306,10 @@ export function createBackend(
     ...(config.allowed_tools !== undefined ? { allowed_tools: config.allowed_tools } : {}),
     ...(config.disallowed_tools !== undefined ? { disallowed_tools: config.disallowed_tools } : {}),
     ...(config.use_output_format_json !== undefined ? { use_output_format_json: config.use_output_format_json } : {}),
+    ...(config.sandbox !== undefined ? { sandbox: config.sandbox } : {}),
+    ...(config.profile !== undefined ? { profile: config.profile } : {}),
+    ...(config.reasoning_effort !== undefined ? { reasoning_effort: config.reasoning_effort } : {}),
+    ...(config.search !== undefined ? { search: config.search } : {}),
+    ...(config.ephemeral !== undefined ? { ephemeral: config.ephemeral } : {}),
   });
 }

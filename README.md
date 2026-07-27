@@ -172,7 +172,8 @@ intake
 
 ### Agent Backend Configuration
 
-The agent backend (default: `claude-code`) is configured in `.zigma-flow/config.json`:
+The agent backend (default: `claude-code`) is configured in `.zigma-flow/config.json`.
+Zigma Flow also includes a native `codex-cli` backend:
 
 ```json
 {
@@ -189,6 +190,24 @@ The agent backend (default: `claude-code`) is configured in `.zigma-flow/config.
   }
 }
 ```
+
+To run the same workflow with Codex CLI, no explicit backend entry is required:
+
+```json
+{
+  "agent": {
+    "backend": "codex-cli",
+    "backends": {}
+  }
+}
+```
+
+The built-in Codex adapter uses `codex exec -`, sends the composed prompt over
+stdin, captures JSONL events for audit, and writes the final message directly
+to `report.json`. Optional Codex settings can be declared in
+`backends.codex-cli`, including `model`, `profile`, `sandbox`,
+`reasoning_effort`, `search`, and `ephemeral`. See the
+[Codex CLI backend research and transport design](./docs/research/codex-cli-backend.md).
 
 Parallelism controls how many read-only jobs run concurrently during
 `invoke`. Set `agent.parallelism` in the config or pass `--parallelism <N>`

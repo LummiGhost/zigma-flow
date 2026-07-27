@@ -98,6 +98,16 @@ const StepBackendOverrideSchema = z.object({
   /** @stability experimental */
   disallowed_tools: z.array(z.string()).optional(),
   /** @stability experimental */
+  sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional(),
+  /** @stability experimental */
+  profile: z.string().optional(),
+  /** @stability experimental */
+  reasoning_effort: z.string().optional(),
+  /** @stability experimental */
+  search: z.boolean().optional(),
+  /** @stability experimental */
+  ephemeral: z.boolean().optional(),
+  /** @stability experimental */
   timeout: z.number().int().positive().optional(),
 });
 

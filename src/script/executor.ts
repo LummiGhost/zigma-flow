@@ -655,6 +655,18 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       return;
     }
 
+    // Step-level failure_policy: continue — treat step failure as non-blocking (#264).
+    // step_failed is already emitted. Leave the job "running" so executeNonAgentStep
+    // calls advanceJob, which advances the step pointer or emits job_completed when
+    // this is the last step.
+    if (stepDef.failure_policy === "continue") {
+      await stateStore.writeSnapshot(runDir, {
+        ...runningState,
+        last_event_id: stepFailedId,
+      });
+      return;
+    }
+
     // Apply on_failure override (status "failed" | "blocked"; default is "failed")
     let finalJobStatus: "failed" | "blocked" = "failed";
     if (

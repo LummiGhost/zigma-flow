@@ -19,6 +19,14 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.8.2] — Patch (2026-07-31)
+
+### Engine Fixes
+
+- [runtime] Fix `failure_policy: continue` on script step: when a step exits non-zero and the policy is `continue`, the job was immediately set to `failed` and `run_failed` was emitted, even for the TDD red-phase use case. The step now leaves the job `running` so `advanceJob` either advances to the next step or emits `job_completed` when it is the last step (#264).
+- [runtime] Fix `applyStatusReturn`: when a status value is declared in `returns.status.values` but has no explicit `on_return` mapping, the runtime now defaults to `continue` (happy-path fallthrough) instead of throwing a `ValidationError`. This unblocks workflows where only special-routing statuses need `on_return` entries (#263).
+- [tests] Add test coverage for `failure_policy: continue` (single-step and multi-step) and `on_return` happy-path default.
+
 ## [v0.8.1] — Patch (2026-07-31)
 
 ### Script Step Fixes

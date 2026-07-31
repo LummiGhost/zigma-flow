@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 import { loadWorkflowFile } from "../workflow/index.js";
+import type { RouterAction } from "../workflow/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import { StateError, ValidationError } from "../utils/index.js";
@@ -137,14 +138,10 @@ export async function applyStatusReturn(opts: ApplyStatusReturnOpts): Promise<vo
   }
 
   // ── 6. Look up on_return mapping for the status ──────────────────────────
-
-  const action = stepDef.on_return?.[status];
-  if (action === undefined) {
-    throw new ValidationError(
-      `No on_return mapping found for status "${status}" on step "${sourceStepId}"`,
-      { details: { jobId: sourceJobId, stepId: sourceStepId, status } }
-    );
-  }
+  // When no explicit mapping is present, "continue" is the default: the job
+  // proceeds to the next step (or completes if this is the last step) without
+  // additional routing (#263 — happy-path fallthrough).
+  const action: RouterAction = stepDef.on_return?.[status] ?? "continue";
 
   // ── 7. Determine action discriminator string ─────────────────────────────
 

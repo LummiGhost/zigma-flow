@@ -923,7 +923,7 @@ describe("applyStatusReturn — on_return missing mapping (FR-STATUS-RETURN-008)
   });
 
   it(
-    "throws ValidationError when status is in values but has no on_return mapping (FR-STATUS-RETURN-008, UC-RETURNS-008, FP-STATUS-RETURN-008)",
+    "defaults to continue when status is in values but has no on_return mapping (FR-STATUS-RETURN-008, UC-RETURNS-008, FP-STATUS-RETURN-008, #263)",
     async () => {
       const { runId, runDir } = await bootstrapRun(
         sandbox,
@@ -937,26 +937,25 @@ describe("applyStatusReturn — on_return missing mapping (FR-STATUS-RETURN-008)
         attempt: 1,
       });
 
-      const eventsBefore = await readEventsBytes(runDir);
-      const stateBefore = await readStateBytes(runDir);
+      // rejected is in values [approved, rejected] but on_return only maps approved.
+      // The happy-path status "rejected" should default to "continue" — no error.
+      await callApplyStatusReturn({
+        runDir,
+        runId,
+        sourceJobId: "review",
+        sourceStepId: "review-step",
+        attempt: 1,
+        status: "rejected",
+        clock: new FakeClock(),
+      });
 
-      // rejected is in values [approved, rejected] but on_return only maps approved
-      await expect(
-        callApplyStatusReturn({
-          runDir,
-          runId,
-          sourceJobId: "review",
-          sourceStepId: "review-step",
-          attempt: 1,
-          status: "rejected",
-          clock: new FakeClock(),
-        })
-      ).rejects.toMatchObject({ kind: "ValidationError" });
-
-      const eventsAfter = await readEventsBytes(runDir);
-      const stateAfter = await readStateBytes(runDir);
-      expect(eventsAfter).toBe(eventsBefore);
-      expect(stateAfter).toBe(stateBefore);
+      const events = await readEvents(runDir);
+      const returnedEvent = events.find((e) => e.type === "step_returned");
+      expect(returnedEvent).toBeDefined();
+      expect(returnedEvent!.payload).toMatchObject({
+        status: "rejected",
+        mapped_action: "continue",
+      });
     }
   );
 });

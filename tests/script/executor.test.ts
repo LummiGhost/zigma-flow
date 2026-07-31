@@ -1598,3 +1598,110 @@ jobs:
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// T-SCRIPT-264: failure_policy: continue (issue #264)
+// ---------------------------------------------------------------------------
+
+describe("executeScriptStep — failure_policy: continue (T-SCRIPT-264)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    sandbox && await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "emits step_failed then job_completed when last step has failure_policy: continue (T-SCRIPT-264a)",
+    async () => {
+      const workflowYaml = `\
+name: tdd-red-phase
+version: "0.1.0"
+jobs:
+  write-tests:
+    steps:
+      - id: verify-red
+        type: script
+        run: "npm test"
+        failure_policy: continue
+`;
+      const { runId, runDir } = await bootstrapScriptRun(sandbox, workflowYaml);
+
+      const runner = new FakeRunner({
+        exitCode: 1,
+        timedOut: false,
+        stdout: "FAIL: 3 tests failed",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({ runDir, zigmaflowDir: sandbox.zigmaflowDir, runId, jobId: "write-tests", runner })
+      );
+
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+
+      // step_failed must be emitted (step did fail)
+      expect(types).toContain("step_failed");
+      // but run should NOT abort — job leaves "running" for advanceJob to complete
+      expect(types).not.toContain("run_failed");
+      expect(types).not.toContain("job_failed");
+
+      // job state must remain "running" so executeNonAgentStep can call advanceJob
+      const stateStore = new LocalStateStore();
+      const state = await stateStore.readSnapshot(runDir);
+      expect(state?.jobs["write-tests"]?.status).toBe("running");
+    }
+  );
+
+  it(
+    "leaves job running for multi-step continuation when non-last step has failure_policy: continue (T-SCRIPT-264b)",
+    async () => {
+      const workflowYaml = `\
+name: tdd-multi-step
+version: "0.1.0"
+jobs:
+  tdd:
+    steps:
+      - id: verify-red
+        type: script
+        run: "npm test"
+        failure_policy: continue
+      - id: implement
+        type: script
+        run: "echo implement"
+`;
+      const { runId, runDir } = await bootstrapScriptRun(sandbox, workflowYaml);
+
+      const runner = new FakeRunner({
+        exitCode: 1,
+        timedOut: false,
+        stdout: "FAIL",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({ runDir, zigmaflowDir: sandbox.zigmaflowDir, runId, jobId: "tdd", runner })
+      );
+
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+
+      expect(types).toContain("step_failed");
+      expect(types).not.toContain("job_failed");
+      expect(types).not.toContain("job_completed");
+
+      // job must still be "running" so advanceJob can advance to "implement"
+      const stateStore = new LocalStateStore();
+      const state = await stateStore.readSnapshot(runDir);
+      expect(state?.jobs["tdd"]?.status).toBe("running");
+    }
+  );
+});

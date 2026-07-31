@@ -41,7 +41,7 @@ import { randomUUID } from "node:crypto";
 import { runInit } from "../../src/init/index.js";
 import { loadWorkflow } from "../../src/workflow/index.js";
 import type { WorkflowDefinition } from "../../src/workflow/index.js";
-import { createRun, executeCurrentStep } from "../../src/engine/index.js";
+import { advanceJob, createRun, executeCurrentStep } from "../../src/engine/index.js";
 import { acceptAgentReport } from "../../src/engine/accept.js";
 import type { Clock, JobState, RunState } from "../../src/run/index.js";
 import { LocalStateStore } from "../../src/run/index.js";
@@ -308,6 +308,14 @@ async function runExecutedJob(
     clock,
     runner,
   });
+
+  // Advance to the next step if the job is still running (multi-step jobs).
+  // Mirrors the behaviour of executeNonAgentStep in runAll.ts.
+  const stateStore = new LocalStateStore();
+  const postState = await stateStore.readSnapshot(runDir);
+  if (postState?.jobs[jobId]?.status === "running") {
+    await advanceJob({ runDir, runId, jobId, clock });
+  }
 }
 
 // ---------------------------------------------------------------------------

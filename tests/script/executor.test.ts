@@ -49,8 +49,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 
-import { createRun } from "../../src/engine/index.js";
+import { advanceJob, createRun } from "../../src/engine/index.js";
 import type { Clock, RunState } from "../../src/run/index.js";
+import { LocalStateStore } from "../../src/run/index.js";
 import { executeScriptStep } from "../../src/script/executor.js";
 
 // ---------------------------------------------------------------------------
@@ -1330,6 +1331,270 @@ jobs:
       expect(runner.calls[0]!.command).toBe(
         "echo ${{ jobs.nonexistent.outputs.val }}"
       );
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-SCRIPT-259: Multi-step script job runs all steps (issue #259)
+// ---------------------------------------------------------------------------
+
+describe("executeScriptStep — multi-step script job (T-SCRIPT-259)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    sandbox && await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "runs all steps in a multi-step script job; job_completed emitted only after the last step (T-SCRIPT-259)",
+    async () => {
+      const workflowYaml = `\
+name: multi-step-test
+version: "0.1.0"
+jobs:
+  work:
+    steps:
+      - id: step-one
+        type: script
+        run: "echo one"
+      - id: step-two
+        type: script
+        run: "echo two"
+      - id: step-three
+        type: script
+        run: "echo three"
+`;
+      const { runId, runDir } = await bootstrapScriptRun(sandbox, workflowYaml);
+      const stateStore = new LocalStateStore();
+
+      const makeRunner = () =>
+        new FakeRunner({
+          exitCode: 0,
+          timedOut: false,
+          stdout: "",
+          stderr: "",
+          startedAt: FIXED_ISO,
+          endedAt: FIXED_ISO,
+        });
+
+      // Step 1
+      const runner1 = makeRunner();
+      await executeScriptStep(
+        makeExecutorOpts({ runDir, zigmaflowDir: sandbox.zigmaflowDir, runId, jobId: "work", runner: runner1 })
+      );
+      // After step 1: job still running, NOT completed
+      const afterStep1 = await stateStore.readSnapshot(runDir);
+      expect(afterStep1?.jobs["work"]?.status).toBe("running");
+
+      // Advance pointer (mirrors executeNonAgentStep behaviour)
+      await advanceJob({ runDir, runId, jobId: "work", clock: new FakeClock() });
+
+      // Step 2
+      const runner2 = makeRunner();
+      await executeScriptStep(
+        makeExecutorOpts({ runDir, zigmaflowDir: sandbox.zigmaflowDir, runId, jobId: "work", runner: runner2 })
+      );
+      const afterStep2 = await stateStore.readSnapshot(runDir);
+      expect(afterStep2?.jobs["work"]?.status).toBe("running");
+
+      await advanceJob({ runDir, runId, jobId: "work", clock: new FakeClock() });
+
+      // Step 3 (last step)
+      const runner3 = makeRunner();
+      await executeScriptStep(
+        makeExecutorOpts({ runDir, zigmaflowDir: sandbox.zigmaflowDir, runId, jobId: "work", runner: runner3 })
+      );
+      const afterStep3 = await stateStore.readSnapshot(runDir);
+      expect(afterStep3?.jobs["work"]?.status).toBe("completed");
+
+      // All three runners were each called exactly once
+      expect(runner1.calls.length).toBe(1);
+      expect(runner2.calls.length).toBe(1);
+      expect(runner3.calls.length).toBe(1);
+
+      // job_completed emitted exactly once (after step 3 only)
+      const events = await readEvents(runDir);
+      const jobCompletedEvents = events.filter((e) => e.type === "job_completed");
+      expect(jobCompletedEvents.length).toBe(1);
+
+      // All three steps emitted step_completed
+      const stepCompletedEvents = events.filter((e) => e.type === "step_completed");
+      expect(stepCompletedEvents.length).toBe(3);
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-SCRIPT-260: ${{ inputs.xxx }} interpolation in script step run: fields (issue #260)
+// ---------------------------------------------------------------------------
+
+describe("executeScriptStep — inputs template interpolation (T-SCRIPT-260)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    sandbox && await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "interpolates ${{ inputs.xxx }} in script step run: field using CLI --input values (T-SCRIPT-260)",
+    async () => {
+      const workflowYaml = `\
+name: inputs-interp-test
+version: "0.1.0"
+inputs:
+  branch:
+    type: string
+    required: true
+jobs:
+  checkout:
+    steps:
+      - id: git-checkout
+        type: script
+        run: "git checkout \${{ inputs.branch }}"
+`;
+      const workflowPath = join(sandbox.projectRoot, "inputs-interp-test.yml");
+      await writeFile(workflowPath, workflowYaml, "utf-8");
+
+      const { runId } = await createRun({
+        workflowPath,
+        task: "checkout branch",
+        runsDir: sandbox.runsDir,
+        skillLockPath: sandbox.skillLockPath,
+        clock: new FakeClock(),
+        inputs: { branch: "my-feature" },
+      });
+      const runDir = join(sandbox.runsDir, runId);
+
+      const runner = new FakeRunner({
+        exitCode: 0,
+        timedOut: false,
+        stdout: "",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({ runDir, zigmaflowDir: sandbox.zigmaflowDir, runId, jobId: "checkout", runner })
+      );
+
+      expect(runner.calls.length).toBe(1);
+      // ${{ inputs.branch }} must be replaced with "my-feature"
+      expect(runner.calls[0]!.command).toBe("git checkout my-feature");
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-SCRIPT-261: failure_policy: expect_failure (issue #261)
+// ---------------------------------------------------------------------------
+
+describe("executeScriptStep — failure_policy: expect_failure (T-SCRIPT-261)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    sandbox && await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "treats non-zero exit as success when failure_policy is expect_failure (T-SCRIPT-261a)",
+    async () => {
+      const workflowYaml = `\
+name: expect-failure-test
+version: "0.1.0"
+jobs:
+  tdd:
+    steps:
+      - id: verify-red
+        type: script
+        run: "npm test"
+        failure_policy: expect_failure
+`;
+      const { runId, runDir } = await bootstrapScriptRun(sandbox, workflowYaml);
+
+      const runner = new FakeRunner({
+        exitCode: 1,
+        timedOut: false,
+        stdout: "FAIL: 3 tests failed",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({ runDir, zigmaflowDir: sandbox.zigmaflowDir, runId, jobId: "tdd", runner })
+      );
+
+      // Non-zero exit with expect_failure → job completed (success)
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+      expect(types).toContain("step_completed");
+      expect(types).toContain("job_completed");
+      expect(types).not.toContain("step_failed");
+
+      const snapshot = await readEvents(runDir);
+      const stateStore = new LocalStateStore();
+      const state = await stateStore.readSnapshot(runDir);
+      expect(state?.jobs["tdd"]?.status).toBe("completed");
+    }
+  );
+
+  it(
+    "treats zero exit as failure when failure_policy is expect_failure (T-SCRIPT-261b)",
+    async () => {
+      const workflowYaml = `\
+name: expect-failure-test
+version: "0.1.0"
+jobs:
+  tdd:
+    steps:
+      - id: verify-red
+        type: script
+        run: "npm test"
+        failure_policy: expect_failure
+`;
+      const { runId, runDir } = await bootstrapScriptRun(sandbox, workflowYaml);
+
+      const runner = new FakeRunner({
+        exitCode: 0,
+        timedOut: false,
+        stdout: "All tests passed",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({ runDir, zigmaflowDir: sandbox.zigmaflowDir, runId, jobId: "tdd", runner })
+      );
+
+      // Zero exit with expect_failure → step failed (unexpected success)
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+      expect(types).toContain("step_failed");
+      expect(types).not.toContain("step_completed");
+      expect(types).not.toContain("job_completed");
+
+      const stateStore = new LocalStateStore();
+      const state = await stateStore.readSnapshot(runDir);
+      expect(state?.jobs["tdd"]?.status).toBe("failed");
+
+      // Reason should indicate unexpected success
+      const stepFailed = events.find((e) => e.type === "step_failed");
+      expect(String(stepFailed?.payload["reason"])).toMatch(/expected non-zero exit but got exit code 0/);
     }
   );
 });

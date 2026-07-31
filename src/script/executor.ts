@@ -105,13 +105,19 @@ function parseTimeoutMs(timeout: string | undefined): number | undefined {
 }
 
 /**
- * Parse run.yml to extract the workflow file path.
+ * Parse run.yml to extract the workflow file path and run-level inputs.
  */
 interface RunYmlShape {
   workflow?: { path?: string };
+  inputs?: Record<string, string>;
 }
 
-async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
+interface RunYmlData {
+  workflowPath: string;
+  inputs: Record<string, string>;
+}
+
+async function readRunYmlData(runDir: string): Promise<RunYmlData> {
   const runYmlPath = join(runDir, "run.yml");
   let raw: string;
   try {
@@ -132,7 +138,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
   if (typeof wfPath !== "string" || wfPath.length === 0) {
     throw new StateError(`run.yml is missing workflow.path in: ${runDir}`);
   }
-  return wfPath;
+  return { workflowPath: wfPath, inputs: shape?.inputs ?? {} };
 }
 
 /**
@@ -217,7 +223,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
 
   // ── 2. Load workflow to resolve step definition ──────────────────────────
 
-  const workflowPath = await readWorkflowPathFromRunYml(runDir);
+  const { workflowPath, inputs: runInputs } = await readRunYmlData(runDir);
   const wf = await loadWorkflowFile(workflowPath);
 
   const jobDef = wf.jobs[jobId];
@@ -305,7 +311,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     stepsCtx[prevStepId] = { outputs: jobState.outputs ?? {} };
   }
   const exprCtx: ExpressionContext = {
-    inputs: {},
+    inputs: runInputs,
     run: { id: runId, workflow: state.workflow, dir: runDir },
     jobs: Object.fromEntries(
       Object.entries(state.jobs).map(([jId, j]) => [jId, { outputs: j.outputs ?? {} }])
@@ -423,7 +429,13 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
 
   // ── 10. Determine success/failure and emit terminal events ────────────────
 
-  const isSuccess = runnerResult.exitCode === 0 && !runnerResult.timedOut;
+  // failure_policy: expect_failure inverts exit-code semantics (#261):
+  //   success = non-zero exit (expected failure confirmed)
+  //   failure = zero exit    (unexpected success)
+  const expectFailure = stepDef.failure_policy === "expect_failure";
+  const isSuccess = expectFailure
+    ? runnerResult.exitCode !== 0 && !runnerResult.timedOut
+    : runnerResult.exitCode === 0 && !runnerResult.timedOut;
 
   if (isSuccess) {
     // ── 10a. Success path ──────────────────────────────────────────────────
@@ -441,100 +453,113 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       payload: { job_id: jobId, step_id: stepId, attempt },
     });
 
-    const jobCompletedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
-      id: jobCompletedId,
-      run_id: runId,
-      type: "job_completed",
-      timestamp: clock.now(),
-      producer: "engine",
-      job: jobId,
-      step: null,
-      attempt,
-      payload: { job_id: jobId, attempt },
-    });
+    // ── 10a-i. Multi-step check: only complete the job on the last step (#259)
+    const currentStepIdx = jobDef.steps.findIndex((s) => s.id === stepId);
+    const hasMoreSteps = currentStepIdx >= 0 && currentStepIdx + 1 < jobDef.steps.length;
 
-    // Write final state snapshot: job running → completed, then propagate readiness
-    let finalState: RunState = {
-      ...runningState,
-      last_event_id: jobCompletedId,
-      jobs: {
-        ...runningState.jobs,
-        [jobId]: {
-          ...runningState.jobs[jobId]!,
-          status: "completed",
-        },
-      },
-    };
-
-    // Propagate readiness to downstream jobs whose needs are now all satisfied
-    const completedJobIds = new Set<string>(
-      Object.entries(finalState.jobs)
-        .filter(([, js]) => js.status === "completed")
-        .map(([id]) => id)
-    );
-    const activeJobIds = new Set<string>(
-      Object.keys(finalState.jobs).filter(
-        (id) => !completedJobIds.has(id) && finalState.jobs[id]!.status !== "waiting"
-      )
-    );
-    const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds, finalState.jobs);
-
-    for (const readyId of nowReadyIds) {
-      const waitingJobState = finalState.jobs[readyId];
-      if (waitingJobState?.status !== "waiting") continue;
-
-      const jobReadyId = getNextEventId();
+    if (hasMoreSteps) {
+      // Not the last step — leave job "running" so executeNonAgentStep can call advanceJob
+      await stateStore.writeSnapshot(runDir, {
+        ...runningState,
+        last_event_id: stepCompletedId,
+      });
+    } else {
+      // Last step — emit job_completed and handle run completion
+      const jobCompletedId = getNextEventId();
       await eventWriter.appendEvent(runDir, {
-        id: jobReadyId,
+        id: jobCompletedId,
         run_id: runId,
-        type: "job_ready",
+        type: "job_completed",
         timestamp: clock.now(),
         producer: "engine",
-        job: null,
+        job: jobId,
         step: null,
-        attempt: null,
-        payload: { job_id: readyId },
+        attempt,
+        payload: { job_id: jobId, attempt },
       });
 
-      finalState = {
-        ...finalState,
-        last_event_id: jobReadyId,
+      // Write final state snapshot: job running → completed, then propagate readiness
+      let finalState: RunState = {
+        ...runningState,
+        last_event_id: jobCompletedId,
         jobs: {
-          ...finalState.jobs,
-          [readyId]: { ...waitingJobState, status: "ready" as const },
+          ...runningState.jobs,
+          [jobId]: {
+            ...runningState.jobs[jobId]!,
+            status: "completed",
+          },
         },
       };
-    }
 
-    // Emit run_completed if all non-inactive jobs are done
-    const allNonInactiveCompleted = Object.values(finalState.jobs).every(
-      (js) => js.status === "completed" || js.status === "inactive"
-    );
-    const hasCompletedJob = Object.values(finalState.jobs).some(
-      (js) => js.status === "completed"
-    );
-    if (allNonInactiveCompleted && hasCompletedJob) {
-      const runCompletedId = getNextEventId();
-      await eventWriter.appendEvent(runDir, {
-        id: runCompletedId,
-        run_id: runId,
-        type: "run_completed",
-        timestamp: clock.now(),
-        producer: "engine",
-        job: null,
-        step: null,
-        attempt: null,
-        payload: {},
-      });
-      finalState = {
-        ...finalState,
-        last_event_id: runCompletedId,
-        status: "completed",
-      };
-    }
+      // Propagate readiness to downstream jobs whose needs are now all satisfied
+      const completedJobIds = new Set<string>(
+        Object.entries(finalState.jobs)
+          .filter(([, js]) => js.status === "completed")
+          .map(([id]) => id)
+      );
+      const activeJobIds = new Set<string>(
+        Object.keys(finalState.jobs).filter(
+          (id) => !completedJobIds.has(id) && finalState.jobs[id]!.status !== "waiting"
+        )
+      );
+      const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds, finalState.jobs);
 
-    await stateStore.writeSnapshot(runDir, finalState);
+      for (const readyId of nowReadyIds) {
+        const waitingJobState = finalState.jobs[readyId];
+        if (waitingJobState?.status !== "waiting") continue;
+
+        const jobReadyId = getNextEventId();
+        await eventWriter.appendEvent(runDir, {
+          id: jobReadyId,
+          run_id: runId,
+          type: "job_ready",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: null,
+          step: null,
+          attempt: null,
+          payload: { job_id: readyId },
+        });
+
+        finalState = {
+          ...finalState,
+          last_event_id: jobReadyId,
+          jobs: {
+            ...finalState.jobs,
+            [readyId]: { ...waitingJobState, status: "ready" as const },
+          },
+        };
+      }
+
+      // Emit run_completed if all non-inactive jobs are done
+      const allNonInactiveCompleted = Object.values(finalState.jobs).every(
+        (js) => js.status === "completed" || js.status === "inactive"
+      );
+      const hasCompletedJob = Object.values(finalState.jobs).some(
+        (js) => js.status === "completed"
+      );
+      if (allNonInactiveCompleted && hasCompletedJob) {
+        const runCompletedId = getNextEventId();
+        await eventWriter.appendEvent(runDir, {
+          id: runCompletedId,
+          run_id: runId,
+          type: "run_completed",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: null,
+          step: null,
+          attempt: null,
+          payload: {},
+        });
+        finalState = {
+          ...finalState,
+          last_event_id: runCompletedId,
+          status: "completed",
+        };
+      }
+
+      await stateStore.writeSnapshot(runDir, finalState);
+    }
   } else {
     // ── 10b. Failure path ──────────────────────────────────────────────────
 
@@ -542,7 +567,9 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       ? timeoutMs !== undefined
         ? `timeout after ${timeoutMs}ms`
         : "timeout"
-      : `exit code ${runnerResult.exitCode}`;
+      : expectFailure
+        ? `expected non-zero exit but got exit code ${runnerResult.exitCode}`
+        : `exit code ${runnerResult.exitCode}`;
 
     const stepFailedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {

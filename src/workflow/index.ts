@@ -74,9 +74,9 @@ export interface SignalDeclaration {
 // ---------------------------------------------------------------------------
 
 /** @stability experimental — may change in any minor version release without deprecation */
-const FailurePolicySchema = z.enum(["fail", "continue", "block"]);
+const FailurePolicySchema = z.enum(["fail", "continue", "block", "expect_failure"]);
 
-export type FailurePolicySchemaType = "fail" | "continue" | "block";
+export type FailurePolicySchemaType = "fail" | "continue" | "block" | "expect_failure";
 
 // ---------------------------------------------------------------------------
 // Step schemas
@@ -301,8 +301,8 @@ export interface StepDefinition {
   cwd?: string;
   env?: Record<string, string>;
   on_failure?: RouterAction;
-  // WF-7.3b: Failure policy (override job-level)
-  failure_policy?: "fail" | "continue" | "block";
+  // WF-7.3b: Failure policy (override job-level); "expect_failure" inverts exit-code semantics (#261)
+  failure_policy?: "fail" | "continue" | "block" | "expect_failure";
   // Check step fields (D2 — WF-P7-CHECK)
   on_pass?: RouterAction;
   on_fail?: RouterAction;

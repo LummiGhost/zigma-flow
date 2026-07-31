@@ -19,6 +19,15 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.8.1] — Patch (2026-07-31)
+
+### Script Step Fixes
+
+- [runtime] Fix multi-step script job: subsequent steps were never executed because `executeScriptStep` unconditionally emitted `job_completed` after the first step regardless of remaining steps (#259).
+- [runtime] Fix `${{ inputs.xxx }}` template expressions not being interpolated in script step `run:` fields; run-level inputs from `run.yml` are now passed to the expression context (#260).
+- [DSL] Add `failure_policy: expect_failure` for script steps — non-zero exit is treated as success and zero exit as failure, enabling TDD red-phase gates (#261).
+- [tests] Add test coverage for all three fixes: multi-step execution, inputs interpolation, and `expect_failure` semantics.
+
 ## [v0.8.0] — Codex CLI Backend (2026-07-27)
 
 ### Agent Backends

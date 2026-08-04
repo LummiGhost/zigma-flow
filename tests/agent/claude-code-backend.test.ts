@@ -713,6 +713,122 @@ describe("ClaudeCodeBackend — env var interpolation (T-CCB-011)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// T-CCB-012: Large prompt is delivered via stdin, writes agent.prompt.txt
+// ---------------------------------------------------------------------------
+
+describe("ClaudeCodeBackend — large prompt via stdin (T-CCB-012)", () => {
+  let temp: TempDirs;
+
+  beforeEach(async () => {
+    temp = await makeTempDirs();
+  });
+
+  afterEach(async () => {
+    await rm(temp.projectRoot, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it(
+    "writes agent.prompt.txt and records prompt_delivery:stdin for prompts > 20 KB (T-CCB-012)",
+    async () => {
+      // Write a valid report.json in advance (node backend doesn't write it)
+      await writeFile(
+        temp.reportPath,
+        JSON.stringify({ outputs: {}, artifacts: [], signals: [], summary: "ok" }, null, 2),
+        "utf-8"
+      );
+
+      // node -e with stdin: read stdin and exit 0 without writing anything
+      const backend = new ClaudeCodeBackend({
+        command: "node",
+        args: ["-e", "process.stdin.resume(); process.stdin.on('data', () => {}); process.stdin.on('end', () => process.exit(0))"],
+        timeout: 10_000,
+      });
+
+      // Build a prompt that exceeds 20 KB
+      const largePrompt = "A".repeat(21_000);
+
+      const result = await backend.execute({
+        prompt: largePrompt,
+        reportPath: temp.reportPath,
+        stepDir: temp.stepDir,
+        projectRoot: temp.projectRoot,
+      });
+
+      // Regardless of success, agent.prompt.txt must exist
+      const promptPath = join(temp.stepDir, "agent.prompt.txt");
+      const promptContent = await readFile(promptPath, "utf-8");
+      expect(promptContent.length).toBeGreaterThan(20_000);
+
+      // Invocation metadata must record prompt_delivery: "stdin"
+      const invocationPath = join(temp.stepDir, "agent.invocation.json");
+      const invocationJson = await readFile(invocationPath, "utf-8");
+      const invocation = JSON.parse(invocationJson) as Record<string, unknown>;
+      expect(invocation["prompt_delivery"]).toBe("stdin");
+      expect(typeof invocation["prompt_bytes"]).toBe("number");
+      expect((invocation["prompt_bytes"] as number)).toBeGreaterThan(20_000);
+
+      // args must NOT contain the raw prompt text
+      const args = invocation["args"] as string[];
+      const argsStr = args.join(" ");
+      expect(argsStr).not.toContain("AAAA");
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-CCB-013: Small prompt is delivered via argv, no agent.prompt.txt written
+// ---------------------------------------------------------------------------
+
+describe("ClaudeCodeBackend — small prompt via argv (T-CCB-013)", () => {
+  let temp: TempDirs;
+
+  beforeEach(async () => {
+    temp = await makeTempDirs();
+  });
+
+  afterEach(async () => {
+    await rm(temp.projectRoot, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it(
+    "does not write agent.prompt.txt and records prompt_delivery:argv for prompts <= 20 KB (T-CCB-013)",
+    async () => {
+      await writeFile(
+        temp.reportPath,
+        JSON.stringify({ outputs: {}, artifacts: [], signals: [], summary: "ok" }, null, 2),
+        "utf-8"
+      );
+
+      const { backend } = makeNodeBackend(["-e", "console.log('ok')"]);
+
+      const result = await backend.execute({
+        prompt: "short prompt",
+        reportPath: temp.reportPath,
+        stepDir: temp.stepDir,
+        projectRoot: temp.projectRoot,
+      });
+
+      // agent.prompt.txt must NOT exist for small prompts
+      const promptPath = join(temp.stepDir, "agent.prompt.txt");
+      let promptExists = false;
+      try {
+        await readFile(promptPath, "utf-8");
+        promptExists = true;
+      } catch {
+        // expected — file should not be written for small prompts
+      }
+      expect(promptExists).toBe(false);
+
+      // Invocation metadata must record prompt_delivery: "argv"
+      const invocationPath = join(temp.stepDir, "agent.invocation.json");
+      const invocationJson = await readFile(invocationPath, "utf-8");
+      const invocation = JSON.parse(invocationJson) as Record<string, unknown>;
+      expect(invocation["prompt_delivery"]).toBe("argv");
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
 // T-CCB-010: Returns exitCode in structured result on failure
 // ---------------------------------------------------------------------------
 

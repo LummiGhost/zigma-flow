@@ -23,6 +23,10 @@ import type { AgentBackend, AgentBackendConfig, AgentExecuteOptions, AgentExecut
 const DEFAULT_TIMEOUT = 600_000; // 10 minutes
 const DEFAULT_ARGS: string[] = ["-p"];
 
+// Prompts larger than this threshold are delivered via stdin rather than as a
+// positional argv argument, avoiding ENAMETOOLONG on Windows (~32 KB limit).
+const STDIN_PROMPT_THRESHOLD_BYTES = 20_000;
+
 export class ClaudeCodeBackend implements AgentBackend {
   readonly name = "claude-code";
 
@@ -116,6 +120,11 @@ export class ClaudeCodeBackend implements AgentBackend {
           "Stop after writing report.json — do not continue to subsequent steps.",
         ].join("\n");
 
+    // Determine prompt delivery: use stdin for large prompts to avoid ENAMETOOLONG
+    // on Windows where the command-line argument limit is ~32 KB.
+    const promptBytes = Buffer.byteLength(fullPrompt, "utf-8");
+    const useStdin = promptBytes > STDIN_PROMPT_THRESHOLD_BYTES;
+
     // b. Capture timing
     const startTime = Date.now();
     let durationMs = 0;
@@ -124,6 +133,12 @@ export class ClaudeCodeBackend implements AgentBackend {
     const stdoutPath = join(stepDir, "agent.stdout.log");
     const stderrPath = join(stepDir, "agent.stderr.log");
     const invocationPath = join(stepDir, "agent.invocation.json");
+    const promptPath = join(stepDir, "agent.prompt.txt");
+
+    // Write prompt to stepDir when using stdin so it is available for diagnostics.
+    if (useStdin) {
+      await writeFile(promptPath, fullPrompt, "utf-8");
+    }
 
     try {
       const mergedEnv = { ...process.env, ...this.env } as Record<string, string>;
@@ -134,6 +149,7 @@ export class ClaudeCodeBackend implements AgentBackend {
         timeout: number;
         env: Record<string, string>;
         cancelSignal?: AbortSignal;
+        input?: string;
       } = {
         cwd: projectRoot,
         timeout: this.timeout,
@@ -142,8 +158,16 @@ export class ClaudeCodeBackend implements AgentBackend {
       if (signal !== undefined) {
         execaOpts.cancelSignal = signal;
       }
+      if (useStdin) {
+        execaOpts.input = fullPrompt;
+      }
 
-      const result = await execa(this.command, [...dynamicArgs, ...this.args, fullPrompt], execaOpts);
+      // Pass prompt via argv for small prompts; via stdin for large ones.
+      const execArgs = useStdin
+        ? [...dynamicArgs, ...this.args]
+        : [...dynamicArgs, ...this.args, fullPrompt];
+
+      const result = await execa(this.command, execArgs, execaOpts);
 
       durationMs = Date.now() - startTime;
 
@@ -152,10 +176,12 @@ export class ClaudeCodeBackend implements AgentBackend {
       await writeFile(stderrPath, result.stderr ?? "", "utf-8");
 
       // Write invocation metadata — args list WITHOUT prompt contents
-      const argsForMetadata = [...this.args, "<prompt>"];
+      const argsForMetadata = [...this.args, useStdin ? "<prompt:stdin>" : "<prompt>"];
       const invocationMeta = {
         command: this.command,
         args: argsForMetadata,
+        prompt_delivery: useStdin ? "stdin" : "argv",
+        prompt_bytes: promptBytes,
         timeout_ms: this.timeout,
         start_time: new Date(startTime).toISOString(),
         end_time: new Date().toISOString(),
@@ -262,10 +288,12 @@ export class ClaudeCodeBackend implements AgentBackend {
       await writeFile(stderrPath, capturedStderr, "utf-8");
 
       // Write invocation metadata
-      const argsForMetadata = [...this.args, "<prompt>"];
+      const argsForMetadata = [...this.args, useStdin ? "<prompt:stdin>" : "<prompt>"];
       const invocationMeta = {
         command: this.command,
         args: argsForMetadata,
+        prompt_delivery: useStdin ? "stdin" : "argv",
+        prompt_bytes: promptBytes,
         timeout_ms: this.timeout,
         start_time: new Date(startTime).toISOString(),
         end_time: new Date().toISOString(),
@@ -311,6 +339,18 @@ export class ClaudeCodeBackend implements AgentBackend {
           error: `ConfigError: Agent command "${this.command}" was not found. Please check your PATH or install the CLI.`,
           stdoutPath,
           stderrPath,
+          durationMs,
+        };
+      }
+
+      // ENAMETOOLONG — prompt exceeded OS argument length limit even after threshold guard
+      if (err.code === "ENAMETOOLONG") {
+        return {
+          success: false,
+          error: `ENAMETOOLONG: prompt (${promptBytes} bytes) exceeded the OS argument length limit. This is unexpected; please report this as a bug.`,
+          stdoutPath,
+          stderrPath,
+          invocationPath,
           durationMs,
         };
       }

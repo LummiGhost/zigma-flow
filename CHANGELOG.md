@@ -19,6 +19,13 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.8.3] — Patch (2026-08-04)
+
+### Agent Backend Fixes
+
+- [runtime] Fix `ENAMETOOLONG` when accumulated run context causes the agent prompt to exceed the OS command-line argument limit (~32 KB on Windows). Prompts larger than 20 KB are now delivered via stdin instead of as a positional argv argument. The prompt is written to `agent.prompt.txt` in the step directory for diagnostics, and `agent.invocation.json` now records `prompt_delivery` (`"argv"` or `"stdin"`) and `prompt_bytes` (#266).
+- [tests] Add T-CCB-012 and T-CCB-013 covering large-prompt stdin delivery and small-prompt argv delivery paths.
+
 ## [v0.8.2] — Patch (2026-07-31)
 
 ### Engine Fixes

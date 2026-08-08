@@ -9,7 +9,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { discoverSkillPacks, loadSkillPack, resolveSkillLock, SkillLockSchema } from "../skill-pack/index.js";
 import { FilesystemError, WorkflowError } from "../utils/index.js";
@@ -146,6 +146,8 @@ export interface BuildContextOpts {
   workflowDef: WorkflowDefinition;
   state: RunState;
   jobId: string;
+  /** Path to the workflow YAML file, used to resolve relative prompt.file paths. */
+  workflowPath?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -161,10 +163,50 @@ export interface BuildContextOpts {
  *   - If `prompt` contains `${{ }}` pattern -> inline template.
  *   - Otherwise -> treated as Skill Pack prompt reference ID.
  */
-export function isInlinePrompt(prompt: string | undefined): boolean {
-  if (prompt === undefined || prompt.trim().length === 0) return false;
+/**
+ * Detect whether a step.prompt value is an inline template (vs. a Skill
+ * Pack prompt reference ID).
+ *
+ * When prompt is an object with `file` (and optional `vars`), it is always
+ * treated as inline — the file content is loaded and vars-interpolated.
+ *
+ * Heuristic for strings:
+ *   - If `prompt` contains newlines -> inline template.
+ *   - If `prompt` contains `${{ }}` pattern -> inline template.
+ *   - Otherwise -> treated as Skill Pack prompt reference ID.
+ */
+export function isInlinePrompt(prompt: string | { file: string; vars?: Record<string, unknown> } | undefined): boolean {
+  if (prompt === undefined) return false;
+  if (typeof prompt === "object") return true; // { file, vars } is always inline
+  if (prompt.trim().length === 0) return false;
   if (prompt.includes("\n")) return true;
   return /\$\{\{/.test(prompt);
+}
+
+/**
+ * Interpolate `{{ vars.<key> }}` and `{{ vars.<key> | join('sep') }}` template
+ * placeholders in a prompt file loaded via `prompt.file`.
+ *
+ * Unknown or missing keys are left as literal placeholders.
+ * Array values without a join filter are joined with ", ".
+ */
+function interpolatePromptVars(template: string, vars: Record<string, unknown>): string {
+  return template.replace(
+    /\{\{\s*vars\.(\w+)(?:\s*\|\s*join\('([^']*)'\))?\s*\}\}/g,
+    (_match: string, key: string, separator: string | undefined) => {
+      const value = vars[key];
+      if (value === undefined || value === null) {
+        return _match;
+      }
+      if (separator !== undefined && Array.isArray(value)) {
+        return value.map(String).join(separator);
+      }
+      if (Array.isArray(value)) {
+        return value.map(String).join(", ");
+      }
+      return String(value);
+    },
+  );
 }
 
 /**
@@ -292,6 +334,11 @@ function primaryPromptCandidates(jobId: string, stepId: string, stepPrompt: unkn
   const candidates: PromptCandidate[] = [];
   const seen = new Set<string>();
 
+  // Object form (file+vars) is always inline — no Skill Pack candidates.
+  if (typeof stepPrompt === "object" && stepPrompt !== null) {
+    return candidates;
+  }
+
   if (
     typeof stepPrompt === "string" &&
     stepPrompt.trim().length > 0 &&
@@ -399,7 +446,47 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
   }
 
   // -----------------------------------------------------------------------
-  // 2. Capability exposure (agent steps with expose.skills only)
+  // 2. Prompt file resolution (prompt.file + prompt.vars)
+  // -----------------------------------------------------------------------
+
+  let primaryPrompt: PrimaryPrompt | undefined;
+  const warnings: string[] = [];
+
+  // Resolve prompt.file early — it does not require Skill Pack loading.
+  if (step.type === "agent" && typeof step.prompt === "object" && step.prompt !== null) {
+    const promptObj = step.prompt as { file: string; vars?: Record<string, unknown> };
+    if (opts.workflowPath === undefined) {
+      throw new WorkflowError(
+        `Step "${step.id}" in job "${jobId}" uses prompt.file but workflow path is not available for relative resolution`,
+        { details: { jobId, stepId: step.id, field: "prompt.file" } },
+      );
+    }
+    const wfDir = dirname(opts.workflowPath);
+    const promptFilePath = join(wfDir, promptObj.file);
+    let rawContent: string;
+    try {
+      rawContent = await readFile(promptFilePath, "utf-8");
+    } catch (e: unknown) {
+      throw new FilesystemError(
+        `Cannot read prompt file "${promptObj.file}" for step "${step.id}" in job "${jobId}": resolved to "${promptFilePath}"`,
+        { cause: e },
+      );
+    }
+    const interpolated = promptObj.vars !== undefined && Object.keys(promptObj.vars).length > 0
+      ? interpolatePromptVars(rawContent, promptObj.vars)
+      : rawContent;
+
+    primaryPrompt = {
+      skill: "",
+      id: "(file)",
+      path: promptObj.file,
+      content: interpolated,
+      source: "step.prompt",
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // 3. Capability exposure (agent steps with expose.skills only)
   // -----------------------------------------------------------------------
 
   const emptyCapabilities: ExposedCapabilities = {
@@ -411,8 +498,6 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
   };
 
   let capabilities: ExposedCapabilities = emptyCapabilities;
-  let primaryPrompt: PrimaryPrompt | undefined;
-  const warnings: string[] = [];
 
   if (step.type === "agent" && step.expose?.skills !== undefined && step.expose.skills.length > 0) {
     const exposedSkills: ExposedSkillRef[] = [];
@@ -557,8 +642,9 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
       tools: exposedTools,
     };
 
-    // Inline prompt resolution — after packs loaded for capabilities + conflict detection
-    if (isInlinePrompt(step.prompt as string | undefined)) {
+    // Inline prompt resolution — after packs loaded for capabilities + conflict detection.
+    // Skip if primaryPrompt already set from prompt.file.
+    if (primaryPrompt === undefined && isInlinePrompt(step.prompt)) {
       // Conflict detection: check if inline text matches any Skill Pack prompt id
       if (typeof step.prompt === "string") {
         const trimmedPrompt = step.prompt.trim();
@@ -589,8 +675,8 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
       };
     }
 
-    // Warnings — only for non-inline prompts
-    if (!isInlinePrompt(step.prompt as string | undefined)) {
+    // Warnings — only for non-inline, non-file prompts
+    if (primaryPrompt === undefined && !isInlinePrompt(step.prompt)) {
       if (primaryPrompt === undefined) {
         const candidates = primaryPromptCandidates(jobId, stepId, step.prompt).map((c) => c.id);
         warnings.push(
@@ -608,8 +694,8 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
         );
       }
     }
-  } else if (step.type === "agent") {
-    if (isInlinePrompt(step.prompt as string | undefined)) {
+  } else if (step.type === "agent" && primaryPrompt === undefined) {
+    if (isInlinePrompt(step.prompt)) {
       // Inline prompt without expose.skills — no packs to load
       const resolvedContent = resolveExpression(
         step.prompt as string,

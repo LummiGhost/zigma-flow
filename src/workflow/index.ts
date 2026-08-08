@@ -121,8 +121,25 @@ const StepBaseSchema = z.object({
   type: z.enum(["agent", "script", "check", "router", "workflow", "human"]),
   /** @stability stable */
   uses: z.string().optional(),
-  /** @stability stable */
-  prompt: z.string().optional(),
+  /**
+   * @stability experimental — may change in any minor version release without deprecation
+   *
+   * Prompt for the step. One of:
+   *   - A string: inline template (multiline or with `${{ }}` expressions)
+   *     or a Skill Pack prompt reference ID.
+   *   - An object with `file` (required, path to prompt file relative to
+   *     the workflow file) and optional `vars` (template variables accessible
+   *     via `{{ vars.<key> }}` in the prompt file).
+   */
+  prompt: z.union([
+    z.string(),
+    z.object({
+      /** @stability experimental — may change in any minor version release without deprecation */
+      file: z.string().min(1),
+      /** @stability experimental — may change in any minor version release without deprecation */
+      vars: z.record(z.string(), z.unknown()).optional(),
+    }).strict(),
+  ]).optional(),
   /** @stability stable */
   expose: z
     .object({
@@ -288,7 +305,14 @@ export interface StepDefinition {
   id: string;
   type: "agent" | "script" | "check" | "router" | "workflow" | "human";
   uses?: string;
-  prompt?: string;
+  /**
+   * @stability experimental — may change in any minor version release without deprecation
+   *
+   * String: inline template or Skill Pack prompt reference ID.
+   * Object: `{ file: string; vars?: Record<string, unknown> }` — load prompt from a file
+   * relative to the workflow file, with optional template variables via `{{ vars.<key> }}`.
+   */
+  prompt?: string | { file: string; vars?: Record<string, unknown> };
   expose?: { skills?: string[]; knowledge?: string[]; [key: string]: unknown };
   with?: Record<string, unknown>;
   outputs?: Record<string, unknown>;
@@ -1643,10 +1667,16 @@ export function loadWorkflow(yamlText: string, options?: LoadWorkflowOptions): W
     for (const step of job.steps) {
       if (step.type !== "human") continue;
 
-      if (step.prompt === undefined || step.prompt.trim().length === 0) {
+      if (step.prompt === undefined || (typeof step.prompt === "string" && step.prompt.trim().length === 0)) {
         throw new ValidationError(
           `Human step "${step.id}" in job "${jobName}" requires a non-empty "prompt" field`,
           { details: { job: jobName, step: step.id, missingField: "prompt" } }
+        );
+      }
+      if (typeof step.prompt !== "string") {
+        throw new ValidationError(
+          `Human step "${step.id}" in job "${jobName}" "prompt" must be a string, not an object with file/vars`,
+          { details: { job: jobName, step: step.id, field: "prompt" } }
         );
       }
 

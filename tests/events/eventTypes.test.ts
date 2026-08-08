@@ -104,7 +104,7 @@ function runEnvelope(id: string, type: ZigmaFlowEventType): EventEnvelope {
 // ---------------------------------------------------------------------------
 
 describe("ZigmaFlowEventType", () => {
-  it("enumerates all 55 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
+  it("enumerates all 58 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
     const expected: ZigmaFlowEventType[] = [
       "run_created",
       "job_ready",
@@ -151,6 +151,10 @@ describe("ZigmaFlowEventType", () => {
       "execution_stopped",
       "job_state_override",
       "job_reset",
+      // Issue #268: Check step poll event types
+      "step_poll_started",
+      "step_poll_tick",
+      "step_poll_timeout",
       // WF-7.1: Attempt model event types
       "attempt_started",
       "attempt_completed",
@@ -167,8 +171,8 @@ describe("ZigmaFlowEventType", () => {
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(55);
-    expect(expected.length).toBe(55);
+    expect(EVENT_TYPES.length).toBe(58);
+    expect(expected.length).toBe(58);
   });
 });
 
@@ -366,6 +370,13 @@ describe("ZigmaFlowEvent", () => {
           return "group_blocked";
         case "group_failed":
           return "group_failed";
+        // Issue #268: Check step poll event types
+        case "step_poll_started":
+          return "step_poll_started";
+        case "step_poll_tick":
+          return "step_poll_tick";
+        case "step_poll_timeout":
+          return "step_poll_timeout";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;

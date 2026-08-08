@@ -911,6 +911,487 @@ jobs:
         prompt: "Create a plan"
 `;
 
+// ---------------------------------------------------------------------------
+// Issue #268: Check step poll support
+// ---------------------------------------------------------------------------
+
+/**
+ * Workflow YAML with a poll-based check step (immediate pass with "true").
+ * Used for T-POLL-1.
+ */
+const POLL_WORKFLOW_YAML = `\
+name: poll-test
+version: "0.1.0"
+jobs:
+  verify:
+    steps:
+      - id: poll-check
+        type: check
+        condition: "true"
+        poll:
+          interval: "1s"
+          timeout: "5s"
+`;
+
+/**
+ * Workflow YAML with a poll-based check step using a variable condition.
+ * Used for T-POLL-2 (delayed pass).
+ */
+const POLL_VARIABLE_WORKFLOW_YAML = `\
+name: poll-variable-test
+version: "0.1.0"
+jobs:
+  verify:
+    steps:
+      - id: poll-check
+        type: check
+        condition: "\$\{{ variables.ready }} == 'yes'"
+        poll:
+          interval: "1s"
+          timeout: "5s"
+`;
+
+/**
+ * Workflow YAML with a poll-based check step that always times out.
+ * Used for T-POLL-3.
+ */
+const POLL_TIMEOUT_WORKFLOW_YAML = `\
+name: poll-timeout-test
+version: "0.1.0"
+jobs:
+  verify:
+    steps:
+      - id: poll-check
+        type: check
+        condition: "false"
+        poll:
+          interval: "1s"
+          timeout: "1s"
+`;
+
+/**
+ * Workflow YAML with a poll-based check step + failure_policy: continue.
+ * Used for T-POLL-4.
+ */
+const POLL_CONTINUE_WORKFLOW_YAML = `\
+name: poll-continue-test
+version: "0.1.0"
+jobs:
+  verify:
+    steps:
+      - id: poll-check
+        type: check
+        condition: "false"
+        failure_policy: continue
+        poll:
+          interval: "1s"
+          timeout: "1s"
+`;
+
+/**
+ * Workflow YAML with a poll-based check step + failure_policy: block.
+ * Used for T-POLL-5.
+ */
+const POLL_BLOCK_WORKFLOW_YAML = `\
+name: poll-block-test
+version: "0.1.0"
+jobs:
+  verify:
+    steps:
+      - id: poll-check
+        type: check
+        condition: "false"
+        failure_policy: block
+        poll:
+          interval: "1s"
+          timeout: "1s"
+`;
+
+/** Build a mock sleep that executes actions on each call. */
+function makeMockSleep(actions: Array<(ms: number) => Promise<void>>) {
+  let callIndex = 0;
+  return async (ms: number) => {
+    if (callIndex < actions.length) {
+      await actions[callIndex]!(ms);
+    }
+    callIndex++;
+  };
+}
+
+/** Write updated variables into state.json. */
+async function writeStateVariables(
+  runDir: string,
+  variables: Record<string, unknown>,
+) {
+  const statePath = join(runDir, "state.json");
+  const state = JSON.parse(await readFile(statePath, "utf-8"));
+  state.variables = { ...state.variables, ...variables };
+  await writeFile(statePath, JSON.stringify(state));
+}
+
+// ---------------------------------------------------------------------------
+// T-POLL-1: Happy path — condition true immediately
+// ---------------------------------------------------------------------------
+
+describe("executeCheckStep — poll immediate pass (T-POLL-1)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "emits step_poll_started and passes immediately when condition is true (T-POLL-1)",
+    async () => {
+      const { runId, runDir } = await bootstrapCheckRun(
+        sandbox,
+        POLL_WORKFLOW_YAML,
+      );
+
+      const runner = new FakeCheckRunner({
+        passed: true,
+        check_id: "poll-check",
+        failures: [],
+        artifacts: [],
+      });
+
+      const sleep = makeMockSleep([]);
+
+      await executeCheckStep({
+        runDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        runId,
+        jobId: "verify",
+        clock: new FakeClock(),
+        runner,
+        sleep,
+      });
+
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+
+      expect(types).toContain("step_started");
+      expect(types).toContain("step_poll_started");
+      expect(types).not.toContain("step_poll_tick");
+      expect(types).not.toContain("step_poll_timeout");
+      expect(types).toContain("check_completed");
+      expect(types).toContain("step_completed");
+      expect(types).toContain("job_completed");
+
+      // Order: step_started < step_poll_started < check_completed < step_completed < job_completed
+      const idxStarted = types.indexOf("step_started");
+      const idxPollStarted = types.indexOf("step_poll_started");
+      const idxCheckDone = types.indexOf("check_completed");
+      const idxStepDone = types.indexOf("step_completed");
+      const idxJobDone = types.indexOf("job_completed");
+
+      expect(idxStarted).toBeLessThan(idxPollStarted);
+      expect(idxPollStarted).toBeLessThan(idxCheckDone);
+      expect(idxCheckDone).toBeLessThan(idxStepDone);
+      expect(idxStepDone).toBeLessThan(idxJobDone);
+
+      // check_completed payload has passed:true with synthetic check_id
+      const checkCompleted = events.find((e) => e.type === "check_completed");
+      expect(checkCompleted?.payload["passed"]).toBe(true);
+      expect(checkCompleted?.payload["check_id"]).toBe("poll-check");
+
+      // State: job is completed
+      const snapshot = await readStateSnapshot(runDir);
+      expect(snapshot.jobs["verify"]?.status).toBe("completed");
+
+      // Runner was never called (poll path skips runner)
+      expect(runner.calls.length).toBe(0);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-POLL-2: Delayed pass — condition true after state update
+// ---------------------------------------------------------------------------
+
+describe("executeCheckStep — poll delayed pass (T-POLL-2)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "emits step_poll_tick then passes after state variable changes (T-POLL-2)",
+    async () => {
+      const { runId, runDir } = await bootstrapCheckRun(
+        sandbox,
+        POLL_VARIABLE_WORKFLOW_YAML,
+      );
+
+      // Set initial variable state so the first tick evaluates "no" == 'yes' → false
+      await writeStateVariables(runDir, { ready: "no" });
+
+      // Mock sleep updates the variable so the second tick evaluates "yes" == 'yes' → true
+      const sleep = makeMockSleep([
+        async () => {
+          await writeStateVariables(runDir, { ready: "yes" });
+        },
+      ]);
+
+      const runner = new FakeCheckRunner({
+        passed: true,
+        check_id: "poll-check",
+        failures: [],
+        artifacts: [],
+      });
+
+      await executeCheckStep({
+        runDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        runId,
+        jobId: "verify",
+        clock: new FakeClock(),
+        runner,
+        sleep,
+      });
+
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+
+      expect(types).toContain("step_poll_started");
+      expect(types).toContain("step_poll_tick");
+      expect(types).not.toContain("step_poll_timeout");
+      expect(types).toContain("check_completed");
+      expect(types).toContain("step_completed");
+      expect(types).toContain("job_completed");
+
+      // step_poll_tick payload
+      const pollTick = events.find((e) => e.type === "step_poll_tick");
+      expect(pollTick).toBeDefined();
+      expect(pollTick?.payload["tick"]).toBe(1);
+      expect(pollTick?.payload["condition_result"]).toBe(false);
+
+      // Check passed
+      const checkCompleted = events.find((e) => e.type === "check_completed");
+      expect(checkCompleted?.payload["passed"]).toBe(true);
+
+      // State: job is completed
+      const snapshot = await readStateSnapshot(runDir);
+      expect(snapshot.jobs["verify"]?.status).toBe("completed");
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-POLL-3: Timeout — condition always false
+// ---------------------------------------------------------------------------
+
+describe("executeCheckStep — poll timeout (T-POLL-3)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "emits step_poll_tick and step_poll_timeout then fails the step (T-POLL-3)",
+    async () => {
+      const { runId, runDir } = await bootstrapCheckRun(
+        sandbox,
+        POLL_TIMEOUT_WORKFLOW_YAML,
+      );
+
+      const runner = new FakeCheckRunner({
+        passed: true,
+        check_id: "poll-check",
+        failures: [],
+        artifacts: [],
+      });
+
+      const sleep = makeMockSleep([]);
+
+      await executeCheckStep({
+        runDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        runId,
+        jobId: "verify",
+        clock: new FakeClock(),
+        runner,
+        sleep,
+      });
+
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+
+      expect(types).toContain("step_poll_started");
+      expect(types).toContain("step_poll_tick");
+      expect(types).toContain("step_poll_timeout");
+      expect(types).toContain("check_completed");
+      expect(types).toContain("step_failed");
+      expect(types).not.toContain("step_completed");
+      expect(types).not.toContain("job_completed");
+
+      // step_poll_timeout payload
+      const pollTimeout = events.find((e) => e.type === "step_poll_timeout");
+      expect(pollTimeout).toBeDefined();
+      expect(pollTimeout?.payload["timeout_ms"]).toBe(1000);
+      expect(typeof pollTimeout?.payload["total_ticks"]).toBe("number");
+      expect((pollTimeout?.payload["total_ticks"] as number)).toBeGreaterThan(0);
+
+      // check_completed payload has passed:false
+      const checkCompleted = events.find((e) => e.type === "check_completed");
+      expect(checkCompleted?.payload["passed"]).toBe(false);
+
+      // State: job is failed
+      const snapshot = await readStateSnapshot(runDir);
+      expect(snapshot.jobs["verify"]?.status).toBe("failed");
+
+      // check-result.json exists with failures
+      const resultPath = await locateCheckResultPath(
+        runDir,
+        "verify",
+        "poll-check",
+      );
+      const parsed = JSON.parse(await readFile(resultPath, "utf-8")) as {
+        passed: boolean;
+        failures: string[];
+      };
+      expect(parsed.passed).toBe(false);
+      expect(parsed.failures.length).toBeGreaterThan(0);
+      expect(parsed.failures[0]).toMatch(/poll timed out/);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-POLL-4: failure_policy: continue on timeout
+// ---------------------------------------------------------------------------
+
+describe("executeCheckStep — poll timeout with failure_policy: continue (T-POLL-4)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "emits step_failed but leaves job running when failure_policy is continue (T-POLL-4)",
+    async () => {
+      const { runId, runDir } = await bootstrapCheckRun(
+        sandbox,
+        POLL_CONTINUE_WORKFLOW_YAML,
+      );
+
+      const runner = new FakeCheckRunner({
+        passed: true,
+        check_id: "poll-check",
+        failures: [],
+        artifacts: [],
+      });
+
+      const sleep = makeMockSleep([]);
+
+      await executeCheckStep({
+        runDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        runId,
+        jobId: "verify",
+        clock: new FakeClock(),
+        runner,
+        sleep,
+      });
+
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+
+      expect(types).toContain("step_poll_timeout");
+      expect(types).toContain("check_completed");
+      expect(types).toContain("step_failed");
+      expect(types).not.toContain("job_failed");
+      expect(types).not.toContain("job_blocked");
+      expect(types).not.toContain("job_completed");
+
+      // State: job remains "running" (not failed, not blocked)
+      const snapshot = await readStateSnapshot(runDir);
+      expect(snapshot.jobs["verify"]?.status).toBe("running");
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-POLL-5: failure_policy: block on timeout
+// ---------------------------------------------------------------------------
+
+describe("executeCheckStep — poll timeout with failure_policy: block (T-POLL-5)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "emits job_blocked and transitions job to blocked when failure_policy is block (T-POLL-5)",
+    async () => {
+      const { runId, runDir } = await bootstrapCheckRun(
+        sandbox,
+        POLL_BLOCK_WORKFLOW_YAML,
+      );
+
+      const runner = new FakeCheckRunner({
+        passed: true,
+        check_id: "poll-check",
+        failures: [],
+        artifacts: [],
+      });
+
+      const sleep = makeMockSleep([]);
+
+      await executeCheckStep({
+        runDir,
+        zigmaflowDir: sandbox.zigmaflowDir,
+        runId,
+        jobId: "verify",
+        clock: new FakeClock(),
+        runner,
+        sleep,
+      });
+
+      const events = await readEvents(runDir);
+      const types = events.map((e) => e.type);
+
+      expect(types).toContain("step_poll_timeout");
+      expect(types).toContain("check_completed");
+      expect(types).toContain("step_failed");
+      expect(types).toContain("job_blocked");
+      expect(types).not.toContain("job_completed");
+
+      // State: job is blocked
+      const snapshot = await readStateSnapshot(runDir);
+      expect(snapshot.jobs["verify"]?.status).toBe("blocked");
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// T-CHECK-PROPAGATE: Completing a check job promotes downstream waiting jobs
+// ---------------------------------------------------------------------------
+
 describe("executeCheckStep — downstream dependency propagation (T-CHECK-PROPAGATE)", () => {
   let sandbox: Sandbox;
 

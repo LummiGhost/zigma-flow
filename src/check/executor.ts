@@ -33,7 +33,7 @@ import type { RouterAction } from "../workflow/index.js";
 import { WorkflowError, StateError } from "../utils/index.js";
 import { artifactStepDir, appendArtifactIndex, artifactId, artifactFileRelativePath } from "../artifact/index.js";
 import { applyRoutingAction } from "../engine/routing.js";
-import { resolveExpression } from "../expression/index.js";
+import { resolveExpression, evaluateCondition } from "../expression/index.js";
 import type { ExpressionContext } from "../expression/index.js";
 import { computeReadyJobs } from "../dag/index.js";
 
@@ -60,6 +60,11 @@ export interface ExecuteCheckStepOpts {
    * relative file paths against the configured workspace. (Issue #178)
    */
   jobCwd?: string;
+  /**
+   * Injectable sleep function for poll intervals.
+   * Defaults to `(ms) => new Promise(r => setTimeout(r, ms))` in production.
+   */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +97,30 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
     throw new StateError(`run.yml is missing workflow.path in: ${runDir}`);
   }
   return wfPath;
+}
+
+/**
+ * Parse a duration string ("60s", "5m", "1h") → milliseconds.
+ * Throws WorkflowError on unrecognised format.
+ */
+function parseDurationMs(duration: string): number {
+  const match = /^(\d+)(s|m|h)$/.exec(duration);
+  if (match === null) {
+    throw new WorkflowError(
+      `Invalid duration format "${duration}": expected <number>(s|m|h), e.g. "60s", "5m", "1h"`,
+      { details: { duration } }
+    );
+  }
+
+  const value = parseInt(match[1]!, 10);
+  const unit = match[2]!;
+
+  switch (unit) {
+    case "s": return value * 1000;
+    case "m": return value * 60 * 1000;
+    case "h": return value * 60 * 60 * 1000;
+    default:  throw new WorkflowError(`Unrecognised duration unit: "${unit}"`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -215,31 +244,170 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
   };
 
-  // ── 6. Invoke CheckRunner ─────────────────────────────────────────────────
+  // ── 6. Determine check result (poll loop or traditional runner) ──────────
+  // Issue #268: When poll is configured, evaluate the condition expression in a
+  // loop until it becomes true or the timeout is reached. Otherwise, use the
+  // traditional CheckRunner.
 
-  const rawWith = typeof stepDef.with === "object" && stepDef.with !== null
-    ? (stepDef.with as Record<string, unknown>)
-    : undefined;
+  let checkResult: { passed: boolean; check_id: string; failures: string[]; artifacts: string[] };
 
-  const checkRunWith: Record<string, unknown> | undefined = rawWith !== undefined
-    ? Object.fromEntries(
-        Object.entries(rawWith).map(([k, v]) => [
-          k,
-          typeof v === "string" ? resolveExpression(v, exprCtx) : v,
-        ])
-      )
-    : undefined;
+  if (stepDef.poll !== undefined && stepDef.condition !== undefined) {
+    // ── 6a. Poll loop — evaluate condition expression on interval ──────────
 
-  const checkResult = await runner.run({
-    checkId,
-    jobId,
-    stepId,
-    runDir,
-    ...(checkRunWith !== undefined ? { with: checkRunWith } : {}),
-    // Forward job-level working directory for filesystem-dependent checks
-    // such as file-exists, json-parse, and forbidden-paths.
-    ...(opts.jobCwd !== undefined ? { cwd: opts.jobCwd } : {}),
-  });
+    const intervalMs = parseDurationMs(stepDef.poll.interval);
+    const timeoutMs = parseDurationMs(stepDef.poll.timeout);
+    const backoff = stepDef.poll.backoff ?? "fixed";
+    const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
+    // Emit step_poll_started
+    const pollStartedId = getNextEventId();
+    await eventWriter.appendEvent(runDir, {
+      id: pollStartedId,
+      run_id: runId,
+      type: "step_poll_started",
+      timestamp: clock.now(),
+      producer: "engine",
+      job: jobId,
+      step: stepId,
+      attempt,
+      payload: {
+        job_id: jobId,
+        step_id: stepId,
+        attempt,
+        interval_ms: intervalMs,
+        timeout_ms: timeoutMs,
+        backoff,
+      },
+    });
+
+    const pollStartTime = Date.now();
+    let tick = 0;
+    let conditionPassed = false;
+
+    while (true) {
+      const elapsed = Date.now() - pollStartTime;
+
+      // Re-read state and rebuild expression context each tick so the
+      // condition can see updated job/step outputs from other jobs.
+      const currentState = await stateStore.readSnapshot(runDir);
+      if (currentState !== null) {
+        const currentJobState = currentState.jobs[jobId];
+        const currentStepsCtx: ExpressionContext["steps"] = {};
+        for (let i = 0; i < checkStepIdx; i++) {
+          const prevStepId = jobDef.steps[i]!.id;
+          currentStepsCtx[prevStepId] = { outputs: currentJobState?.outputs ?? {} };
+        }
+        const refreshedCtx: ExpressionContext = {
+          inputs: {},
+          run: { id: runId, workflow: state.workflow },
+          jobs: Object.fromEntries(
+            Object.entries(currentState.jobs).map(([jId, j]) => {
+              const entry: { outputs: Record<string, unknown>; status: string; attempt?: number } = { outputs: j.outputs ?? {}, status: j.status };
+              if (j.attempt !== undefined) entry.attempt = j.attempt;
+              return [jId, entry];
+            })
+          ),
+          steps: currentStepsCtx,
+          ...(currentState.variables !== undefined ? { variables: currentState.variables } : {}),
+        };
+        conditionPassed = evaluateCondition(stepDef.condition, refreshedCtx, "step-if");
+      } else {
+        conditionPassed = evaluateCondition(stepDef.condition, exprCtx, "step-if");
+      }
+
+      if (conditionPassed) {
+        break;
+      }
+
+      tick++;
+
+      // Check timeout
+      if (elapsed >= timeoutMs) {
+        // Emit step_poll_timeout
+        const pollTimeoutId = getNextEventId();
+        await eventWriter.appendEvent(runDir, {
+          id: pollTimeoutId,
+          run_id: runId,
+          type: "step_poll_timeout",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: jobId,
+          step: stepId,
+          attempt,
+          payload: {
+            job_id: jobId,
+            step_id: stepId,
+            attempt,
+            total_ticks: tick,
+            elapsed_ms: elapsed,
+            timeout_ms: timeoutMs,
+          },
+        });
+
+        break;
+      }
+
+      // Emit step_poll_tick
+      const pollTickId = getNextEventId();
+      await eventWriter.appendEvent(runDir, {
+        id: pollTickId,
+        run_id: runId,
+        type: "step_poll_tick",
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: stepId,
+        attempt,
+        payload: {
+          job_id: jobId,
+          step_id: stepId,
+          attempt,
+          tick,
+          elapsed_ms: elapsed,
+          condition_result: false,
+        },
+      });
+
+      // Wait for the poll interval before the next tick
+      await sleep(intervalMs);
+    }
+
+    // Build a synthetic check result from the poll outcome
+    checkResult = {
+      passed: conditionPassed,
+      check_id: `${jobId}.${stepId}.condition`,
+      failures: conditionPassed
+        ? []
+        : [`poll timed out after ${timeoutMs}ms (${tick} ticks)`],
+      artifacts: [],
+    };
+  } else {
+    // ── 6b. Traditional CheckRunner invocation ──────────────────────────────
+
+    const rawWith = typeof stepDef.with === "object" && stepDef.with !== null
+      ? (stepDef.with as Record<string, unknown>)
+      : undefined;
+
+    const checkRunWith: Record<string, unknown> | undefined = rawWith !== undefined
+      ? Object.fromEntries(
+          Object.entries(rawWith).map(([k, v]) => [
+            k,
+            typeof v === "string" ? resolveExpression(v, exprCtx) : v,
+          ])
+        )
+      : undefined;
+
+    checkResult = await runner.run({
+      checkId,
+      jobId,
+      stepId,
+      runDir,
+      ...(checkRunWith !== undefined ? { with: checkRunWith } : {}),
+      // Forward job-level working directory for filesystem-dependent checks
+      // such as file-exists, json-parse, and forbidden-paths.
+      ...(opts.jobCwd !== undefined ? { cwd: opts.jobCwd } : {}),
+    });
+  }
 
   // ── 7. Write check-result.json artifact ──────────────────────────────────
 
@@ -458,6 +626,44 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       attempt,
       payload: { job_id: jobId, step_id: stepId, attempt, reason },
     });
+
+    // Step-level failure_policy: continue — treat step failure as non-blocking (#264, #268).
+    // Leave the job "running" so executeNonAgentStep calls advanceJob.
+    if (stepDef.failure_policy === "continue") {
+      await stateStore.writeSnapshot(runDir, {
+        ...runningState,
+        last_event_id: stepFailedId,
+      });
+      return;
+    }
+
+    // Step-level failure_policy: block — emit job_blocked, set job to blocked.
+    if (stepDef.failure_policy === "block") {
+      const jobBlockedId = getNextEventId();
+      await eventWriter.appendEvent(runDir, {
+        id: jobBlockedId,
+        run_id: runId,
+        type: "job_blocked",
+        timestamp: clock.now(),
+        producer: "engine",
+        job: jobId,
+        step: null,
+        attempt,
+        payload: { job_id: jobId, reason },
+      });
+      await stateStore.writeSnapshot(runDir, {
+        ...runningState,
+        last_event_id: jobBlockedId,
+        jobs: {
+          ...runningState.jobs,
+          [jobId]: {
+            ...runningState.jobs[jobId]!,
+            status: "blocked",
+          },
+        },
+      });
+      return;
+    }
 
     const onFail = stepDef.on_fail;
 

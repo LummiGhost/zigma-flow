@@ -1249,7 +1249,7 @@ async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
   }
 
   const prompt = stepDef.prompt;
-  if (prompt === undefined || prompt.trim().length === 0) {
+  if (prompt === undefined || typeof prompt !== "string" || prompt.trim().length === 0) {
     return { jobId, success: false, action: "failed", detail: "Human step missing prompt" };
   }
 

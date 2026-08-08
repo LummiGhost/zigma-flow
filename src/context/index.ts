@@ -676,7 +676,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
     }
 
     // Warnings — only for non-inline, non-file prompts
-    if (primaryPrompt === undefined && !isInlinePrompt(step.prompt)) {
+    if (!isInlinePrompt(step.prompt)) {
       if (primaryPrompt === undefined) {
         const candidates = primaryPromptCandidates(jobId, stepId, step.prompt).map((c) => c.id);
         warnings.push(

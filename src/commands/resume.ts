@@ -169,7 +169,7 @@ export async function resumeAction(opts: ResumeActionOpts): Promise<CommandJsonR
     }
 
     // Load workflow to get step definition (for input schema validation)
-    let stepDef: { inputs?: Record<string, HumanInputSchema>; prompt?: string } | undefined;
+    let stepDef: { inputs?: Record<string, HumanInputSchema>; prompt?: string | { file: string; vars?: Record<string, unknown> } } | undefined;
     try {
       const { readFile } = await import("node:fs/promises");
       const { parse } = await import("yaml");

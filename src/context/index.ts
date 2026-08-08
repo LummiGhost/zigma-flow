@@ -578,6 +578,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
         {
           inputs: { task: state.task },
           run: { id: state.run_id, workflow: state.workflow },
+          ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
         },
       );
       primaryPrompt = {
@@ -616,6 +617,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
         {
           inputs: { task: state.task },
           run: { id: state.run_id, workflow: state.workflow },
+          ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
         },
       );
       primaryPrompt = {
@@ -640,6 +642,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
   const exprCtx = {
     inputs: { task: state.task },
     run: { id: state.run_id, workflow: state.workflow },
+    ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
   };
 
   const resolvedInputs: Record<string, string> = {};

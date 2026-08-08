@@ -209,6 +209,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
       Object.entries(state.jobs).map(([jId, j]) => [jId, { outputs: j.outputs ?? {} }])
     ),
     steps: stepsCtx,
+    ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
   };
   const resolvedSwitch = resolveExpression(switchValue, exprCtx);
 

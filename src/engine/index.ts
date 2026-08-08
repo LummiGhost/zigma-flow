@@ -109,6 +109,8 @@ export interface CreateRunInputs {
   inputs?: Record<string, string>; // additional named inputs from CLI --input flags
   /** Caller identity, origin, and authority (optional for backward compatibility). */
   callerContext?: CallerContext;
+  /** How this run was triggered (ISSUE #269). Defaults to "manual". */
+  triggerSource?: "manual" | "scheduled";
 }
 
 export interface CreateRunResult {
@@ -155,6 +157,8 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     task: inputs.task,
     ...(inputs.inputs ?? {}),
   };
+  const triggerSource = inputs.triggerSource ?? "manual";
+
   await writeRunYaml(runDir, {
     task: inputs.task,
     workflow: {
@@ -164,6 +168,7 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     created_at: createdAt,
     skill_lock_snapshot: "skill-lock.snapshot.json",
     inputs: mergedRunInputs,
+    trigger_source: triggerSource,
     ...(callerContextSnapshotPath !== undefined
       ? { caller_context_snapshot: callerContextSnapshotPath }
       : {}),
@@ -239,7 +244,7 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     job: null,
     step: null,
     attempt: null,
-    payload: { workflow: wf.name, task: inputs.task },
+    payload: { workflow: wf.name, task: inputs.task, trigger_source: triggerSource },
   });
 
   // RC-R10: Append one job_ready event per initial ready job
@@ -294,6 +299,7 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     task: inputs.task,
     created_at: createdAt,
     last_event_id: lastEventId,
+    invocation: { trigger: triggerSource },
     jobs,
     ...(initialVariables !== undefined ? { variables: initialVariables } : {}),
     ...(initialContextBlocks !== undefined ? { context_blocks: initialContextBlocks } : {}),
@@ -629,6 +635,7 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
         inputs: { task: state.task },
         run: { id: state.run_id, workflow: state.workflow },
         ...(variables !== undefined ? { variables } : {}),
+        ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
         jobs: Object.fromEntries(
           Object.entries(state.jobs).map(([id, js]) => [
             id,

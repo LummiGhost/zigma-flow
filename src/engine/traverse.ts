@@ -63,6 +63,7 @@ export function resolveTraverseInput(
     inputs: { task: state.task },
     run: { id: state.run_id, workflow: state.workflow },
     ...(state.variables !== undefined ? { variables: state.variables } : {}),
+    ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
     jobs: Object.fromEntries(
       Object.entries(state.jobs).map(([id, js]) => [
         id,

@@ -72,6 +72,7 @@ export async function resolveJobWorkingDirectory(
       ]),
     ),
     ...(state.variables !== undefined ? { variables: state.variables } : {}),
+    ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
   };
 
   // Resolve ${{ }} expressions

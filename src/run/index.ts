@@ -280,6 +280,11 @@ export interface RunState {
   workflow: string;      // workflow name (NOT path)
   task: string;
   created_at: string;    // ISO 8601
+  /** How this run was triggered (ISSUE #269). */
+  invocation?: {
+    trigger: "manual" | "scheduled" | "resume";
+    backend?: string;
+  };
   status?: "running" | "blocked" | "paused" | "failed" | "completed" | "cancelled"; // mvp-contracts §2.3, v0.6 Issue #210
   last_event_id: string; // id of tail event in events.jsonl
   jobs: Record<string, JobState>;
@@ -300,6 +305,8 @@ export interface RunYamlMeta {
   inputs?: Record<string, string>; // workflow inputs from CLI --input flags
   /** Relative path to the frozen permission snapshot, if caller context was provided. */
   caller_context_snapshot?: string;
+  /** How this run was triggered: "manual" or "scheduled" (ISSUE #269). */
+  trigger_source?: string;
 }
 
 // ---------------------------------------------------------------------------

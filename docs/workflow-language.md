@@ -1,6 +1,6 @@
 # Zigma Flow Workflow Language Specification
 
-Version: 0.7.0 (published 2026-07-17)
+Version: 0.9.0 (published 2026-08-09)
 Status: Published
 
 ## 1. Introduction
@@ -149,7 +149,7 @@ version: 0.3.0
 | Stability | `stable` |
 | Required | Yes |
 
-Declares how the workflow is triggered. Currently only `manual` is supported.
+Declares how the workflow is triggered. Exactly one trigger type must be declared per workflow: either `manual` or `schedule` (mutually exclusive).
 
 **Fields under `on.manual`:**
 
@@ -165,8 +165,22 @@ Declares how the workflow is triggered. Currently only `manual` is supported.
 | `required` | `boolean` | `stable` | No | Defaults to `false`. |
 | `default` | `any` | `stable` | No | Default value when not provided. |
 
-**Example:**
+**Fields under `on.schedule`:**
+
+| Field | Type | Stability | Required | Description |
+|-------|------|-----------|----------|-------------|
+| `cron` | `string` | `stable` | Yes | 5-field cron expression (e.g. `*/5 * * * *` for every 5 minutes). |
+| `timezone` | `string` | `stable` | No | IANA timezone name (e.g. `Asia/Shanghai`). Defaults to UTC. |
+| `skip_if_running` | `boolean` | `stable` | No | Whether to skip the scheduled invocation if another run of the same workflow is already in progress. Defaults to `true`. |
+
+**Schedule trigger constraints:**
+- `on.manual` and `on.schedule` are mutually exclusive — a workflow must declare exactly one trigger type.
+- When `on.schedule` is present, top-level `inputs` (with defaults) provide the parameterization for scheduled runs.
+- The local runtime does **not** itself run a cron scheduler; `on.schedule` is a declaration consumed by zigma-server or a host scheduler. When invoked on schedule, the runtime receives `invocation.trigger = "scheduled"`.
+
+**Examples:**
 ```yaml
+# Manual trigger with inputs
 on:
   manual:
     inputs:
@@ -176,6 +190,20 @@ on:
       repository:
         type: string
         default: "."
+```
+
+```yaml
+# Schedule trigger (every 5 minutes, Shanghai time, skip if already running)
+on:
+  schedule:
+    cron: "*/5 * * * *"
+    timezone: "Asia/Shanghai"
+    skip_if_running: true
+
+inputs:
+  repository:
+    type: string
+    default: "."
 ```
 
 ### 3.4 `skills`
@@ -1723,6 +1751,7 @@ jobs:
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-08-09 | 0.9.0 | v0.9 Schedule Trigger (ISSUE #269). Added `on.schedule` trigger type with `cron`, `timezone`, and `skip_if_running` fields (§3.3). `on.manual` and `on.schedule` are mutually exclusive. Wired `invocation.trigger` through the runtime for `${{ invocation.trigger }}` resolution in step `if:` conditions. |
 | 2026-07-17 | 0.7.0 | v0.7 Execution Model. Added `job_groups` top-level field with `repeat` blocks (§3.10), `group` field on jobs (§4.8), `concurrency` with four policies (§4.9), `failure_policy` with cascade semantics (§4.10). Updated `retry` with `when` FailureKind whitelist (§4.4). Extended expression namespaces: `invocation`, `attempt`, `iteration.previous`, job/step status and attempt (§6.1). Added status functions `success()`, `failure()`, `always()`, `cancelled()` with pre-resolution semantics (§6.4). Relaxed depth limit to 4 for `iteration.previous` paths. Marked `goto_step`, `goto_job`, `retry_job`, `max_visits`, `retry_with`, `on_failure` object form as deprecated with internal translation notes. Added validation rules V29–V39 for job groups, concurrency, and failure policies. Updated full example to demonstrate v0.7 features. |
 | 2026-07-03 | 0.3.0 | Initial published language specification. Covers all top-level fields, all 5 step types, reserved `workflow` type, expression syntax, forbidden constructs, and validation rules. |
 | 2026-07-03 | 0.3.1 | Added §9 Abstract Data Layer and §10 Agent Report: context_patches. Documents patch schema, permissions model, batch atomicity, reserved fields, and rollback semantics. |

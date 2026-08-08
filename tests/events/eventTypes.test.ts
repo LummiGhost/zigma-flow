@@ -370,6 +370,13 @@ describe("ZigmaFlowEvent", () => {
           return "group_blocked";
         case "group_failed":
           return "group_failed";
+        // Issue #268: Check step poll event types
+        case "step_poll_started":
+          return "step_poll_started";
+        case "step_poll_tick":
+          return "step_poll_tick";
+        case "step_poll_timeout":
+          return "step_poll_timeout";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;

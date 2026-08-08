@@ -301,7 +301,11 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
           inputs: {},
           run: { id: runId, workflow: state.workflow },
           jobs: Object.fromEntries(
-            Object.entries(currentState.jobs).map(([jId, j]) => [jId, { outputs: j.outputs ?? {}, status: j.status, attempt: j.attempt }])
+            Object.entries(currentState.jobs).map(([jId, j]) => {
+              const entry: { outputs: Record<string, unknown>; status: string; attempt?: number } = { outputs: j.outputs ?? {}, status: j.status };
+              if (j.attempt !== undefined) entry.attempt = j.attempt;
+              return [jId, entry];
+            })
           ),
           steps: currentStepsCtx,
           ...(currentState.variables !== undefined ? { variables: currentState.variables } : {}),

@@ -60,6 +60,10 @@ export type ZigmaFlowEventType =
   | "attempt_started"
   | "attempt_completed"
   | "attempt_failed"
+  // Issue #268: Check step poll event types
+  | "step_poll_started"
+  | "step_poll_tick"
+  | "step_poll_timeout"
   // WF-7.2: Job Group Iteration event types
   | "iteration_started"
   | "iteration_completed"
@@ -123,6 +127,10 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "attempt_started",
   "attempt_completed",
   "attempt_failed",
+  // Issue #268: Check step poll event types
+  "step_poll_started",
+  "step_poll_tick",
+  "step_poll_timeout",
   // WF-7.2: Job Group Iteration event types
   "iteration_started",
   "iteration_completed",
@@ -235,6 +243,35 @@ export interface CheckCompletedPayload {
   check_id: string;
   passed: boolean;
   failures?: string[];
+}
+
+// Issue #268: Check step poll event payloads
+
+export interface StepPollStartedPayload {
+  job_id: string;
+  step_id: string;
+  attempt: number;
+  interval_ms: number;
+  timeout_ms: number;
+  backoff: string;
+}
+
+export interface StepPollTickPayload {
+  job_id: string;
+  step_id: string;
+  attempt: number;
+  tick: number;
+  elapsed_ms: number;
+  condition_result: boolean;
+}
+
+export interface StepPollTimeoutPayload {
+  job_id: string;
+  step_id: string;
+  attempt: number;
+  total_ticks: number;
+  elapsed_ms: number;
+  timeout_ms: number;
 }
 
 export interface SignalReceivedPayload {
@@ -584,6 +621,10 @@ export type ZigmaFlowEvent =
   | (EventEnvelope & { type: "execution_stopped"; payload: ExecutionStoppedPayload })
   | (EventEnvelope & { type: "job_state_override"; payload: JobStateOverridePayload })
   | (EventEnvelope & { type: "job_reset"; payload: JobResetPayload })
+  // Issue #268: Check step poll event types
+  | (EventEnvelope & { type: "step_poll_started"; payload: StepPollStartedPayload })
+  | (EventEnvelope & { type: "step_poll_tick"; payload: StepPollTickPayload })
+  | (EventEnvelope & { type: "step_poll_timeout"; payload: StepPollTimeoutPayload })
   // WF-7.1: Attempt model event types
   | (EventEnvelope & { type: "attempt_started"; payload: AttemptStartedPayload })
   | (EventEnvelope & { type: "attempt_completed"; payload: AttemptCompletedPayload })

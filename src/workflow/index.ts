@@ -161,6 +161,18 @@ const StepBaseSchema = z.object({
   on_pass: RouterActionSchema.optional(),
   /** @stability stable */
   on_fail: RouterActionSchema.optional(),
+  // Check step poll fields (Issue #268)
+  /** @stability stable — expression evaluated each poll tick; check passes when it resolves to true */
+  condition: z.string().optional(),
+  /** @stability stable — poll configuration for repeating check evaluation */
+  poll: z.object({
+    /** @stability stable — interval between poll ticks, e.g. "60s", "5m", "1h" */
+    interval: z.string(),
+    /** @stability stable — maximum poll duration, e.g. "6h", "30m" */
+    timeout: z.string(),
+    /** @stability stable — backoff strategy; "fixed" is the only MVP value */
+    backoff: z.enum(["fixed"]).optional(),
+  }).optional(),
   // Artifact policy
   /** @stability experimental — may change in any minor version release without deprecation — not yet in published language spec */
   required_artifacts: z.array(z.string()).optional(),
@@ -306,6 +318,9 @@ export interface StepDefinition {
   // Check step fields (D2 — WF-P7-CHECK)
   on_pass?: RouterAction;
   on_fail?: RouterAction;
+  // Check step poll fields (Issue #268)
+  condition?: string;
+  poll?: { interval: string; timeout: string; backoff?: "fixed" };
   // Artifact policy (D2 — WF-P12-QUALITY)
   required_artifacts?: string[];
   // Step Structured Return Status (WF-P13-RETURNS)
@@ -827,6 +842,9 @@ function validateExpressions(workflow: WorkflowDefinition): void {
       }
       if (step.if) {
         checkForbiddenExpressions(step.if, `${base}.if`);
+      }
+      if (step.condition) {
+        checkForbiddenExpressions(step.condition, `${base}.condition`);
       }
       if (step.env) {
         for (const [envKey, envVal] of Object.entries(step.env)) {

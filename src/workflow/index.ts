@@ -640,6 +640,20 @@ const WorkflowSchema = z.object({
   job_groups: z.record(z.string(), JobGroupSchema).optional(),
 });
 
+/**
+ * Schedule trigger configuration (§3.3).
+ *
+ * @stability stable — v0.9
+ */
+export interface ScheduleTriggerConfig {
+  /** Cron expression (5-field). */
+  cron: string;
+  /** IANA timezone name. Defaults to UTC. */
+  timezone?: string;
+  /** Skip if another run of the same workflow is already in progress. Defaults to true. */
+  skip_if_running?: boolean;
+}
+
 export interface WorkflowDefinition {
   name: string;
   version: string;
@@ -894,7 +908,7 @@ function detectGroupDagCycles(needsMap: Record<string, string[]>): string[] | nu
 // ---------------------------------------------------------------------------
 
 /** Triggers known to the local runtime. */
-const LOCAL_KNOWN_TRIGGERS = new Set(["manual"]);
+const LOCAL_KNOWN_TRIGGERS = new Set(["manual", "schedule"]);
 
 /** Triggers known to zigma-server. */
 const ZIGMA_SERVER_KNOWN_TRIGGERS = new Set(["manual", "schedule", "webhook", "push"]);
@@ -1605,6 +1619,43 @@ export function loadWorkflow(yamlText: string, options?: LoadWorkflowOptions): W
         console.warn(msg);
       }
     }
+  }
+
+  // 10b-ii. Schedule trigger config validation (ISSUE #269)
+  if (wf.on?.schedule) {
+    const scheduleCfg = wf.on.schedule as Record<string, unknown>;
+
+    // cron is required and must be a non-empty string
+    if (typeof scheduleCfg.cron !== "string" || scheduleCfg.cron.trim().length === 0) {
+      throw new ValidationError(
+        "on.schedule.cron is required and must be a non-empty cron expression",
+        { details: { field: "on.schedule.cron", value: scheduleCfg.cron } }
+      );
+    }
+
+    // timezone is optional but must be a string if present
+    if (scheduleCfg.timezone !== undefined && typeof scheduleCfg.timezone !== "string") {
+      throw new ValidationError(
+        "on.schedule.timezone must be a string (IANA timezone name)",
+        { details: { field: "on.schedule.timezone", value: scheduleCfg.timezone } }
+      );
+    }
+
+    // skip_if_running is optional but must be a boolean if present
+    if (scheduleCfg.skip_if_running !== undefined && typeof scheduleCfg.skip_if_running !== "boolean") {
+      throw new ValidationError(
+        "on.schedule.skip_if_running must be a boolean",
+        { details: { field: "on.schedule.skip_if_running", value: scheduleCfg.skip_if_running } }
+      );
+    }
+  }
+
+  // 10b-iii. manual and schedule are mutually exclusive (ISSUE #269)
+  if (wf.on && "manual" in wf.on && "schedule" in wf.on) {
+    throw new ValidationError(
+      "on.manual and on.schedule are mutually exclusive — a workflow may declare only one trigger type",
+      { details: { triggers: Object.keys(wf.on) } }
+    );
   }
 
   // 10c. on.manual.inputs deprecation and auto-migration (v0.6)

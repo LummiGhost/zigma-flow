@@ -140,6 +140,7 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
 export interface RunCreatedPayload {
   workflow: string;
   task: string;
+  trigger_source?: string;
 }
 
 export interface JobReadyPayload {

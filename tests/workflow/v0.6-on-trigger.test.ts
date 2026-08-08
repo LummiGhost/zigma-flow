@@ -101,18 +101,18 @@ describe("v0.6 — unknown trigger type (warning)", () => {
     expect(warnings[0]).toContain("zigma-server");
   });
 
-  it("accepts workflow with schedule trigger (known to zigma-server, warning for local)", () => {
+  it("accepts workflow with schedule trigger (known to local runtime since ISSUE #269)", () => {
     const yaml = makeWorkflow(`on:
   schedule:
     cron: "0 9 * * 1-5"`);
     const wf = loadWorkflow(yaml);
     expect(wf).toBeDefined();
 
+    // schedule is now known to the local runtime — no warning
     const warnings = warnSpy.mock.calls
       .map((c: unknown[]) => c.join(" "))
       .filter((m: string) => m.includes("Unknown trigger type"));
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain("schedule");
+    expect(warnings.length).toBe(0);
   });
 });
 
@@ -131,36 +131,23 @@ describe("v0.6 — strict host validation", () => {
 
   it("accepts known triggers when host is zigma-server", () => {
     const yaml = makeWorkflow(`on:
-  manual:
   schedule:
     cron: "0 9 * * 1-5"
   webhook:
     url: "https://example.com/hook"`);
 
-    // All three are known to zigma-server
+    // All are known to zigma-server (note: manual and schedule are mutually exclusive)
     expect(() => loadWorkflow(yaml, { host: "zigma-server" })).not.toThrow();
   });
 
-  it("warns but accepts unknown trigger without host", () => {
+  it("rejects manual + schedule together (mutually exclusive since ISSUE #269)", () => {
     const yaml = makeWorkflow(`on:
   manual:
   schedule:
     cron: "0 9 * * 1-5"`);
 
-    // Without host, even unknown triggers are just warnings
-    // (schedule is unknown to local runtime)
-    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      expect(() => loadWorkflow(yaml)).not.toThrow();
-      const warnings = spy.mock.calls
-        .map((c: unknown[]) => c.join(" "))
-        .filter((m: string) => m.includes("Unknown trigger type"));
-      // manual is known, schedule is unknown → 1 warning
-      expect(warnings.length).toBe(1);
-      expect(warnings[0]).toContain("schedule");
-    } finally {
-      spy.mockRestore();
-    }
+    // Both manual and schedule are known, but they are mutually exclusive
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
   });
 });
 
@@ -399,5 +386,83 @@ inputs:
     expect(wf.on).toBeDefined();
     expect(inputDef(wf, "task").type).toBe("string");
     expect(inputDef(wf, "severity").default).toBe("normal");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ISSUE #269 — on.schedule trigger validation
+// ---------------------------------------------------------------------------
+
+describe("ISSUE #269 — on.schedule config validation", () => {
+  it("accepts valid schedule trigger with all fields", () => {
+    const yaml = makeWorkflow(`on:
+  schedule:
+    cron: "*/5 * * * *"
+    timezone: "Asia/Shanghai"
+    skip_if_running: true`);
+    const wf = loadWorkflow(yaml);
+    expect(wf.on?.schedule).toBeDefined();
+  });
+
+  it("accepts schedule trigger with cron only (minimal)", () => {
+    const yaml = makeWorkflow(`on:
+  schedule:
+    cron: "0 9 * * 1-5"`);
+    const wf = loadWorkflow(yaml);
+    expect(wf.on?.schedule).toBeDefined();
+  });
+
+  it("rejects schedule trigger without cron field", () => {
+    const yaml = makeWorkflow(`on:
+  schedule:
+    timezone: "UTC"`);
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
+  });
+
+  it("rejects schedule trigger with empty cron", () => {
+    const yaml = makeWorkflow(`on:
+  schedule:
+    cron: ""`);
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
+  });
+
+  it("rejects schedule trigger with non-string cron", () => {
+    const yaml = makeWorkflow(`on:
+  schedule:
+    cron: 12345`);
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
+  });
+
+  it("rejects schedule trigger with non-string timezone", () => {
+    const yaml = makeWorkflow(`on:
+  schedule:
+    cron: "0 * * * *"
+    timezone: 8`);
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
+  });
+
+  it("rejects schedule trigger with non-boolean skip_if_running", () => {
+    const yaml = makeWorkflow(`on:
+  schedule:
+    cron: "0 * * * *"
+    skip_if_running: "yes"`);
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
+  });
+
+  it("rejects manual + schedule together (mutually exclusive)", () => {
+    const yaml = makeWorkflow(`on:
+  manual:
+  schedule:
+    cron: "0 * * * *"`);
+    expect(() => loadWorkflow(yaml)).toThrow(ValidationError);
+  });
+
+  it("accepts schedule trigger with skip_if_running: false", () => {
+    const yaml = makeWorkflow(`on:
+  schedule:
+    cron: "0 * * * *"
+    skip_if_running: false`);
+    const wf = loadWorkflow(yaml);
+    expect(wf.on?.schedule).toBeDefined();
   });
 });

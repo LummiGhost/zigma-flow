@@ -212,6 +212,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     ),
     steps: stepsCtx,
     ...(state.variables !== undefined ? { variables: state.variables } : {}),
+    ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
   };
 
   // ── 6. Invoke CheckRunner ─────────────────────────────────────────────────

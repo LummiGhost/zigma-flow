@@ -1428,6 +1428,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       runsDir,
       skillLockPath,
       clock,
+      triggerSource: "manual",
       ...(opts.inputs !== undefined ? { inputs: opts.inputs } : {}),
     });
     runId = result.runId;

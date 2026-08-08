@@ -318,6 +318,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     ),
     steps: stepsCtx,
     ...(state.variables !== undefined ? { variables: state.variables } : {}),
+    ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
   };
 
   command = resolveExpression(command, exprCtx);

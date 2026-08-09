@@ -196,7 +196,10 @@ function interpolatePromptVars(template: string, vars: Record<string, unknown>):
     (_match: string, key: string, separator: string | undefined) => {
       const value = vars[key];
       if (value === undefined || value === null) {
-        return _match;
+        throw new WorkflowError(
+          `Undefined template variable: vars.${key}`,
+          { details: { key, template: template.slice(0, 100) } },
+        );
       }
       if (separator !== undefined && Array.isArray(value)) {
         return value.map(String).join(separator);

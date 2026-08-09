@@ -212,7 +212,10 @@ export function renderRunStatus(
       const jobDef = workflowJobs[jobId];
       const stepDef = jobDef?.steps?.find((s) => s.id === stepId);
       if (stepDef?.prompt !== undefined) {
-        lines.push(`    Prompt: ${stepDef.prompt}`);
+        const promptDisplay = typeof stepDef.prompt === "string"
+          ? stepDef.prompt
+          : `file: ${stepDef.prompt.file}`;
+        lines.push(`    Prompt: ${promptDisplay}`);
       }
       if (stepDef?.approvers !== undefined && stepDef.approvers.length > 0) {
         lines.push(`    Approvers: ${stepDef.approvers.join(", ")}`);

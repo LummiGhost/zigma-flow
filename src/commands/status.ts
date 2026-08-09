@@ -96,7 +96,7 @@ export async function findRun(runsDir: string, runId?: string): Promise<string> 
  */
 export function renderRunStatus(
   state: RunState,
-  workflowJobs: Record<string, { needs?: string[]; steps?: Array<{ id: string; prompt?: string; approvers?: string[]; instructions?: string }> }>,
+  workflowJobs: Record<string, { needs?: string[]; steps?: Array<{ id: string; prompt?: string | { file: string; vars?: Record<string, unknown> }; approvers?: string[]; instructions?: string }> }>,
   opts?: StatusVerboseOpts,
 ): string {
   const verbose = opts?.verbose === true;
@@ -212,7 +212,10 @@ export function renderRunStatus(
       const jobDef = workflowJobs[jobId];
       const stepDef = jobDef?.steps?.find((s) => s.id === stepId);
       if (stepDef?.prompt !== undefined) {
-        lines.push(`    Prompt: ${stepDef.prompt}`);
+        const promptDisplay = typeof stepDef.prompt === "string"
+          ? stepDef.prompt
+          : `file: ${stepDef.prompt.file}`;
+        lines.push(`    Prompt: ${promptDisplay}`);
       }
       if (stepDef?.approvers !== undefined && stepDef.approvers.length > 0) {
         lines.push(`    Approvers: ${stepDef.approvers.join(", ")}`);
@@ -279,7 +282,7 @@ export async function statusAction(options: StatusOptions, runsDir?: string): Pr
   }
 
   // Try to load workflow for dependency info; silently fall back to {} on failure.
-  let workflowJobs: Record<string, { needs?: string[]; steps?: Array<{ id: string; prompt?: string; approvers?: string[]; instructions?: string }> }> = {};
+  let workflowJobs: Record<string, { needs?: string[]; steps?: Array<{ id: string; prompt?: string | { file: string; vars?: Record<string, unknown> }; approvers?: string[]; instructions?: string }> }> = {};
   try {
     const runYmlText = await readFile(join(runDir, "run.yml"), "utf-8");
     const runMeta = parseYaml(runYmlText) as { workflow?: { path?: string } };

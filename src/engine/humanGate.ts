@@ -640,7 +640,7 @@ export interface ResumeWithInputOpts {
   stepDef?: {
     inputs?: Record<string, HumanInputSchema>;
     on_submit?: Record<string, Record<string, SubmitAction>>;
-    prompt?: string;
+    prompt?: string | { file: string; vars?: Record<string, unknown> };
   };
   clock: Clock;
   stateStore?: LocalStateStore;

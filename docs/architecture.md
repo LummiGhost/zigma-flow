@@ -971,6 +971,10 @@ Command Handler
 
 ## 15. ADR Candidates
 
+> Managed workspace isolation、Job-to-Run integration、崩溃恢复和分阶段落地方案见
+> [`docs/zigma-workspace-integration.md`](zigma-workspace-integration.md)。该方案保持
+> Engine 为 workflow state 唯一写者，并将 zigma-workspace 限定为资源生命周期适配器。
+
 ADR-001：MVP 采用 TypeScript 本地 CLI 模块化单体。
 
 - 状态：建议接受。

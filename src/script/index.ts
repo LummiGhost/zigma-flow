@@ -28,6 +28,16 @@ export interface RunCommandOptions {
   env?: Record<string, string>;
   /** Upper bound on wall-clock duration in milliseconds; no timeout if omitted. */
   timeoutMs?: number;
+  /**
+   * Callback invoked for each stdout chunk in real time (Issue #280).
+   * Receives raw text chunks as they arrive from the subprocess.
+   */
+  onStdout?: (chunk: string) => void;
+  /**
+   * Callback invoked for each stderr chunk in real time (Issue #280).
+   * Receives raw text chunks as they arrive from the subprocess.
+   */
+  onStderr?: (chunk: string) => void;
 }
 
 /** Raw result from the subprocess (camelCase; distinct from the persisted ScriptResult artifact). */
@@ -183,8 +193,27 @@ export class ExecaProcessRunner implements ProcessRunner {
       env: { ...process.env, ...opts.env },
       reject: false,
       encoding: "utf8",
+      stdout: "pipe",
+      stderr: "pipe",
       ...(process.platform !== "win32" ? { detached: true } : {}),
     });
+
+    // Real-time stdout/stderr forwarding (Issue #280).
+    // Adding 'data' listeners on subprocess.stdout/stderr does not interfere
+    // with execa's internal getStream() collection — Node.js Stream emits to
+    // all listeners independently.
+    if (opts.onStdout && subprocess.stdout) {
+      subprocess.stdout.on("data", (chunk: unknown) => {
+        const text = typeof chunk === "string" ? chunk : String(chunk);
+        opts.onStdout!(text);
+      });
+    }
+    if (opts.onStderr && subprocess.stderr) {
+      subprocess.stderr.on("data", (chunk: unknown) => {
+        const text = typeof chunk === "string" ? chunk : String(chunk);
+        opts.onStderr!(text);
+      });
+    }
 
     if (opts.timeoutMs !== undefined) {
       timeoutHandle = setTimeout(() => {

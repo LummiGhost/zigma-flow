@@ -74,7 +74,7 @@ export class ClaudeCodeBackend implements AgentBackend {
   }
 
   async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
-    const { prompt, reportPath, stepDir, projectRoot, signal } = opts;
+    const { prompt, reportPath, stepDir, projectRoot, signal, onStdout, onStderr } = opts;
 
     // a. Create stepDir if it doesn't exist (idempotent)
     await mkdir(stepDir, { recursive: true });
@@ -143,31 +143,36 @@ export class ClaudeCodeBackend implements AgentBackend {
     try {
       const mergedEnv = { ...process.env, ...this.env } as Record<string, string>;
 
-      // Build options separately to satisfy exactOptionalPropertyTypes
-      const execaOpts: {
-        cwd: string;
-        timeout: number;
-        env: Record<string, string>;
-        cancelSignal?: AbortSignal;
-        input?: string;
-      } = {
-        cwd: projectRoot,
-        timeout: this.timeout,
-        env: mergedEnv,
-      };
-      if (signal !== undefined) {
-        execaOpts.cancelSignal = signal;
-      }
-      if (useStdin) {
-        execaOpts.input = fullPrompt;
-      }
-
       // Pass prompt via argv for small prompts; via stdin for large ones.
       const execArgs = useStdin
         ? [...dynamicArgs, ...this.args]
         : [...dynamicArgs, ...this.args, fullPrompt];
 
-      const result = await execa(this.command, execArgs, execaOpts);
+      const subprocess = execa(this.command, execArgs, {
+        cwd: projectRoot,
+        timeout: this.timeout,
+        env: mergedEnv,
+        stdout: "pipe" as const,
+        stderr: "pipe" as const,
+        ...(signal !== undefined ? { cancelSignal: signal } : {}),
+        ...(useStdin ? { input: fullPrompt } : {}),
+      });
+
+      // Real-time stdout/stderr forwarding (Issue #280).
+      if (onStdout && subprocess.stdout) {
+        subprocess.stdout.on("data", (chunk: unknown) => {
+          const text = typeof chunk === "string" ? chunk : String(chunk);
+          onStdout(text);
+        });
+      }
+      if (onStderr && subprocess.stderr) {
+        subprocess.stderr.on("data", (chunk: unknown) => {
+          const text = typeof chunk === "string" ? chunk : String(chunk);
+          onStderr(text);
+        });
+      }
+
+      const result = await subprocess;
 
       durationMs = Date.now() - startTime;
 

@@ -26,6 +26,7 @@ import type { ZigmaFlowEvent } from "../events/index.js";
 import { nextSequentialEventId } from "../events/sequence.js";
 import { mapZigmaFlowEventToPlatformEvent } from "../events/platformEvent.js";
 import type { FlowPlatformEvent } from "../events/platformEvent.js";
+import { RunLogWriter } from "../logs/index.js";
 import {
   buildPromptPacket,
   renderPromptPacket,
@@ -223,6 +224,13 @@ export interface RunAllOpts {
    * to createRun.
    */
   callerContext?: CallerContext;
+  /**
+   * RunLog writer for real-time log forwarding (Issue #280).
+   * When provided, system progress messages and forwarded stdout/stderr
+   * chunks are written to the run log. If omitted, the run log is not
+   * written (but artifacts are still persisted).
+   */
+  logWriter?: RunLogWriter;
 }
 
 export interface RunAllSummary {
@@ -295,6 +303,8 @@ interface ExecuteJobOnceCtx {
   signal: AbortSignal | undefined;
   batchId: string;
   onEvent: ((e: ZigmaFlowEvent) => void) | undefined;
+  /** RunLog writer for real-time log forwarding (Issue #280). */
+  logWriter: RunLogWriter | undefined;
   // Debugging flags (from RunAllOpts)
   pauseBefore: string | undefined; // "job.step" format
   stopAfter: string | undefined; // "job.step" format
@@ -328,6 +338,7 @@ async function executeJobOnce(
     signal,
     batchId,
     onEvent,
+    logWriter,
     pauseBefore,
     stopAfter,
     saveAllPrompts,
@@ -425,7 +436,7 @@ async function executeJobOnce(
     return executeAgentStep({
       runDir, runId, zigmaflowDir, jobId, wf, state,
       backendResolver, stateStore, eventWriter, clock,
-      signal, batchId, onEvent, stepDef, stepId,
+      signal, batchId, onEvent, logWriter, stepDef, stepId,
       pauseBefore, stopAfter, saveAllPrompts,
     });
   }
@@ -438,7 +449,7 @@ async function executeJobOnce(
     return executeNonAgentStep({
       runDir, runId, zigmaflowDir, jobId, wf, state,
       backendResolver, stateStore, eventWriter, clock,
-      signal, batchId, onEvent,
+      signal, batchId, onEvent, logWriter,
       stepDef, stepId,
       pauseBefore, stopAfter, saveAllPrompts,
     });
@@ -447,7 +458,7 @@ async function executeJobOnce(
   if (stepDef.type === "human") {
     return executeHumanStep({
       runDir, runId, jobId, wf, state,
-      stateStore, eventWriter, clock,
+      stateStore, eventWriter, clock, logWriter,
       stepDef, stepId,
     });
   }
@@ -462,6 +473,7 @@ async function executeJobOnce(
 interface StepCtx extends ExecuteJobOnceCtx {
   stepDef: import("../workflow/index.js").StepDefinition;
   stepId: string;
+  logWriter: RunLogWriter | undefined;
   // Debugging flags passed through ExecuteJobOnceCtx
 }
 
@@ -469,7 +481,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   const {
     runDir, runId, zigmaflowDir, jobId, wf, state,
     backendResolver, stateStore, eventWriter, clock,
-    signal, batchId, onEvent, stepDef, stepId,
+    signal, batchId, onEvent, logWriter, stepDef, stepId,
     pauseBefore, stopAfter, saveAllPrompts,
   } = ctx;
 
@@ -686,12 +698,45 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     }
   }
 
+  // System log: agent step started (Issue #280)
+  if (logWriter) {
+    const agentLabel = stepDef.label ?? stepDef.id;
+    void logWriter.writeSystem(`Agent step ${jobId}/${agentLabel} started`, {
+      job_id: jobId,
+      step_id: bundle.stepId,
+      attempt,
+    });
+  }
+
   const result = await backend.execute({
     prompt: promptText,
     reportPath,
     stepDir,
     projectRoot: zigmaflowDir,
     ...(signal !== undefined ? { signal } : {}),
+    // Real-time stdout/stderr forwarding (Issue #280)
+    ...(logWriter
+      ? {
+          onStdout: (chunk: string) => {
+            void logWriter.write({
+              job_id: jobId,
+              step_id: bundle.stepId,
+              attempt,
+              stream: "stdout",
+              text: chunk,
+            });
+          },
+          onStderr: (chunk: string) => {
+            void logWriter.write({
+              job_id: jobId,
+              step_id: bundle.stepId,
+              attempt,
+              stream: "stderr",
+              text: chunk,
+            });
+          },
+        }
+      : {}),
   });
 
   if (!result.success) {
@@ -907,6 +952,15 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   };
   await eventWriter.appendEvent(runDir, completedEvent);
   onEvent?.(completedEvent);
+
+  // System log: agent step completed (Issue #280)
+  if (logWriter) {
+    const agentLabel = stepDef.label ?? stepDef.id;
+    void logWriter.writeSystem(
+      `Agent step ${jobId}/${agentLabel} completed in ${result.durationMs ?? 0}ms`,
+      { job_id: jobId, step_id: bundle.stepId, attempt },
+    );
+  }
 
   // Read and process the agent report inline.
   // runAll handles report acceptance directly rather than delegating to
@@ -1152,7 +1206,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
 async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   const {
     runDir, runId, zigmaflowDir, jobId, wf, state,
-    stateStore, eventWriter, clock, batchId, onEvent,
+    stateStore, eventWriter, clock, batchId, onEvent, logWriter,
     stepDef, stepId,
   } = ctx;
 
@@ -1193,6 +1247,17 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     }
   }
 
+  // System log: non-agent step started (Issue #280)
+  const attempt = currentJobState.attempt ?? 1;
+  if (logWriter) {
+    const label = stepDef.label ?? stepId;
+    void logWriter.writeSystem(`Step ${jobId}/${label} (${stepDef.type}) started`, {
+      job_id: jobId,
+      step_id: stepId,
+      attempt,
+    });
+  }
+
   await executeCurrentStep({
     runDir,
     zigmaflowDir,
@@ -1200,6 +1265,29 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     jobId,
     clock,
     ...(jobCwd !== undefined ? { jobCwd } : {}),
+    // Real-time stdout/stderr forwarding (Issue #280)
+    ...(logWriter
+      ? {
+          onStdout: (chunk: string) => {
+            void logWriter.write({
+              job_id: jobId,
+              step_id: stepId,
+              attempt,
+              stream: "stdout",
+              text: chunk,
+            });
+          },
+          onStderr: (chunk: string) => {
+            void logWriter.write({
+              job_id: jobId,
+              step_id: stepId,
+              attempt,
+              stream: "stderr",
+              text: chunk,
+            });
+          },
+        }
+      : {}),
   });
 
   // Check if job needs advancing (multi-step jobs)
@@ -1227,6 +1315,7 @@ interface HumanStepCtx {
   stateStore: LocalStateStore;
   eventWriter: JsonlEventWriter;
   clock: Clock;
+  logWriter: RunLogWriter | undefined;
   stepDef: import("../workflow/index.js").StepDefinition;
   stepId: string;
 }
@@ -1234,7 +1323,7 @@ interface HumanStepCtx {
 async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
   const {
     runDir, runId, jobId, state,
-    stateStore, eventWriter, clock,
+    stateStore, eventWriter, clock, logWriter,
     stepDef, stepId,
   } = ctx;
 
@@ -1251,6 +1340,16 @@ async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
   const prompt = stepDef.prompt;
   if (prompt === undefined || typeof prompt !== "string" || prompt.trim().length === 0) {
     return { jobId, success: false, action: "failed", detail: "Human step missing prompt" };
+  }
+
+  // System log: human gate waiting (Issue #280)
+  if (logWriter) {
+    const label = stepDef.label ?? stepId;
+    void logWriter.writeSystem(`Human gate ${jobId}/${label} awaiting input`, {
+      job_id: jobId,
+      step_id: stepId,
+      attempt: jobState.attempt ?? 1,
+    });
   }
 
   await enterHumanGate({
@@ -1382,6 +1481,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
     saveAllPrompts,
     eventSinkPath,
     callerContext,
+    logWriter: providedLogWriter,
   } = opts;
 
   // Clamp parallelism to at least 1
@@ -1437,6 +1537,17 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
   }
 
   const runDir = join(runsDir, runId);
+
+  // ── Create or reuse RunLogWriter for real-time log forwarding (Issue #280) ──
+
+  const logWriter = providedLogWriter ?? RunLogWriter.forRun(runDir, runId);
+
+  // System log: run started
+  void logWriter.writeSystem(
+    task !== undefined
+      ? `Run ${runId} created for workflow ${basename(workflowPath)}`
+      : `Run ${runId} resumed`,
+  );
 
   // ── 2. Load workflow definition (needed for step type resolution) ──────
 
@@ -1775,6 +1886,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         signal: jobControllers.get(j.jobId)?.signal,
         batchId,
         onEvent,
+        logWriter,
         pauseBefore,
         stopAfter,
         saveAllPrompts,
@@ -2069,6 +2181,15 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
   }
 
   // ── 4. Build summary from final state ──────────────────────────────────
+
+  const finalStatus = finalState?.status;
+  if (logWriter) {
+    void logWriter.writeSystem(
+      finalStatus !== undefined
+        ? `Run ${runId} finished with status: ${finalStatus}`
+        : `Run ${runId} finished (max iterations reached)`,
+    );
+  }
 
   const jobs = Object.entries(finalState?.jobs ?? {}).map(([id, js]) => ({
     id,

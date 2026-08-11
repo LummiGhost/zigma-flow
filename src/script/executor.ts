@@ -58,6 +58,16 @@ export interface ExecuteScriptStepOpts {
    * Step-level `cwd` takes precedence. (Issue #178)
    */
   jobCwd?: string;
+  /**
+   * Callback invoked for each stdout chunk in real time (Issue #280).
+   * Receives raw text chunks as they arrive from the subprocess.
+   */
+  onStdout?: (chunk: string) => void;
+  /**
+   * Callback invoked for each stderr chunk in real time (Issue #280).
+   * Receives raw text chunks as they arrive from the subprocess.
+   */
+  onStderr?: (chunk: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +348,8 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(typeof resolvedCwd === "string" ? { cwd: resolvedCwd } : {}),
     env: { CI: "true", ...(stepDef.env ?? {}) },
+    ...(opts.onStdout !== undefined ? { onStdout: opts.onStdout } : {}),
+    ...(opts.onStderr !== undefined ? { onStderr: opts.onStderr } : {}),
   });
 
   // ── 7. Write stdout/stderr artifacts ─────────────────────────────────────

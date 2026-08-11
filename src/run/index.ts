@@ -279,6 +279,8 @@ export interface RunState {
   run_id: string;
   workflow: string;      // workflow name (NOT path)
   task: string;
+  /** Frozen workflow inputs used by expression and prompt resolution. */
+  inputs?: Record<string, string>;
   created_at: string;    // ISO 8601
   /** How this run was triggered (ISSUE #269). */
   invocation?: {

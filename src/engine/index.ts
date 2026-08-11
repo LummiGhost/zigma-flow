@@ -36,7 +36,16 @@ import { evaluateCondition } from "../expression/index.js";
 import type { ExpressionContext } from "../expression/index.js";
 import type { CallerContext } from "../caller-context.js";
 import { createPermissionSnapshot } from "../caller-context.js";
-import { initializeJobGroups } from "./jobGroupModel.js";
+import {
+  completeCurrentIteration,
+  evaluateUntilCondition,
+  failGroup,
+  finalizeGroup,
+  initializeJobGroups,
+  resolveRepeatConfig,
+  snapshotIterationOutputs,
+  startNextIteration,
+} from "./jobGroupModel.js";
 
 export { applyRoutingAction } from "./routing.js";
 export type { ApplyRoutingActionOpts } from "./routing.js";
@@ -297,6 +306,7 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
     run_id: runId,
     workflow: wf.name,
     task: inputs.task,
+    inputs: mergedRunInputs,
     created_at: createdAt,
     last_event_id: lastEventId,
     invocation: { trigger: triggerSource },
@@ -773,45 +783,8 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
   });
 
   let lastEventId = jobCompletedId;
-
-  // Pre-compute readiness and emit events from the initially-read state.
-  // The updater below will re-derive from the latest state to ensure
-  // consistency with concurrent peer completions.
-  const completedJobIds = new Set<string>(
-    Object.entries(state.jobs)
-      .filter(([, js]) => js.status === "completed")
-      .map(([id]) => id)
-  );
-  completedJobIds.add(jobId);
-  const activeJobIds = new Set<string>(
-    Object.keys(state.jobs).filter(
-      (id) => !completedJobIds.has(id) && state.jobs[id]!.status !== "waiting"
-    )
-  );
-  const nowReadyIds = computeReadyJobs(wf.jobs, completedJobIds, activeJobIds, state.jobs);
-
-  for (const readyId of nowReadyIds) {
-    const waitingJobState = state.jobs[readyId];
-    if (waitingJobState?.status !== "waiting") continue;
-
-    const jobReadyId = await nextSequentialEventId(runDir, eventWriter);
-    await eventWriter.appendEvent(runDir, {
-      id: jobReadyId,
-      run_id: runId,
-      type: "job_ready",
-      timestamp: clock.now(),
-      producer: "engine",
-      job: null,
-      step: null,
-      attempt: null,
-      payload: { job_id: readyId },
-    });
-    lastEventId = jobReadyId;
-  }
-
-  // Step 1: Atomically set job to "completed" and propagate readiness.
-  // The updater uses latest state so concurrent peer completions are not lost.
-  await stateStore.updateState(runDir, (current) => {
+  const transitionTimestamp = clock.now();
+  function transitionCompletedJob(current: RunState): RunState {
     const completedJobState = { ...current.jobs[jobId]! };
     delete completedJobState.current_step;
     completedJobState.status = "completed";
@@ -824,7 +797,7 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
         const sealedAttempt = {
           ...lastAttempt,
           status: "success" as const,
-          ended_at: clock.now(),
+          ended_at: transitionTimestamp,
           step_count: stepCount,
         };
         completedJobState.attempts = [
@@ -836,12 +809,121 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
 
     let newState: RunState = {
       ...current,
-      last_event_id: lastEventId,
       jobs: {
         ...current.jobs,
         [jobId]: completedJobState,
       },
     };
+
+    const completedGroupId = completedJobState.group;
+    const completedGroupDef = completedGroupId !== undefined
+      ? wf.job_groups?.[completedGroupId]
+      : undefined;
+    const completedGroupState = completedGroupId !== undefined
+      ? newState.job_groups?.[completedGroupId]
+      : undefined;
+
+    if (
+      completedGroupId !== undefined &&
+      completedGroupDef !== undefined &&
+      completedGroupState !== undefined
+    ) {
+      const groupJobIds = Object.entries(wf.jobs)
+        .filter(([, definition]) => definition.group === completedGroupId)
+        .map(([id]) => id);
+      const groupJobsCompleted = groupJobIds.every(
+        (id) => newState.jobs[id]?.status === "completed",
+      );
+
+      if (groupJobsCompleted) {
+        let activeGroup = completedGroupState;
+        if (activeGroup.current_iteration === 0 || activeGroup.iterations.length === 0) {
+          activeGroup = startNextIteration(activeGroup, transitionTimestamp, groupJobIds);
+        }
+        const iterationOutputs = snapshotIterationOutputs(newState, groupJobIds);
+        const repeat = resolveRepeatConfig(completedGroupDef.repeat);
+        const completedIteration = completeCurrentIteration(
+          activeGroup,
+          transitionTimestamp,
+          iterationOutputs,
+          repeat,
+        );
+        const untilMet = repeat.until !== undefined &&
+          evaluateUntilCondition(repeat.until, iterationOutputs);
+
+        if (untilMet) {
+          newState = {
+            ...newState,
+            job_groups: {
+              ...newState.job_groups,
+              [completedGroupId]: finalizeGroup(completedIteration.group),
+            },
+          };
+        } else if (completedIteration.stopReason === null) {
+          const nextGroup = startNextIteration(
+            completedIteration.group,
+            transitionTimestamp,
+            groupJobIds,
+          );
+          const resetJobs = { ...newState.jobs };
+          for (const groupedJobId of groupJobIds) {
+            const previousJob = resetJobs[groupedJobId]!;
+            const externalNeedsSatisfied = (wf.jobs[groupedJobId]?.needs ?? [])
+              .filter((need) => !groupJobIds.includes(need))
+              .every((need) => resetJobs[need]?.status === "completed");
+            const internalNeeds = (wf.jobs[groupedJobId]?.needs ?? [])
+              .filter((need) => groupJobIds.includes(need));
+            const nextAttempt = (previousJob.attempt ?? 1) + 1;
+            resetJobs[groupedJobId] = {
+              ...previousJob,
+              status: externalNeedsSatisfied && internalNeeds.length === 0
+                ? "ready"
+                : "waiting",
+              attempt: nextAttempt,
+              attempts: [
+                ...(previousJob.attempts ?? []),
+                createOpenAttempt(nextAttempt, transitionTimestamp, "job-group-repeat"),
+              ],
+            };
+            delete resetJobs[groupedJobId]!.current_step;
+            delete resetJobs[groupedJobId]!.outputs;
+          }
+          newState = {
+            ...newState,
+            jobs: resetJobs,
+            job_groups: {
+              ...newState.job_groups,
+              [completedGroupId]: nextGroup,
+            },
+          };
+        } else if (repeat.until === undefined) {
+          newState = {
+            ...newState,
+            job_groups: {
+              ...newState.job_groups,
+              [completedGroupId]: finalizeGroup(completedIteration.group),
+            },
+          };
+        } else {
+          const failedJobs = { ...newState.jobs };
+          for (const groupedJobId of groupJobIds) {
+            failedJobs[groupedJobId] = { ...failedJobs[groupedJobId]!, status: "failed" };
+          }
+          newState = {
+            ...newState,
+            status: "failed",
+            jobs: failedJobs,
+            job_groups: {
+              ...newState.job_groups,
+              [completedGroupId]: failGroup(
+                completedIteration.group,
+                "repeat condition not met",
+              ),
+            },
+          };
+        }
+      }
+    }
 
     // Re-derive readiness from latest state (handles concurrent peer completions)
     const curCompletedIds = new Set<string>(
@@ -885,13 +967,66 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
     }
 
     return newState;
-  });
+  }
 
-  // Step 2: If run is now completed, emit run_completed event and update last_event_id.
-  // This two-step approach keeps events before state while allowing the updater
-  // to use the latest concurrent state view.
-  const postState = await stateStore.readSnapshot(runDir);
-  if (postState?.status === "completed") {
+  const previewState = transitionCompletedJob(state);
+  if (previewState.status === "failed") {
+    const runFailedId = await nextSequentialEventId(runDir, eventWriter);
+    await eventWriter.appendEvent(runDir, {
+      id: runFailedId,
+      run_id: runId,
+      type: "run_failed",
+      timestamp: clock.now(),
+      producer: "engine",
+      job: null,
+      step: null,
+      attempt: null,
+      payload: { reason: "job group exhausted before until condition passed" },
+    });
+    lastEventId = runFailedId;
+  } else {
+    for (const [readyId, readyState] of Object.entries(previewState.jobs)) {
+      const previousReadyState = state.jobs[readyId];
+      if (previousReadyState?.status === "ready" || readyState.status !== "ready") continue;
+
+      const jobReadyId = await nextSequentialEventId(runDir, eventWriter);
+      await eventWriter.appendEvent(runDir, {
+        id: jobReadyId,
+        run_id: runId,
+        type: "job_ready",
+        timestamp: clock.now(),
+        producer: "engine",
+        job: null,
+        step: null,
+        attempt: null,
+        payload: { job_id: readyId },
+      });
+      lastEventId = jobReadyId;
+
+      const nextAttempt = readyState.attempt;
+      if (nextAttempt !== undefined && nextAttempt > (previousReadyState?.attempt ?? 0)) {
+        const attemptStartedId = await nextSequentialEventId(runDir, eventWriter);
+        await eventWriter.appendEvent(runDir, {
+          id: attemptStartedId,
+          run_id: runId,
+          type: "attempt_started",
+          timestamp: clock.now(),
+          producer: "engine",
+          job: readyId,
+          step: null,
+          attempt: nextAttempt,
+          payload: {
+            job_id: readyId,
+            attempt: nextAttempt,
+            reason: "job-group-repeat",
+          },
+        });
+        lastEventId = attemptStartedId;
+      }
+    }
+  }
+
+  if (previewState.status === "completed") {
     const runCompletedId = await nextSequentialEventId(runDir, eventWriter);
     await eventWriter.appendEvent(runDir, {
       id: runCompletedId,
@@ -905,12 +1040,13 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
       payload: {},
     });
 
-    // Update last_event_id to include the run_completed event
-    await stateStore.updateState(runDir, (current) => ({
-      ...current,
-      last_event_id: runCompletedId,
-    }));
+    lastEventId = runCompletedId;
   }
+
+  await stateStore.updateState(runDir, (current) => ({
+    ...transitionCompletedJob(current),
+    last_event_id: lastEventId,
+  }));
 
   return false;
 }

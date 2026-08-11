@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 
 import { discoverSkillPacks, loadSkillPack, resolveSkillLock, SkillLockSchema } from "../skill-pack/index.js";
 import { FilesystemError, WorkflowError } from "../utils/index.js";
-import { resolveExpression } from "../expression/index.js";
+import { resolveExpression, serializeExpressionValue } from "../expression/index.js";
 import type { ExpressionContext } from "../expression/index.js";
 import type { WorkflowDefinition } from "../workflow/index.js";
 import type { RunState } from "../run/index.js";
@@ -665,7 +665,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
       const resolvedContent = resolveExpression(
         step.prompt as string,
         {
-          inputs: { task: state.task },
+          inputs: state.inputs ?? { task: state.task },
           run: { id: state.run_id, workflow: state.workflow },
           ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
         },
@@ -704,7 +704,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
       const resolvedContent = resolveExpression(
         step.prompt as string,
         {
-          inputs: { task: state.task },
+          inputs: state.inputs ?? { task: state.task },
           run: { id: state.run_id, workflow: state.workflow },
           ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
         },
@@ -728,18 +728,59 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
   // 3. Input resolution
   // -----------------------------------------------------------------------
 
-  const exprCtx = {
-    inputs: { task: state.task },
-    run: { id: state.run_id, workflow: state.workflow },
+  const exprCtx: ExpressionContext = {
+    inputs: state.inputs ?? { task: state.task },
+    run: {
+      id: state.run_id,
+      workflow: state.workflow,
+      ...(state.status !== undefined ? { status: state.status } : {}),
+    },
     ...(state.invocation !== undefined ? { invocation: state.invocation } : {}),
+    jobs: Object.fromEntries(
+      Object.entries(state.jobs).map(([id, job]) => [id, {
+        outputs: job.outputs ?? {},
+        status: job.status,
+        ...(job.attempt !== undefined ? { attempt: job.attempt } : {}),
+      }]),
+    ),
   };
+
+  const currentGroupId = state.jobs[jobId]?.group;
+  const currentGroup = currentGroupId !== undefined ? state.job_groups?.[currentGroupId] : undefined;
+  const previousIteration = currentGroup?.iterations
+    .slice()
+    .reverse()
+    .find((iteration) => iteration.completed_at !== undefined);
+  if (previousIteration?.job_outputs !== undefined) {
+    exprCtx.iteration = {
+      previous: {
+        jobs: Object.fromEntries(
+          Object.entries(previousIteration.job_outputs).map(([id, outputs]) => [id, { outputs }]),
+        ),
+      },
+    };
+  }
 
   const resolvedInputs: Record<string, string> = {};
   for (const [key, value] of Object.entries(step.with ?? {})) {
     if (typeof value === "string") {
       resolvedInputs[key] = resolveExpression(value, exprCtx);
+    } else {
+      resolvedInputs[key] = serializeExpressionValue(value);
     }
-    // Non-string values are excluded (MVP scope: inputs is Record<string, string>)
+  }
+
+  if (primaryPrompt !== undefined) {
+    primaryPrompt = {
+      ...primaryPrompt,
+      content: primaryPrompt.content.replace(
+        /\{\{\s*(\w+)\s*\}\}/g,
+        (placeholder, key: string) =>
+          Object.prototype.hasOwnProperty.call(resolvedInputs, key)
+            ? resolvedInputs[key]!
+            : placeholder,
+      ),
+    };
   }
 
   // -----------------------------------------------------------------------

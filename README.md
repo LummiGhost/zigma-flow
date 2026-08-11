@@ -32,7 +32,7 @@ A local, single-process TypeScript CLI that orchestrates multi-job workflows for
    ```
 
    This creates `.zigma-flow/` with a default `code-change` workflow, Skill Pack
-   prompts, and configuration. See the [init reference](./docs/phases/v0.4-productization/workflows/wf-init/01-cases-and-tests.md)
+   prompts, a `zigma-flow` usage skill for agents, and configuration. See the [init reference](./docs/phases/v0.4-productization/workflows/wf-init/01-cases-and-tests.md)
    for how init detects your project's package manager and scripts.
 
 4. **Validate the generated workflow:**

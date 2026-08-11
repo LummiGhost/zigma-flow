@@ -1,0 +1,24 @@
+id: zigma.flow
+kind: skill-pack
+name: zigma.flow
+version: 1.0.0
+description: Guidance for operating Zigma Flow workflows and inspecting auditable run evidence.
+
+knowledge:
+  - id: zigma-flow-usage
+    path: SKILL.md
+    description: Workflow invocation, inspection, resume, evidence, and state-ownership guidance.
+
+prompts: []
+scripts: []
+checks: []
+functions: []
+workflow_templates: []
+examples: []
+
+policies:
+  default_permissions:
+    contents: read
+    edits: none
+    commands: limited
+    workflow_state: none

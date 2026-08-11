@@ -126,6 +126,7 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
     dotZigma,
     join(dotZigma, "workflows"),
     join(dotZigma, "skills"),
+    join(dotZigma, "skills", "zigma-flow"),
     join(dotZigma, "skills", "code-change"),
     join(dotZigma, "skills", "code-change", "knowledge"),
     join(dotZigma, "skills", "code-change", "prompts"),
@@ -145,6 +146,8 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
   // Read static default workflow files from the bundled default-workflows directory
   const [
     codeChangeFastYml,
+    zigmaFlowSkillYmlContent,
+    zigmaFlowSkillContent,
     skillYmlContent,
     codingGuidelinesContent,
     workflowGuideContent,
@@ -161,6 +164,8 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
     forbiddenPathsContent,
   ] = await Promise.all([
     readDefaultFile("workflows", "code-change-fast.yml"),
+    readDefaultFile("skills", "zigma-flow", "skill.yml"),
+    readDefaultFile("skills", "zigma-flow", "SKILL.md"),
     readDefaultFile("skills", "code-change", "skill.yml"),
     readDefaultFile("skills", "code-change", "knowledge", "coding-guidelines.md"),
     readDefaultFile("skills", "code-change", "knowledge", "workflow-guide.md"),
@@ -182,6 +187,8 @@ export async function runInit(options: RunInitOptions): Promise<RunInitSummary> 
     [configJsonPath, configJsonTemplate(version)],
     [join(dotZigma, "workflows", "code-change.yml"), codeChangeWorkflowYml(detection)],
     [join(dotZigma, "workflows", "code-change-fast.yml"), codeChangeFastYml],
+    [join(dotZigma, "skills", "zigma-flow", "skill.yml"), zigmaFlowSkillYmlContent],
+    [join(dotZigma, "skills", "zigma-flow", "SKILL.md"), zigmaFlowSkillContent],
     [join(dotZigma, "skills", "code-change", "skill.yml"), skillYmlContent],
     [
       join(dotZigma, "skills", "code-change", "knowledge", "coding-guidelines.md"),

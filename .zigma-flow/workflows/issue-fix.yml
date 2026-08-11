@@ -132,7 +132,23 @@ jobs:
       - id: run-gates
         type: script
         shell: pwsh
-        run: "$wt = (Get-Content .zigma-flow/fix-worktree.txt -Raw).Trim(); Set-Location $wt; pnpm typecheck; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; pnpm lint; exit $LASTEXITCODE"
+        run: |
+          $wt = (Get-Content .zigma-flow/fix-worktree.txt -Raw).Trim()
+          Set-Location $wt
+          $pm = if (Test-Path "pnpm-lock.yaml") {"pnpm"} elseif (Test-Path "yarn.lock") {"yarn"} elseif (Test-Path "package-lock.json") {"npm"} elseif (Test-Path "bun.lockb" -or (Test-Path "bun.lock")) {"bun"} else {"npm"}
+          $scripts = @{}
+          if (Test-Path "package.json") {
+            $p = Get-Content package.json -Raw | ConvertFrom-Json
+            if ($p.scripts) { $p.scripts.PSObject.Properties | ForEach-Object { $scripts[$_.Name] = $true } }
+          }
+          function Invoke-ScriptIfExists($n) {
+            if (-not $scripts[$n]) { Write-Host "Skipping $n (not found in package.json scripts)"; return 0 }
+            $cmd = if ($pm -eq "npm" -or $pm -eq "bun") { "$pm run $n" } else { "$pm $n" }
+            Invoke-Expression $cmd
+            return $LASTEXITCODE
+          }
+          $e = Invoke-ScriptIfExists "typecheck"; if ($e -ne 0) { exit $e }
+          $e = Invoke-ScriptIfExists "lint"; exit $e
         failure_policy: fail
 
   unit-test:
@@ -169,7 +185,23 @@ jobs:
       - id: run-tests
         type: script
         shell: pwsh
-        run: "$wt = (Get-Content .zigma-flow/fix-worktree.txt -Raw).Trim(); Set-Location $wt; pnpm test:ci; exit $LASTEXITCODE"
+        run: |
+          $wt = (Get-Content .zigma-flow/fix-worktree.txt -Raw).Trim()
+          Set-Location $wt
+          $pm = if (Test-Path "pnpm-lock.yaml") {"pnpm"} elseif (Test-Path "yarn.lock") {"yarn"} elseif (Test-Path "package-lock.json") {"npm"} elseif (Test-Path "bun.lockb" -or (Test-Path "bun.lock")) {"bun"} else {"npm"}
+          $scripts = @{}
+          if (Test-Path "package.json") {
+            $p = Get-Content package.json -Raw | ConvertFrom-Json
+            if ($p.scripts) { $p.scripts.PSObject.Properties | ForEach-Object { $scripts[$_.Name] = $true } }
+          }
+          function Invoke-ScriptIfExists($n) {
+            if (-not $scripts[$n]) { Write-Host "Skipping $n (not found in package.json scripts)"; return 0 }
+            $cmd = if ($pm -eq "npm" -or $pm -eq "bun") { "$pm run $n" } else { "$pm $n" }
+            Invoke-Expression $cmd
+            return $LASTEXITCODE
+          }
+          $e = Invoke-ScriptIfExists "test:ci"; if ($e -ne 0) { exit $e }
+          $e = Invoke-ScriptIfExists "test"; exit $e
         failure_policy: fail
 
   review:

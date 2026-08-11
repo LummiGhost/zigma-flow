@@ -1687,9 +1687,45 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
           break;
         }
 
+        // Before declaring deadlock, check if failed deps with
+        // failure_policy: continue satisfy any waiting jobs' needs.
+        // If so, flip them to ready and re-enter the loop instead of
+        // throwing — the scheduler will pick them up on the next pass
+        // (Issue #275).
+        const deadlockCompletedIds = new Set(
+          Object.entries(state.jobs)
+            .filter(([, js]) => js.status === "completed")
+            .map(([id]) => id)
+        );
+        const deadlockActiveIds = new Set(
+          Object.keys(state.jobs).filter(
+            (id) => !deadlockCompletedIds.has(id) && state.jobs[id]!.status !== "waiting"
+          )
+        );
+        const revivedIds = computeReadyJobs(
+          wf.jobs,
+          deadlockCompletedIds,
+          deadlockActiveIds,
+          state.jobs,
+        ).filter((id) => state.jobs[id]?.status === "waiting");
+
+        if (revivedIds.length > 0) {
+          await stateStore.updateState(runDir, (cur) => {
+            const updatedJobs = { ...cur.jobs };
+            for (const readyId of revivedIds) {
+              if (updatedJobs[readyId]?.status === "waiting") {
+                updatedJobs[readyId] = { ...updatedJobs[readyId]!, status: "ready" as const };
+              }
+            }
+            return { ...cur, jobs: updatedJobs };
+          });
+          continue;
+        }
+
         // Deadlock: waiting jobs exist but no ready or running jobs are
-        // executable. This indicates a bug in state-transition logic or
-        // dependency resolution (Issue #231).
+        // executable, and none could be revived by continue-policy deps.
+        // This indicates a bug in state-transition logic or dependency
+        // resolution (Issue #231, Issue #275).
         const allJobStates = Object.entries(state.jobs)
           .map(([id, js]) => `  ${id}: ${js.status}`)
           .join("\n");

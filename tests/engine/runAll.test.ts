@@ -893,7 +893,7 @@ jobs:
         uses: zigma/second-skill
 `;
 
-  it("throws WorkflowError when waiting jobs exist but none are executable (T-DEADLOCK-1)", async () => {
+  it("throws WorkflowError when waiting jobs are unresolvable (T-DEADLOCK-1)", async () => {
     const sandbox = await makeSandbox();
     FakeBackend.calls = [];
 
@@ -904,47 +904,37 @@ jobs:
       "runall-deadlock-dep",
     );
 
-    // Corrupt state: mark first-job as completed (simulating it ran) but
-    // leave second-job as "waiting". This is a corrupt state because
-    // second-job should have become "ready" after first-job completed.
+    // Corrupt state: mark first-job as "blocked" (irrecoverable — no
+    // continue policy). second-job stays "waiting" but its only dependency
+    // is permanently blocked, so it can never become ready.
     const statePath = join(runDir, "state.json");
     const rawState = JSON.parse(await readFile(statePath, "utf-8")) as RunState;
     rawState.jobs["first-job"] = {
-      status: "completed",
-      outputs: { completed: true },
+      status: "blocked",
     } as JobState;
-    // second-job already has status: "waiting" — leave it corrupted
     await writeFile(statePath, JSON.stringify(rawState, null, 2), "utf-8");
 
     const workflowPath = join(sandbox.projectRoot, "runall-deadlock-dep.yml");
 
-    // Resume the corrupted run — should throw WorkflowError
-    let thrown: unknown = null;
-    try {
-      await callRunAll({
-        runId,
-        workflowPath,
-        runsDir: sandbox.runsDir,
-        zigmaflowDir: sandbox.zigmaflowDir,
-        skillLockPath: sandbox.skillLockPath,
-        backendResolver: () => new FakeBackend({ command: "fake" }),
-        clock: new FakeClock(),
-      });
-    } catch (e: unknown) {
-      thrown = e;
-    }
+    // Resume the corrupted run — should terminate with run_blocked
+    // (reconcileTerminalState detects the blocked upstream, post-loop
+    // resolution marks the waiting downstream as blocked too).
+    const summary = await callRunAll({
+      runId,
+      workflowPath,
+      runsDir: sandbox.runsDir,
+      zigmaflowDir: sandbox.zigmaflowDir,
+      skillLockPath: sandbox.skillLockPath,
+      backendResolver: () => new FakeBackend({ command: "fake" }),
+      clock: new FakeClock(),
+    });
 
-    expect(thrown).not.toBeNull();
-    expect(thrown).toBeInstanceOf(WorkflowError);
-
-    const err = thrown as WorkflowError;
-    // Verify the error message contains diagnostic info
-    expect(err.message).toContain("Engine deadlock");
-    expect(err.message).toContain("second-job");
-    expect(err.message).toContain(runId);
-
-    // Verify exit code is non-zero
-    expect(err.exitCode).toBeGreaterThan(0);
+    // Post-loop resolution marks deadlocked downstream as "blocked" and
+    // the run as "failed" (blocked upstream → unresolvable dependency).
+    expect(summary.status).toBe("failed");
+    const secondJob = summary.jobs.find((j) => j.id === "second-job");
+    expect(secondJob).toBeDefined();
+    expect(secondJob!.status).toBe("blocked");
   });
 
   it("does NOT throw when all jobs are completed (T-DEADLOCK-2)", async () => {
@@ -973,6 +963,77 @@ jobs:
     expect(summary.status).toBe("completed");
     expect(summary.jobs).toHaveLength(1);
     expect(summary.jobs[0]!.status).toBe("completed");
+  });
+
+  it("revives waiting jobs when failed deps have failure_policy: continue (T-DEADLOCK-3, Issue #275)", async () => {
+    const sandbox = await makeSandbox();
+
+    const CONTINUE_GATES_YAML = `\
+name: runall-continue-gates
+version: "0.1.0"
+jobs:
+  gate-b:
+    failure_policy: continue
+    steps:
+      - id: run
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/gate-b
+  gate-c:
+    failure_policy: continue
+    steps:
+      - id: run
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/gate-c
+  review:
+    needs:
+      - gate-b
+      - gate-c
+    steps:
+      - id: run
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/review
+`;
+
+    // Create run — gate-b and gate-c become ready, review becomes waiting
+    const { runId, runDir } = await bootstrapRun(
+      sandbox,
+      CONTINUE_GATES_YAML,
+      "runall-continue-gates",
+    );
+
+    // Corrupt state: set both gate jobs to "failed" (simulating they failed
+    // after exhausting retries with failure_policy: continue), leave review
+    // as "waiting". The engine should revive review instead of deadlocking.
+    const statePath = join(runDir, "state.json");
+    const rawState = JSON.parse(await readFile(statePath, "utf-8")) as RunState;
+    rawState.jobs["gate-b"] = {
+      status: "failed",
+    } as JobState;
+    rawState.jobs["gate-c"] = {
+      status: "failed",
+    } as JobState;
+    await writeFile(statePath, JSON.stringify(rawState, null, 2), "utf-8");
+
+    const workflowPath = join(sandbox.projectRoot, "runall-continue-gates.yml");
+
+    // Resume the corrupted run — should NOT throw deadlock
+    const summary = await callRunAll({
+      runId,
+      workflowPath,
+      runsDir: sandbox.runsDir,
+      zigmaflowDir: sandbox.zigmaflowDir,
+      skillLockPath: sandbox.skillLockPath,
+      backendResolver: () => new FakeBackend({ command: "fake" }),
+      clock: new FakeClock(),
+    });
+
+    // review should have been revived from "waiting" to "ready" and executed
+    const reviewJob = summary.jobs.find((j) => j.id === "review");
+    expect(reviewJob).toBeDefined();
+    expect(reviewJob!.status).toBe("completed");
   });
 });
 

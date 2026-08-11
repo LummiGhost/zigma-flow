@@ -15,6 +15,16 @@ export interface AgentExecuteOptions {
   projectRoot: string;
   /** Optional AbortSignal for cancellation. */
   signal?: AbortSignal;
+  /**
+   * Callback invoked for each stdout chunk in real time (Issue #280).
+   * Receives raw text chunks as they arrive from the agent subprocess.
+   */
+  onStdout?: (chunk: string) => void;
+  /**
+   * Callback invoked for each stderr chunk in real time (Issue #280).
+   * Receives raw text chunks as they arrive from the agent subprocess.
+   */
+  onStderr?: (chunk: string) => void;
 }
 
 export interface AgentExecuteResult {

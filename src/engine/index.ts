@@ -338,6 +338,10 @@ export interface ExecuteCurrentStepOpts {
   clock: Clock;
   /** Job-level working directory (Issue #178). Passed through to step executors. */
   jobCwd?: string;
+  /** Callback for real-time stdout chunks (Issue #280). */
+  onStdout?: (chunk: string) => void;
+  /** Callback for real-time stderr chunks (Issue #280). */
+  onStderr?: (chunk: string) => void;
 }
 
 export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<void> {
@@ -384,6 +388,8 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       clock,
       runner: actualRunner,
       ...(jobCwd !== undefined ? { jobCwd } : {}),
+      ...(opts.onStdout !== undefined ? { onStdout: opts.onStdout } : {}),
+      ...(opts.onStderr !== undefined ? { onStderr: opts.onStderr } : {}),
     });
   } else if (stepDef.type === "check") {
     const actualRunner = (opts.runner as CheckRunner | undefined) ?? new LocalCheckRunner();

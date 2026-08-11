@@ -38,6 +38,7 @@ import { eventsAction } from "./commands/events.js";
 import { artifactsAction } from "./commands/artifacts.js";
 import { resetRunAction } from "./commands/reset-run.js";
 import { skillAddAction } from "./commands/skill-add.js";
+import { logsAction } from "./commands/logs.js";
 import { SystemClock } from "./run/index.js";
 
 function collectInputs(value: string, previous: string[]): string[] {
@@ -665,6 +666,28 @@ async function runProgram(
     .exitOverride()
     .action(async (packPath: string) => {
       await skillAddAction(packPath, { zigmaflowDir: cwd() });
+    });
+
+  program
+    .command("logs")
+    .description("View and follow run log records (real-time stdout/stderr and system progress).")
+    .option("--run <run-id>", "Run ID to view logs for.")
+    .option("--latest", "Use the most recently created run.")
+    .option("--job <job-id>", "Filter to a specific job.")
+    .option("--step <step-id>", "Filter to a specific step (requires --job).")
+    .option("--follow", "Keep following new log records until run terminates.")
+    .option("--poll-ms <N>", "Poll interval in ms for follow mode (default 250).", parseInt)
+    .exitOverride()
+    .action(async (options: { run?: string; latest?: boolean; job?: string; step?: string; follow?: boolean; pollMs?: number }) => {
+      await logsAction({
+        runsDir: rDir(),
+        ...(options.run !== undefined ? { run: options.run } : {}),
+        ...(options.latest !== undefined ? { latest: options.latest } : {}),
+        ...(options.job !== undefined ? { job: options.job } : {}),
+        ...(options.step !== undefined ? { step: options.step } : {}),
+        ...(options.follow !== undefined ? { follow: options.follow } : {}),
+        ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
+      });
     });
 
   try {

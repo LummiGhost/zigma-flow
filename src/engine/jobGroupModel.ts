@@ -16,6 +16,7 @@ import type {
   RepeatConfig,
   RunState,
 } from "../run/index.js";
+import { evaluateCondition } from "../expression/index.js";
 
 // ---------------------------------------------------------------------------
 // RepeatConfig resolution
@@ -312,22 +313,31 @@ export function detectGroupConflicts(
 }
 
 // ---------------------------------------------------------------------------
-// Evaluate until condition (stub for green phase)
+// Evaluate until condition
 // ---------------------------------------------------------------------------
 
 /**
  * Evaluate an `until` condition expression against iteration context.
  *
- * This is a stub that returns false (continue iterating) for the green phase.
- * Full implementation with evaluateCondition integration is in the engine.
+ * The iteration snapshot is exposed through the regular jobs output namespace,
+ * so repeat conditions use the same restricted expression evaluator as steps.
  */
 export function evaluateUntilCondition(
-  _condition: string,
-  _jobOutputs: Record<string, Record<string, unknown>>,
+  condition: string,
+  jobOutputs: Record<string, Record<string, unknown>>,
 ): boolean {
-  // Stub: in the engine, this calls evaluateCondition with the
-  // appropriate expression context built from iteration job outputs.
-  return false;
+  const jobs = Object.fromEntries(
+    Object.entries(jobOutputs).map(([jobId, outputs]) => [jobId, { outputs }]),
+  );
+  return evaluateCondition(
+    condition,
+    {
+      inputs: {},
+      run: { id: "", workflow: "", status: "running" },
+      jobs,
+    },
+    "step-if",
+  );
 }
 
 // ---------------------------------------------------------------------------

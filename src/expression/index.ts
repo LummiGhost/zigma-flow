@@ -153,6 +153,13 @@ function resolveFailure(ctx: ExpressionContext, scope: StatusScope): boolean {
 // resolveExpression
 // ---------------------------------------------------------------------------
 
+/** Serialize expression values without losing arrays or structured outputs. */
+export function serializeExpressionValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "";
+  return JSON.stringify(value);
+}
+
 /**
  * Replace all `${{ ... }}` template tokens in the given template string
  * using the provided context.
@@ -190,7 +197,7 @@ export function resolveExpression(template: string, ctx: ExpressionContext): str
     if (expr.startsWith("inputs.")) {
       const key = expr.slice("inputs.".length);
       if (key.length > 0 && Object.prototype.hasOwnProperty.call(ctx.inputs, key)) {
-        return ctx.inputs[key]!;
+        return serializeExpressionValue(ctx.inputs[key]);
       }
       // Key missing from ctx.inputs — leave literal.
       return fullMatch;
@@ -291,7 +298,7 @@ export function resolveExpression(template: string, ctx: ExpressionContext): str
           Object.prototype.hasOwnProperty.call(ctx.jobs[jobId]!.outputs, key)
         ) {
           const val = ctx.jobs[jobId]!.outputs![key];
-          return val !== undefined ? String(val) : fullMatch;
+          return val !== undefined ? serializeExpressionValue(val) : fullMatch;
         }
       }
       return fullMatch;
@@ -321,7 +328,7 @@ export function resolveExpression(template: string, ctx: ExpressionContext): str
           Object.prototype.hasOwnProperty.call(ctx.steps[stepId]!.outputs, key)
         ) {
           const val = ctx.steps[stepId]!.outputs![key];
-          return val !== undefined ? String(val) : fullMatch;
+          return val !== undefined ? serializeExpressionValue(val) : fullMatch;
         }
       }
       return fullMatch;
@@ -342,10 +349,10 @@ export function resolveExpression(template: string, ctx: ExpressionContext): str
           Object.prototype.hasOwnProperty.call(ctx.iteration.previous.jobs[jobId]!.outputs, key)
         ) {
           const val = ctx.iteration.previous.jobs[jobId]!.outputs![key];
-          return val !== undefined ? String(val) : fullMatch;
+          return val !== undefined ? serializeExpressionValue(val) : fullMatch;
         }
       }
-      return fullMatch;
+      return "";
     }
 
     // Unknown pattern — pass through unchanged.

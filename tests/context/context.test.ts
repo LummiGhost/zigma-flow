@@ -853,7 +853,7 @@ describe("buildContext input resolution", () => {
     expect(bundle.inputs.x).toBe("${{ jobs.foo.outputs.bar }}");
   });
 
-  it("drops non-string with values from inputs (T-CTX-IN-4, UC-CTX-INPUTS-4)", async () => {
+  it("serializes non-string with values into deterministic prompt inputs", async () => {
     const workflowDef = makeWorkflowDef({
       jobs: {
         plan: {
@@ -877,9 +877,8 @@ describe("buildContext input resolution", () => {
       state,
       jobId: "plan",
     });
-    // MVP `inputs` is Record<string, string>; non-strings dropped.
-    expect(bundle.inputs).not.toHaveProperty("count");
-    expect(bundle.inputs).not.toHaveProperty("flag");
+    expect(bundle.inputs.count).toBe("7");
+    expect(bundle.inputs.flag).toBe("true");
     expect(bundle.inputs.name).toBe("ok");
   });
 });
@@ -1624,6 +1623,69 @@ describe("buildContext inline prompt resolution", () => {
     });
 
     expect(bundle.primaryPrompt?.content).toContain("${{ jobs.x.outputs.y }}");
+  });
+
+  it("resolves named run inputs, previous iteration outputs, and typed step inputs", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        plan: {
+          group: "review-loop",
+          steps: [
+            {
+              id: "draft",
+              type: "agent",
+              prompt: "Resolve inputs\nPhase={{ phase }} Previous={{ previous }} Flags={{ flags }}",
+              with: {
+                phase: "${{ inputs.phase }}",
+                previous: "${{ iteration.previous.jobs.review.outputs.findings }}",
+                flags: { strict: true },
+              },
+            },
+          ],
+        },
+      },
+      job_groups: {
+        "review-loop": { repeat: { max_iterations: 2 } },
+      },
+    });
+    const state = makeRunState({
+      inputs: { task: "fix bug", phase: "P4" },
+      jobs: { plan: { status: "ready", group: "review-loop" } },
+      job_groups: {
+        "review-loop": {
+          group_id: "review-loop",
+          status: "iterating",
+          current_iteration: 2,
+          iterations_remaining: 0,
+          iterations: [
+            {
+              index: 1,
+              started_at: FIXED_ISO,
+              completed_at: FIXED_ISO,
+              job_ids: ["review"],
+              job_outputs: { review: { findings: ["missing boundary"] } },
+            },
+          ],
+        },
+      },
+    });
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef,
+      state,
+      jobId: "plan",
+    });
+
+    expect(bundle.inputs).toEqual({
+      phase: "P4",
+      previous: '["missing boundary"]',
+      flags: '{"strict":true}',
+    });
+    expect(bundle.primaryPrompt?.content).toBe(
+      'Resolve inputs\nPhase=P4 Previous=["missing boundary"] Flags={"strict":true}',
+    );
   });
 
   it("populates capabilities when inline prompt has expose.skills (T-INLINE-RESOLVE-5)", async () => {

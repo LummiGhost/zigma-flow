@@ -307,6 +307,24 @@ describe("runInit integration", () => {
     expect(skillPack.id).toBe("zigma.flow");
     expect(skillPack.knowledge).toContainEqual(expect.objectContaining({ path: "SKILL.md" }));
     expect(generated).toMatch(/^---\r?\nname: zigma-flow\r?\n/m);
+    expect(generated.indexOf("## Design an efficient workflow")).toBeLessThan(
+      generated.indexOf("## Operate the run")
+    );
+    expect(generated).toContain("Build the smallest useful DAG");
+    expect(generated).toContain("Choose the cheapest correct Step");
+    expect(generated).toContain("Minimize Agent context");
+    expect(generated).toContain("every `needs` edge is necessary");
+    expect(generated).toContain("job_groups.repeat");
+    const compactExample = generated.match(/## Compact pattern\s+```yaml\r?\n([\s\S]*?)```/);
+    expect(compactExample?.[1]).toBeDefined();
+    const exampleWorkflow = loadWorkflow(compactExample![1]!);
+    expect(Object.keys(exampleWorkflow.jobs)).toEqual([
+      "plan",
+      "implement",
+      "typecheck",
+      "unit-test",
+      "summarize"
+    ]);
     expect(generated).toContain("zigma-flow validate");
     expect(generated).toContain("zigma-flow invoke");
     expect(generated).toContain("zigma-flow inspect");

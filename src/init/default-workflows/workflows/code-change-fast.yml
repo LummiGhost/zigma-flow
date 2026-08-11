@@ -68,7 +68,10 @@ jobs:
     steps:
       - id: check
         type: script
-        run: "pnpm typecheck && pnpm lint"
+        run: |
+          PM=$(if [ -f pnpm-lock.yaml ]; then echo pnpm; elif [ -f yarn.lock ]; then echo yarn; elif [ -f package-lock.json ]; then echo npm; elif [ -f bun.lockb ] || [ -f bun.lock ]; then echo bun; else echo npm; fi)
+          RUN="$PM"; if [ "$PM" = "npm" ] || [ "$PM" = "bun" ]; then RUN="$PM run"; fi
+          $RUN typecheck && $RUN lint
         env:
           CI: "true"
         on_failure: fail
@@ -81,7 +84,10 @@ jobs:
     steps:
       - id: test
         type: script
-        run: "pnpm test:ci"
+        run: |
+          PM=$(if [ -f pnpm-lock.yaml ]; then echo pnpm; elif [ -f yarn.lock ]; then echo yarn; elif [ -f package-lock.json ]; then echo npm; elif [ -f bun.lockb ] || [ -f bun.lock ]; then echo bun; else echo npm; fi)
+          RUN="$PM"; if [ "$PM" = "npm" ] || [ "$PM" = "bun" ]; then RUN="$PM run"; fi
+          $RUN test:ci
         env:
           CI: "true"
         on_failure: fail

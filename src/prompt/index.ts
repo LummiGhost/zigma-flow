@@ -826,11 +826,11 @@ function buildOutputContract(bundle: ContextBundle, reportPath: string): OutputC
   const requiredArtifacts = bundle.required_artifacts;
   const allowedSignals = bundle.signals.map((signal) => signal.id);
   const artifactRules = [
-    "Write the Agent report to the canonical report path only.",
+    "The backend writes the structured Agent report to the canonical report path.",
     "Use artifact references for large logs, diffs, test results, and generated files.",
     "Do not place full large artifact contents in the prompt or report JSON.",
   ];
-  const stopRequirement = "Complete the current step, write report.json, then stop. 完成当前 step 后停止.";
+  const stopRequirement = "Complete the current step, write report.json, then stop. 完成当前 step 后停止. The backend, not prompt prose, enforces and writes this structured result.";
   const content = renderTemplate(TEMPLATES["output-contract"], {
     reportPath,
     requiredOutputs: requiredOutputs.length > 0 ? requiredOutputs.join(", ") : "(none declared)",

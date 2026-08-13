@@ -1,9 +1,10 @@
-Write your report to:
+The Engine supplies the workflow-derived output schema directly to the Agent CLI
+and writes the structured response to:
 
   `{{reportPath}}`
 
-This is the canonical step artifact path. Writing to any other location will cause the Engine to reject the report.
-This is a runtime artifact file. Writing it does not modify workflow state or repository code; the Engine reads it and owns all state transitions.
+This is the canonical step artifact path. Writing to another location will cause the Engine to reject the report.
+This is a runtime artifact file. The Engine owns all state transitions.
 
 ### Required Outputs
 
@@ -22,7 +23,7 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 {{outputsSchemaSection}}{{artifactPolicySection}}{{signalPolicySection}}{{returnStatusSection}}{{artifactReferenceSchemaSection}}
 ### Report Schema
 
-The file must be valid JSON with exactly these required top-level fields:
+The native Agent CLI schema enforces `report.json` with these required top-level fields:
 
 ```json
 {

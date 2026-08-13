@@ -52,6 +52,7 @@ describe("CodexCliBackend", () => {
       reportPath,
       stepDir,
       projectRoot: root,
+      outputSchema: { type: "object" },
     });
 
     expect(result.success).toBe(true);
@@ -63,7 +64,9 @@ describe("CodexCliBackend", () => {
     expect(JSON.parse(await readFile(join(stepDir, "agent.invocation.json"), "utf8"))).toMatchObject({
       prompt_transport: "stdin",
       command: process.execPath,
+      output_schema_path: join(stepDir, "agent-output-schema.json"),
     });
+    expect(JSON.parse(await readFile(join(stepDir, "agent-output-schema.json"), "utf8"))).toEqual({ type: "object" });
   });
 
   it("reports a clear configuration error when the Codex executable is missing", async () => {

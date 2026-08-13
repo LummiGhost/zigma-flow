@@ -29,3 +29,5 @@ export {
 export { AgentBackendFactory, agentFactory } from "./factory.js";
 export { ClaudeCodeBackend } from "./backends/claude-code.js";
 export { CodexCliBackend } from "./backends/codex-cli.js";
+export { compileAgentOutputSchema, outputSchemaHash } from "./outputSchema.js";
+export type { JsonSchema } from "./outputSchema.js";

@@ -19,10 +19,10 @@ intake
                                 └── summarize
 ```
 
-## report.json Contract
+## Structured output contract
 
-Every agent step must write a `report.json` to the run artifact directory.
-The report must include the following fields:
+The Engine derives the Agent report schema from each workflow step's `outputs`
+and passes it to the Agent CLI. The structured response includes:
 
 - `outputs`: key-value pairs of step outputs.
 - `artifacts`: list of artifact file paths produced during this step.
@@ -30,27 +30,6 @@ The report must include the following fields:
 - `summary`: a short human-readable summary of what was done.
 - `status` (for steps with `returns`): a structured return status from the
   step's declared `returns.status.values`. Used with `on_return` for flow control.
-
-Example (simple step):
-```json
-{
-  "outputs": { "key": "value" },
-  "artifacts": ["path/to/artifact.md"],
-  "signals": [],
-  "summary": "Completed intake analysis."
-}
-```
-
-Example (step with status return):
-```json
-{
-  "outputs": { "verdict": "approved", "checked_files": ["src/index.ts"] },
-  "artifacts": ["path/to/review-notes.md"],
-  "signals": [],
-  "summary": "Review completed. All checks passed.",
-  "status": "approved"
-}
-```
 
 ## Job Expectations
 
@@ -83,5 +62,5 @@ and maps them to routing actions via `on_return`. Optional jobs use
 
 ## Stop After Completing
 
-Each agent step must stop after writing report.json. Do not proceed to
+Each agent step must stop after returning its structured result. Do not proceed to
 subsequent steps autonomously.

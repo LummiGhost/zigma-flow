@@ -146,12 +146,13 @@ Workflow: \${{ run.workflow }}
 
 ## Output Contract
 
-Write your report to:
+The Engine supplies the workflow-derived output schema directly to the Agent CLI
+and writes the structured response to:
 
   \`.zigma-flow/runs/20260623-0001/jobs/implement/attempts/1/steps/implement/report.json\`
 
-This is the canonical step artifact path. Writing to any other location will cause the Engine to reject the report.
-This is a runtime artifact file. Writing it does not modify workflow state or repository code; the Engine reads it and owns all state transitions.
+This is the canonical step artifact path. Writing to another location will cause the Engine to reject the report.
+This is a runtime artifact file. The Engine owns all state transitions.
 
 ### Required Outputs
 
@@ -166,7 +167,7 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 (none)
 ### Artifact Rules
 
-- Write the Agent report to the canonical report path only.
+- The backend writes the structured Agent report to the canonical report path.
 - Use artifact references for large logs, diffs, test results, and generated files.
 - Do not place full large artifact contents in the prompt or report JSON.
 
@@ -193,7 +194,7 @@ All agent-created artifacts must be placed within this directory.
 
 ### Report Schema
 
-The file must be valid JSON with exactly these required top-level fields:
+The native Agent CLI schema enforces \`report.json\` with these required top-level fields:
 
 \`\`\`json
 {
@@ -209,7 +210,7 @@ The file must be valid JSON with exactly these required top-level fields:
 - \`"signals"\`: structured workflow-change requests from the allowed list above.
 - \`"summary"\`: short execution summary.
 
-Complete the current step, write report.json, then stop. 完成当前 step 后停止.
+Complete the current step, write report.json, then stop. 完成当前 step 后停止. The backend, not prompt prose, enforces and writes this structured result.
 
 "
 `;
@@ -321,12 +322,13 @@ No primary Skill Pack prompt was resolved for this step. Use the task prompt, co
 
 ## Output Contract
 
-Write your report to:
+The Engine supplies the workflow-derived output schema directly to the Agent CLI
+and writes the structured response to:
 
   \`.zigma-flow/runs/20260622-0001/jobs/unknown/attempts/1/steps/unknown/report.json\`
 
-This is the canonical step artifact path. Writing to any other location will cause the Engine to reject the report.
-This is a runtime artifact file. Writing it does not modify workflow state or repository code; the Engine reads it and owns all state transitions.
+This is the canonical step artifact path. Writing to another location will cause the Engine to reject the report.
+This is a runtime artifact file. The Engine owns all state transitions.
 
 ### Required Outputs
 
@@ -341,7 +343,7 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 (none)
 ### Artifact Rules
 
-- Write the Agent report to the canonical report path only.
+- The backend writes the structured Agent report to the canonical report path.
 - Use artifact references for large logs, diffs, test results, and generated files.
 - Do not place full large artifact contents in the prompt or report JSON.
 
@@ -368,7 +370,7 @@ All agent-created artifacts must be placed within this directory.
 
 ### Report Schema
 
-The file must be valid JSON with exactly these required top-level fields:
+The native Agent CLI schema enforces \`report.json\` with these required top-level fields:
 
 \`\`\`json
 {
@@ -384,7 +386,7 @@ The file must be valid JSON with exactly these required top-level fields:
 - \`"signals"\`: structured workflow-change requests from the allowed list above.
 - \`"summary"\`: short execution summary.
 
-Complete the current step, write report.json, then stop. 完成当前 step 后停止.
+Complete the current step, write report.json, then stop. 完成当前 step 后停止. The backend, not prompt prose, enforces and writes this structured result.
 
 "
 `;
@@ -530,12 +532,13 @@ Create an implementation plan from the task description and upstream context.
 
 ## Output Contract
 
-Write your report to:
+The Engine supplies the workflow-derived output schema directly to the Agent CLI
+and writes the structured response to:
 
   \`.zigma-flow/runs/20260622-0001/jobs/plan/attempts/1/steps/plan/report.json\`
 
-This is the canonical step artifact path. Writing to any other location will cause the Engine to reject the report.
-This is a runtime artifact file. Writing it does not modify workflow state or repository code; the Engine reads it and owns all state transitions.
+This is the canonical step artifact path. Writing to another location will cause the Engine to reject the report.
+This is a runtime artifact file. The Engine owns all state transitions.
 
 ### Required Outputs
 
@@ -550,7 +553,7 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 - \`needs_architecture_design\`
 ### Artifact Rules
 
-- Write the Agent report to the canonical report path only.
+- The backend writes the structured Agent report to the canonical report path.
 - Use artifact references for large logs, diffs, test results, and generated files.
 - Do not place full large artifact contents in the prompt or report JSON.
 
@@ -577,7 +580,7 @@ All agent-created artifacts must be placed within this directory.
 
 ### Report Schema
 
-The file must be valid JSON with exactly these required top-level fields:
+The native Agent CLI schema enforces \`report.json\` with these required top-level fields:
 
 \`\`\`json
 {
@@ -593,7 +596,7 @@ The file must be valid JSON with exactly these required top-level fields:
 - \`"signals"\`: structured workflow-change requests from the allowed list above.
 - \`"summary"\`: short execution summary.
 
-Complete the current step, write report.json, then stop. 完成当前 step 后停止.
+Complete the current step, write report.json, then stop. 完成当前 step 后停止. The backend, not prompt prose, enforces and writes this structured result.
 
 "
 `;
@@ -800,12 +803,13 @@ Review the implementation for correctness and quality.
 
 ## Output Contract
 
-Write your report to:
+The Engine supplies the workflow-derived output schema directly to the Agent CLI
+and writes the structured response to:
 
   \`.zigma-flow/runs/20260622-0001/jobs/review/attempts/1/steps/review/report.json\`
 
-This is the canonical step artifact path. Writing to any other location will cause the Engine to reject the report.
-This is a runtime artifact file. Writing it does not modify workflow state or repository code; the Engine reads it and owns all state transitions.
+This is the canonical step artifact path. Writing to another location will cause the Engine to reject the report.
+This is a runtime artifact file. The Engine owns all state transitions.
 
 ### Required Outputs
 
@@ -821,7 +825,7 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 - \`needs_architecture_design\`
 ### Artifact Rules
 
-- Write the Agent report to the canonical report path only.
+- The backend writes the structured Agent report to the canonical report path.
 - Use artifact references for large logs, diffs, test results, and generated files.
 - Do not place full large artifact contents in the prompt or report JSON.
 
@@ -848,7 +852,7 @@ All agent-created artifacts must be placed within this directory.
 
 ### Report Schema
 
-The file must be valid JSON with exactly these required top-level fields:
+The native Agent CLI schema enforces \`report.json\` with these required top-level fields:
 
 \`\`\`json
 {
@@ -864,7 +868,7 @@ The file must be valid JSON with exactly these required top-level fields:
 - \`"signals"\`: structured workflow-change requests from the allowed list above.
 - \`"summary"\`: short execution summary.
 
-Complete the current step, write report.json, then stop. 完成当前 step 后停止.
+Complete the current step, write report.json, then stop. 完成当前 step 后停止. The backend, not prompt prose, enforces and writes this structured result.
 
 "
 `;
@@ -988,12 +992,13 @@ Implement the change according to the plan and output structured data.
 
 ## Output Contract
 
-Write your report to:
+The Engine supplies the workflow-derived output schema directly to the Agent CLI
+and writes the structured response to:
 
   \`.zigma-flow/runs/20260701-0001/jobs/implement/attempts/1/steps/implement/report.json\`
 
-This is the canonical step artifact path. Writing to any other location will cause the Engine to reject the report.
-This is a runtime artifact file. Writing it does not modify workflow state or repository code; the Engine reads it and owns all state transitions.
+This is the canonical step artifact path. Writing to another location will cause the Engine to reject the report.
+This is a runtime artifact file. The Engine owns all state transitions.
 
 ### Required Outputs
 
@@ -1008,7 +1013,7 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 - \`needs_review\`
 ### Artifact Rules
 
-- Write the Agent report to the canonical report path only.
+- The backend writes the structured Agent report to the canonical report path.
 - Use artifact references for large logs, diffs, test results, and generated files.
 - Do not place full large artifact contents in the prompt or report JSON.
 
@@ -1057,7 +1062,7 @@ All agent-created artifacts must be placed within this directory.
 
 ### Report Schema
 
-The file must be valid JSON with exactly these required top-level fields:
+The native Agent CLI schema enforces \`report.json\` with these required top-level fields:
 
 \`\`\`json
 {
@@ -1073,7 +1078,7 @@ The file must be valid JSON with exactly these required top-level fields:
 - \`"signals"\`: structured workflow-change requests from the allowed list above.
 - \`"summary"\`: short execution summary.
 
-Complete the current step, write report.json, then stop. 完成当前 step 后停止.
+Complete the current step, write report.json, then stop. 完成当前 step 后停止. The backend, not prompt prose, enforces and writes this structured result.
 
 "
 `;
@@ -1233,12 +1238,13 @@ Implement the change according to the plan.
 
 ## Output Contract
 
-Write your report to:
+The Engine supplies the workflow-derived output schema directly to the Agent CLI
+and writes the structured response to:
 
   \`.zigma-flow/runs/20260622-0001/jobs/implement/attempts/1/steps/implement/report.json\`
 
-This is the canonical step artifact path. Writing to any other location will cause the Engine to reject the report.
-This is a runtime artifact file. Writing it does not modify workflow state or repository code; the Engine reads it and owns all state transitions.
+This is the canonical step artifact path. Writing to another location will cause the Engine to reject the report.
+This is a runtime artifact file. The Engine owns all state transitions.
 
 ### Required Outputs
 
@@ -1253,7 +1259,7 @@ This is a runtime artifact file. Writing it does not modify workflow state or re
 (none)
 ### Artifact Rules
 
-- Write the Agent report to the canonical report path only.
+- The backend writes the structured Agent report to the canonical report path.
 - Use artifact references for large logs, diffs, test results, and generated files.
 - Do not place full large artifact contents in the prompt or report JSON.
 
@@ -1280,7 +1286,7 @@ All agent-created artifacts must be placed within this directory.
 
 ### Report Schema
 
-The file must be valid JSON with exactly these required top-level fields:
+The native Agent CLI schema enforces \`report.json\` with these required top-level fields:
 
 \`\`\`json
 {
@@ -1296,7 +1302,7 @@ The file must be valid JSON with exactly these required top-level fields:
 - \`"signals"\`: structured workflow-change requests from the allowed list above.
 - \`"summary"\`: short execution summary.
 
-Complete the current step, write report.json, then stop. 完成当前 step 后停止.
+Complete the current step, write report.json, then stop. 完成当前 step 后停止. The backend, not prompt prose, enforces and writes this structured result.
 
 "
 `;

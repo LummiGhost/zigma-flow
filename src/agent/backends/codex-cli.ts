@@ -18,6 +18,7 @@ import type {
   AgentExecuteOptions,
   AgentExecuteResult,
 } from "../types.js";
+import { outputSchemaHash } from "../outputSchema.js";
 
 const DEFAULT_TIMEOUT = 600_000;
 const DEFAULT_ARGS = ["exec", "-", "--json", "--color", "never"];
@@ -68,13 +69,18 @@ export class CodexCliBackend implements AgentBackend {
   }
 
   async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
-    const { prompt, reportPath, stepDir, projectRoot, signal } = opts;
+    const { prompt, reportPath, stepDir, projectRoot, signal, outputSchema } = opts;
     await mkdir(stepDir, { recursive: true });
 
     const stdoutPath = join(stepDir, "agent.stdout.log");
     const stderrPath = join(stepDir, "agent.stderr.log");
     const invocationPath = join(stepDir, "agent.invocation.json");
+    const schemaPath = join(stepDir, "agent-output-schema.json");
     const args = [...this.args];
+    if (outputSchema !== undefined) {
+      await writeFile(schemaPath, JSON.stringify(outputSchema, null, 2), "utf-8");
+      args.push("--output-schema", schemaPath);
+    }
 
     if (this.model !== undefined) args.push("--model", this.model);
     if (this.profile !== undefined) args.push("--profile", this.profile);
@@ -88,14 +94,7 @@ export class CodexCliBackend implements AgentBackend {
     args.push("--cd", projectRoot);
     args.push("--output-last-message", reportPath);
 
-    const fullPrompt = [
-      prompt,
-      "",
-      "---",
-      "",
-      "Return only the final report JSON. It must contain outputs, artifacts, signals, and summary.",
-      "Do not start another workflow step.",
-    ].join("\n");
+    const fullPrompt = prompt;
 
     const startedAt = Date.now();
     try {
@@ -109,7 +108,7 @@ export class CodexCliBackend implements AgentBackend {
       const durationMs = Date.now() - startedAt;
       await writeFile(stdoutPath, result.stdout ?? "", "utf-8");
       await writeFile(stderrPath, result.stderr ?? "", "utf-8");
-      await this.writeInvocation(invocationPath, args, projectRoot, startedAt, result.exitCode, durationMs);
+      await this.writeInvocation(invocationPath, args, projectRoot, startedAt, result.exitCode, durationMs, undefined, outputSchema === undefined ? undefined : schemaPath, outputSchema === undefined ? undefined : outputSchemaHash(outputSchema));
 
       try {
         JSON.parse(await readFile(reportPath, "utf-8"));
@@ -146,7 +145,7 @@ export class CodexCliBackend implements AgentBackend {
       };
       await writeFile(stdoutPath, err.stdout ?? "", "utf-8");
       await writeFile(stderrPath, err.stderr ?? "", "utf-8");
-      await this.writeInvocation(invocationPath, args, projectRoot, startedAt, err.exitCode, durationMs, err.message);
+      await this.writeInvocation(invocationPath, args, projectRoot, startedAt, err.exitCode, durationMs, err.message, outputSchema === undefined ? undefined : schemaPath, outputSchema === undefined ? undefined : outputSchemaHash(outputSchema));
 
       if (err.isCanceled || signal?.aborted) {
         return { success: false, error: "Agent execution was cancelled.", stdoutPath, stderrPath, invocationPath, durationMs };
@@ -207,6 +206,8 @@ export class CodexCliBackend implements AgentBackend {
     exitCode: number | undefined,
     durationMs: number,
     error?: string,
+    outputSchemaPath?: string,
+    outputSchemaSha256?: string,
   ): Promise<void> {
     await writeFile(path, JSON.stringify({
       command: this.command,
@@ -217,6 +218,8 @@ export class CodexCliBackend implements AgentBackend {
       end_time: new Date(startedAt + durationMs).toISOString(),
       exit_code: exitCode ?? null,
       project_root: projectRoot,
+      output_schema_path: outputSchemaPath,
+      output_schema_sha256: outputSchemaSha256,
       ...(error !== undefined ? { error } : {}),
     }, null, 2), "utf-8");
   }

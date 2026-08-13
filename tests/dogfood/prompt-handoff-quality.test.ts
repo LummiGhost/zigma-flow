@@ -127,8 +127,8 @@ describe("P12.3 prompt handoff quality regression", () => {
       expect(prompt).toContain(
         `.zigma-flow/runs/${runId}/jobs/intake/attempts/1/steps/analyze/report.json`,
       );
-      expect(prompt).toContain("This job operates in read-only mode.");
-      expect(prompt).not.toContain("edits: write");
+      expect(prompt).toContain("Job may modify repository files according to the task");
+      expect(prompt).not.toContain("This job operates in read-only mode.");
       expect(stepBlock).toContain("# Intake Step Prompt");
       expect(manifest.backend_composition.composition_order).toEqual([
         "system",

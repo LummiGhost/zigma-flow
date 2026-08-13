@@ -551,6 +551,19 @@ jobs:
 // ---------------------------------------------------------------------------
 
 describe("TC-DEP-11: Agent report signals deprecation", () => {
+  it("normalizes the legacy signal field documented by older built-in skills", () => {
+    const parsed = validateReportShape({
+      outputs: { verdict: "rejected" },
+      artifacts: [],
+      signals: [{ signal: "fix_rejected", reason: "P1 finding" }],
+      summary: "review rejected",
+    });
+
+    expect(parsed.signals).toEqual([
+      { type: "fix_rejected", reason: "P1 finding" },
+    ]);
+  });
+
   it("validateReportShape returns a report with signals field", () => {
     const report = {
       outputs: { key: "value" },

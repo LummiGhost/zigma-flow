@@ -18,5 +18,5 @@ map. Keep the plan reviewable and limited to the current MVP scope.
 - `contracts_to_preserve`: existing API, schema, or behavioral contracts that must not be broken.
 - `out_of_scope`: explicitly list what is NOT included in this plan, to prevent scope creep.
 - `alternatives_considered` (optional): alternative approaches and why they were rejected.
-- Signal `needs_architecture_design` only when the plan requires an explicit
+- Return status `needs_architecture_design` only when the plan requires an explicit
   architecture decision before implementation.

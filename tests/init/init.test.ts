@@ -279,6 +279,8 @@ describe("runInit integration", () => {
     expect(yml).toMatch(/type:\s*script/);
     expect(yml).toMatch(/type:\s*human/);
     expect(yml).toMatch(/activation:\s*optional/);
+    expect(yml).not.toMatch(/workspace:\s*\r?\n\s+mode:/);
+    expect(yml).not.toMatch(/zigma-flow\s+(approve|reject|run-all|run|next|prompt|step)\b/);
   });
 
   it("skill.yml declares knowledge, prompts, scripts, checks, functions, policies (T-INIT-10)", async () => {
@@ -353,6 +355,7 @@ describe("runInit integration", () => {
       expect(text).toContain("The Task Prompt layer");
       expect(text.toLowerCase()).not.toContain("report schema");
       expect(text.toLowerCase()).not.toContain("stop after completing");
+      expect(text).not.toMatch(/emit\s+`?\w+`?\s+signal/i);
     }
   });
 

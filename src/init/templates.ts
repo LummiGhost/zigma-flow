@@ -86,8 +86,6 @@ export function codeChangeWorkflowYml(detection?: DetectionResult): string {
   install-deps:
     needs:
       - implement
-    workspace:
-      mode: writable
     steps:
       - id: install
         type: script
@@ -135,8 +133,6 @@ permissions:
 
 jobs:
   intake:
-    workspace:
-      mode: read-only
     steps:
       - id: analyze
         type: agent
@@ -154,8 +150,6 @@ jobs:
   code-map:
     needs:
       - intake
-    workspace:
-      mode: read-only
     steps:
       - id: map
         type: agent
@@ -176,8 +170,6 @@ jobs:
   risk-scan:
     needs:
       - code-map
-    workspace:
-      mode: read-only
     steps:
       - id: validate-report
         type: script
@@ -193,8 +185,6 @@ jobs:
   plan:
     needs:
       - risk-scan
-    workspace:
-      mode: read-only
     steps:
       - id: plan
         type: agent
@@ -225,8 +215,6 @@ jobs:
     activation: optional
     needs:
       - plan
-    workspace:
-      mode: read-only
     steps:
       - id: design
         type: agent
@@ -272,8 +260,6 @@ jobs:
   build:
     needs:
       - implement
-    workspace:
-      mode: read-only
     steps:
       - id: build
         type: script
@@ -291,8 +277,6 @@ jobs:
   static-check:
     needs:
 ${staticCheckNeeds}
-    workspace:
-      mode: read-only
     steps:
       - id: check
         type: script
@@ -306,8 +290,6 @@ ${staticCheckNeeds}
   static-check:
     needs:
 ${staticCheckNeeds}
-    workspace:
-      mode: read-only
     steps:
       - id: check
         type: agent
@@ -324,8 +306,6 @@ ${staticCheckNeeds}
   unit-test:
     needs:
 ${unitTestNeeds}
-    workspace:
-      mode: read-only
     steps:
       - id: test
         type: script
@@ -339,8 +319,6 @@ ${unitTestNeeds}
   unit-test:
     needs:
 ${unitTestNeeds}
-    workspace:
-      mode: read-only
     steps:
       - id: test
         type: agent
@@ -356,8 +334,6 @@ ${unitTestNeeds}
     needs:
       - static-check
       - unit-test
-    workspace:
-      mode: read-only
     steps:
       - id: review
         type: agent
@@ -397,9 +373,8 @@ ${unitTestNeeds}
         prompt: |
           Review the implementation summary and approve before merging.
         instructions: |
-          Use \`zigma-flow approve --job gate-merge\` to proceed,
-          or \`zigma-flow reject --job gate-merge --comment "reason"\` to send back.
-        approvers: []
+          Use \`zigma-flow resume --input decision=approve\` to proceed,
+          or \`zigma-flow resume --input decision=reject --input comment="reason"\` to send back.
         outputs:
           decision: human.decision
           comment: human.comment
@@ -408,8 +383,6 @@ ${unitTestNeeds}
     needs:
       - review
       - gate-merge
-    workspace:
-      mode: read-only
     steps:
       - id: summarize
         type: agent

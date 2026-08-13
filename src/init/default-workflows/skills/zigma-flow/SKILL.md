@@ -115,8 +115,6 @@ permissions:
 
 jobs:
   plan:
-    workspace:
-      mode: read-only
     steps:
       - id: plan
         type: agent
@@ -147,8 +145,6 @@ jobs:
 
   typecheck:
     needs: [implement]
-    workspace:
-      mode: read-only
     steps:
       - id: typecheck
         type: script
@@ -157,8 +153,6 @@ jobs:
 
   unit-test:
     needs: [implement]
-    workspace:
-      mode: read-only
     steps:
       - id: test
         type: script
@@ -167,8 +161,6 @@ jobs:
 
   summarize:
     needs: [typecheck, unit-test]
-    workspace:
-      mode: read-only
     steps:
       - id: summarize
         type: agent

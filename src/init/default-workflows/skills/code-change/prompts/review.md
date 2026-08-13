@@ -13,9 +13,9 @@ alignment with the plan and coding guidelines.
 
 - `verdict`: one of:
   - `approved` — the change meets quality standards
-  - `rejected` — the change needs rework; emit `review_rejected` signal
-  - `needs_architecture_design` — architectural changes are required; emit
-    `needs_architecture_design` signal
+  - `rejected` — the change needs rework; return status `rejected`
+  - `needs_architecture_design` — architectural changes are required; return
+    status `needs_architecture_design`
 - `checked_files`: list of files that were reviewed.
 - `checked_artifacts`: upstream artifacts that were consulted (plan, diff, test results, check results).
 - `validation_evidence`: concrete evidence from script/check artifacts that supports the verdict.

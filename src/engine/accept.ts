@@ -142,13 +142,14 @@ export function validateReportShape(parsed: unknown): AgentReport {
   const signals: Array<{ type: string; reason?: string }> = (
     obj["signals"] as Array<Record<string, unknown>>
   ).map((s) => {
-    if (typeof s["type"] !== "string" || s["type"].length === 0) {
+    const type = typeof s["type"] === "string" ? s["type"] : s["signal"];
+    if (typeof type !== "string" || type.trim().length === 0) {
       throw new ValidationError(
-        `Invalid signal entry: "type" field must be a non-empty string`,
+        `Invalid signal entry: "type" (or legacy "signal") field must be a non-empty string`,
         { details: { signal: s } }
       );
     }
-    const entry: { type: string; reason?: string } = { type: s["type"] };
+    const entry: { type: string; reason?: string } = { type };
     if (s["reason"] !== undefined) {
       entry.reason = String(s["reason"]);
     }

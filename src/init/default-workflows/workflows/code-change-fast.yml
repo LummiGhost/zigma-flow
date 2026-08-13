@@ -21,8 +21,6 @@ permissions:
 
 jobs:
   intake:
-    workspace:
-      mode: read-only
     steps:
       - id: analyze
         type: agent
@@ -63,8 +61,6 @@ jobs:
   static-check:
     needs:
       - implement
-    workspace:
-      mode: read-only
     steps:
       - id: check
         type: script
@@ -79,8 +75,6 @@ jobs:
   unit-test:
     needs:
       - implement
-    workspace:
-      mode: read-only
     steps:
       - id: test
         type: script
@@ -96,8 +90,6 @@ jobs:
     needs:
       - static-check
       - unit-test
-    workspace:
-      mode: read-only
     steps:
       - id: summarize
         type: agent

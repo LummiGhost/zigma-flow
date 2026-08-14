@@ -96,6 +96,7 @@ jobs:
         type: script
         shell: pwsh
         run: "$wt = (Get-Content .zigma-flow/fix-worktree.txt -Raw).Trim(); git -C $wt diff origin/main"
+        timeout: 300s
         failure_policy: continue
 
   static-check:
@@ -149,6 +150,7 @@ jobs:
           }
           $e = Invoke-ScriptIfExists "typecheck"; if ($e -ne 0) { exit $e }
           $e = Invoke-ScriptIfExists "lint"; exit $e
+        timeout: 600s
         failure_policy: fail
 
   unit-test:
@@ -202,6 +204,7 @@ jobs:
           }
           $e = Invoke-ScriptIfExists "test:ci"; if ($e -ne 0) { exit $e }
           $e = Invoke-ScriptIfExists "test"; exit $e
+        timeout: 600s
         failure_policy: fail
 
   review:

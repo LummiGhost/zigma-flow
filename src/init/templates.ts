@@ -90,6 +90,7 @@ export function codeChangeWorkflowYml(detection?: DetectionResult): string {
       - id: install
         type: script
         run: "${installCmd}"
+        timeout: 600s
         env:
           CI: "true"
         on_failure: fail
@@ -248,6 +249,7 @@ jobs:
       - id: collect-diff
         type: script
         run: "git diff HEAD"
+        timeout: 300s
         env:
           CI: "true"
         on_failure: fail
@@ -264,6 +266,7 @@ jobs:
       - id: build
         type: script
         run: "${cmd("build")}"
+        timeout: 600s
         env:
           CI: "true"
         on_failure: fail
@@ -281,6 +284,7 @@ ${staticCheckNeeds}
       - id: check
         type: script
         run: "${staticCheckRun}"
+        timeout: 600s
         env:
           CI: "true"
         on_failure: fail
@@ -310,6 +314,7 @@ ${unitTestNeeds}
       - id: test
         type: script
         run: "${unitTestRun}"
+        timeout: 600s
         env:
           CI: "true"
         on_failure: fail

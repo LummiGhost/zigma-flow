@@ -5,7 +5,7 @@
  *   1. Reads current state to locate the step to execute.
  *   2. Emits `step_started`; writes state snapshot (job ready → running).
  *   3. Resolves the command (inline `run` or Skill Pack `uses`).
- *   4. Parses timeout string and invokes the ProcessRunner.
+ *   4. Parses timeout string (default 600s) and invokes the ProcessRunner.
  *   5. Writes stdout/stderr artifacts and result.json.
  *   6. Emits `script_completed`.
  *   7. On success: emits `step_completed` + `job_completed`; job → completed.
@@ -86,6 +86,14 @@ interface ScriptResult {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Default wall-clock bound for script steps that do not declare `timeout`
+ * (workflow-language.md §5.3: "If `timeout` is omitted, a default timeout
+ * applies (600s)"). Prevents a hung command from blocking the run forever
+ * (issue #291).
+ */
+const DEFAULT_SCRIPT_TIMEOUT_MS = 600_000;
 
 /**
  * Parse a timeout string ("300s", "5m", "1h") → milliseconds.
@@ -340,7 +348,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
 
   // ── 6. Parse timeout and invoke ProcessRunner ─────────────────────────────
 
-  const timeoutMs = parseTimeoutMs(stepDef.timeout);
+  const timeoutMs = parseTimeoutMs(stepDef.timeout) ?? DEFAULT_SCRIPT_TIMEOUT_MS;
 
   const runnerResult = await runner.run({
     command,
@@ -577,9 +585,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     // ── 10b. Failure path ──────────────────────────────────────────────────
 
     const reason = runnerResult.timedOut
-      ? timeoutMs !== undefined
-        ? `timeout after ${timeoutMs}ms`
-        : "timeout"
+      ? `timeout after ${timeoutMs}ms`
       : expectFailure
         ? `expected non-zero exit but got exit code ${runnerResult.exitCode}`
         : `exit code ${runnerResult.exitCode}`;

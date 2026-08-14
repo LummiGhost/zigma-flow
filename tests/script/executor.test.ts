@@ -1705,3 +1705,107 @@ jobs:
     }
   );
 });
+
+// ---------------------------------------------------------------------------
+// T-SCRIPT-291: default timeout when step.timeout is omitted (issue #291)
+// ---------------------------------------------------------------------------
+
+describe("executeScriptStep — default timeout (T-SCRIPT-291)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox({ activeRun: null });
+  });
+
+  afterEach(async () => {
+    sandbox && await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it(
+    "applies the 600s default timeout when the script step does not declare timeout (T-SCRIPT-291a)",
+    async () => {
+      const { runId, runDir } = await bootstrapScriptRun(
+        sandbox,
+        SCRIPT_WORKFLOW_YAML
+      );
+
+      const runner = new FakeRunner({
+        exitCode: 0,
+        timedOut: false,
+        stdout: "",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({ runDir, zigmaflowDir: sandbox.zigmaflowDir, runId, jobId: "build", runner })
+      );
+
+      expect(runner.calls.length).toBe(1);
+      expect(runner.calls[0]!.timeoutMs).toBe(600_000);
+    }
+  );
+
+  it(
+    "lets an explicit step timeout override the default (T-SCRIPT-291b)",
+    async () => {
+      const workflowYaml = `\
+name: explicit-timeout-test
+version: "0.1.0"
+jobs:
+  build:
+    steps:
+      - id: compile
+        type: script
+        run: "echo hello"
+        timeout: 300s
+`;
+      const { runId, runDir } = await bootstrapScriptRun(sandbox, workflowYaml);
+
+      const runner = new FakeRunner({
+        exitCode: 0,
+        timedOut: false,
+        stdout: "",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({ runDir, zigmaflowDir: sandbox.zigmaflowDir, runId, jobId: "build", runner })
+      );
+
+      expect(runner.calls.length).toBe(1);
+      expect(runner.calls[0]!.timeoutMs).toBe(300_000);
+    }
+  );
+
+  it(
+    "emits step_failed with reason \"timeout after 600000ms\" when a step without explicit timeout times out (T-SCRIPT-291c)",
+    async () => {
+      const { runId, runDir } = await bootstrapScriptRun(
+        sandbox,
+        SCRIPT_WORKFLOW_YAML
+      );
+
+      const runner = new FakeRunner({
+        exitCode: 124,
+        timedOut: true,
+        stdout: "",
+        stderr: "",
+        startedAt: FIXED_ISO,
+        endedAt: FIXED_ISO,
+      });
+
+      await executeScriptStep(
+        makeExecutorOpts({ runDir, zigmaflowDir: sandbox.zigmaflowDir, runId, jobId: "build", runner })
+      );
+
+      const events = await readEvents(runDir);
+      const failed = events.find((e) => e.type === "step_failed");
+      expect(failed).toBeDefined();
+      expect(String(failed?.payload["reason"])).toBe("timeout after 600000ms");
+    }
+  );
+});

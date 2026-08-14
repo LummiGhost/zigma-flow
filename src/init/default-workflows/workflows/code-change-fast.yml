@@ -54,6 +54,7 @@ jobs:
       - id: collect-diff
         type: script
         run: "git diff HEAD"
+        timeout: 300s
         env:
           CI: "true"
         on_failure: fail
@@ -68,6 +69,7 @@ jobs:
           PM=$(if [ -f pnpm-lock.yaml ]; then echo pnpm; elif [ -f yarn.lock ]; then echo yarn; elif [ -f package-lock.json ]; then echo npm; elif [ -f bun.lockb ] || [ -f bun.lock ]; then echo bun; else echo npm; fi)
           RUN="$PM"; if [ "$PM" = "npm" ] || [ "$PM" = "bun" ]; then RUN="$PM run"; fi
           $RUN typecheck && $RUN lint
+        timeout: 600s
         env:
           CI: "true"
         on_failure: fail
@@ -82,6 +84,7 @@ jobs:
           PM=$(if [ -f pnpm-lock.yaml ]; then echo pnpm; elif [ -f yarn.lock ]; then echo yarn; elif [ -f package-lock.json ]; then echo npm; elif [ -f bun.lockb ] || [ -f bun.lock ]; then echo bun; else echo npm; fi)
           RUN="$PM"; if [ "$PM" = "npm" ] || [ "$PM" = "bun" ]; then RUN="$PM run"; fi
           $RUN test:ci
+        timeout: 600s
         env:
           CI: "true"
         on_failure: fail

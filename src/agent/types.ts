@@ -13,6 +13,8 @@ export interface AgentExecuteOptions {
   stepDir: string;
   /** Repository root — the agent's working directory. */
   projectRoot: string;
+  /** Engine-compiled JSON Schema for the final Agent report. */
+  outputSchema?: Record<string, unknown>;
   /** Optional AbortSignal for cancellation. */
   signal?: AbortSignal;
   /**

@@ -20,6 +20,7 @@ import { readFile, stat, appendFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
 import type { AgentBackend } from "../agent/index.js";
+import { compileAgentOutputSchema } from "../agent/outputSchema.js";
 import type { StepBackendOverride } from "../agent/config.js";
 import { buildContext } from "../context/index.js";
 import type { ZigmaFlowEvent } from "../events/index.js";
@@ -711,6 +712,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   const result = await backend.execute({
     prompt: promptText,
     reportPath,
+    outputSchema: compileAgentOutputSchema(stepDef),
     stepDir,
     projectRoot: zigmaflowDir,
     ...(signal !== undefined ? { signal } : {}),

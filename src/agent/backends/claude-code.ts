@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { execa } from "execa";
 
 import type { AgentBackend, AgentBackendConfig, AgentExecuteOptions, AgentExecuteResult } from "../types.js";
+import { outputSchemaHash } from "../outputSchema.js";
 
 const DEFAULT_TIMEOUT = 600_000; // 10 minutes
 const DEFAULT_ARGS: string[] = ["-p"];
@@ -74,13 +75,14 @@ export class ClaudeCodeBackend implements AgentBackend {
   }
 
   async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
-    const { prompt, reportPath, stepDir, projectRoot, signal, onStdout, onStderr } = opts;
+    const { prompt, reportPath, stepDir, projectRoot, signal, onStdout, onStderr, outputSchema } = opts;
 
     // a. Create stepDir if it doesn't exist (idempotent)
     await mkdir(stepDir, { recursive: true });
 
     // Build dynamic args from config fields (injected before existing args)
     const dynamicArgs: string[] = [];
+    if (outputSchema !== undefined) dynamicArgs.push("--json-schema", JSON.stringify(outputSchema), "--output-format", "json");
     if (this.model !== undefined) {
       dynamicArgs.push("--model", this.model);
     }
@@ -101,24 +103,7 @@ export class ClaudeCodeBackend implements AgentBackend {
     }
 
     // Build prompt — structured output modes replace the CRITICAL block with a short instruction.
-    const useStructuredOutput = this.useResultFile || this.useOutputFormatJson;
-    const fullPrompt = useStructuredOutput
-      ? [
-          prompt,
-          "",
-          "Your final response must be valid JSON matching the report schema (outputs, artifacts, signals, summary).",
-        ].join("\n")
-      : [
-          prompt,
-          "",
-          "---",
-          "",
-          "CRITICAL: After completing your work, write a report.json file to this exact path:",
-          `\`${reportPath}\``,
-          "",
-          "The report.json must include these fields: outputs (object), artifacts (array), signals (array), summary (string).",
-          "Stop after writing report.json — do not continue to subsequent steps.",
-        ].join("\n");
+    const fullPrompt = prompt;
 
     // Determine prompt delivery: use stdin for large prompts to avoid ENAMETOOLONG
     // on Windows where the command-line argument limit is ~32 KB.
@@ -134,6 +119,8 @@ export class ClaudeCodeBackend implements AgentBackend {
     const stderrPath = join(stepDir, "agent.stderr.log");
     const invocationPath = join(stepDir, "agent.invocation.json");
     const promptPath = join(stepDir, "agent.prompt.txt");
+    const schemaPath = join(stepDir, "agent-output-schema.json");
+    if (outputSchema !== undefined) await writeFile(schemaPath, JSON.stringify(outputSchema, null, 2), "utf-8");
 
     // Write prompt to stepDir when using stdin so it is available for diagnostics.
     if (useStdin) {
@@ -192,12 +179,13 @@ export class ClaudeCodeBackend implements AgentBackend {
         end_time: new Date().toISOString(),
         exit_code: result.exitCode,
         project_root: projectRoot,
+        ...(outputSchema === undefined ? {} : { output_schema_path: schemaPath, output_schema_sha256: outputSchemaHash(outputSchema) }),
       };
       await writeFile(invocationPath, JSON.stringify(invocationMeta, null, 2), "utf-8");
 
       // When --output-format json is set, parse stdout as Claude CLI JSON wrapper
       // and extract the agent's response as the report.
-      if (this.useOutputFormatJson) {
+      if (outputSchema !== undefined || this.useOutputFormatJson) {
         let cliResult: { result?: unknown } | undefined;
         try {
           cliResult = JSON.parse(result.stdout ?? "") as { result?: unknown };

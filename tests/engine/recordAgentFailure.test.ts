@@ -119,6 +119,7 @@ type BackendBehavior =
 
 class RetryFakeBackend implements AgentBackend {
   readonly name = "fake-retry";
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
   static lastBehavior: string = "none";
 

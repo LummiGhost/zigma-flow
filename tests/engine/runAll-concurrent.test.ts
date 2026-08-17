@@ -143,6 +143,7 @@ class FakeClock implements Clock {
  */
 class ConcurrentFakeBackend implements AgentBackend {
   readonly name = "fake-concurrent";
+  readonly supportsOutputSchema = true;
   readonly callTicks: number[] = [];
   readonly callJobIds: string[] = [];
 
@@ -213,6 +214,7 @@ class ConcurrentFakeBackend implements AgentBackend {
  */
 class SignalAwareFakeBackend implements AgentBackend {
   readonly name = "fake-signal-aware";
+  readonly supportsOutputSchema = true;
   readonly callOrder: number[] = [];
   aborted = false;
   abortCount = 0;

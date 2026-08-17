@@ -24,6 +24,7 @@ jobs:
 
 class TestRunAllBackend implements AgentBackend {
   readonly name = TEST_BACKEND;
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}
@@ -138,6 +139,7 @@ describe("runAllAction", () => {
     // Backend intentionally omits outputs.completed to reproduce the infinite-loop bug
     class NoCompletedFlagBackend implements AgentBackend {
       readonly name = "no-completed-flag";
+  readonly supportsOutputSchema = true;
       constructor(_config: AgentBackendConfig) {}
       async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
         await mkdir(dirname(opts.reportPath), { recursive: true });

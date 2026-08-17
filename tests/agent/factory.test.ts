@@ -15,6 +15,7 @@ import {
 
 class TestBackend implements AgentBackend {
   readonly name: string;
+  readonly supportsOutputSchema = true;
   private readonly onExecute: (opts: AgentExecuteOptions) => Promise<AgentExecuteResult>;
 
   constructor(config: AgentBackendConfig & { name: string; onExecute: (opts: AgentExecuteOptions) => Promise<AgentExecuteResult> }) {
@@ -38,6 +39,7 @@ describe("AgentBackendFactory", () => {
     // but we can test registration and retrieval independently.
     const fakeCtor = class implements AgentBackend {
       readonly name = "test-backend";
+  readonly supportsOutputSchema = true;
       async execute(_opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
         return { success: true, reportPath: "/fake/report.json" };
       }
@@ -52,6 +54,7 @@ describe("AgentBackendFactory", () => {
     const factory = agentFactory;
     factory.register("test-backend-list", class implements AgentBackend {
       readonly name = "test-backend-list";
+  readonly supportsOutputSchema = true;
       async execute(_opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
         return { success: true };
       }
@@ -65,6 +68,7 @@ describe("AgentBackendFactory", () => {
     const factory = agentFactory;
     factory.register("test-create", class implements AgentBackend {
       readonly name = "test-create";
+  readonly supportsOutputSchema = true;
       private command: string;
       constructor(config: AgentBackendConfig) {
         this.command = config.command;

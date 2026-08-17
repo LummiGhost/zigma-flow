@@ -40,6 +40,7 @@ jobs:
 
 class TestBackend implements AgentBackend {
   readonly name = TEST_BACKEND;
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}

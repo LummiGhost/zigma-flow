@@ -34,6 +34,7 @@ import { nextEventId as formatEventId } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, JobState, RunState } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
+import type { StepDefinition } from "../workflow/index.js";
 import { FilesystemError, StateError, ValidationError, WorkflowError } from "../utils/index.js";
 import { applyRoutingAction } from "./routing.js";
 import type { ContextPatch } from "./applyContextPatch.js";
@@ -172,6 +173,147 @@ export function validateReportShape(parsed: unknown): AgentReport {
 }
 
 // ---------------------------------------------------------------------------
+// Shared step-contract validation (acceptAgentReport + runAll inline path)
+// ---------------------------------------------------------------------------
+
+function declaredValuesOf(declaration: unknown): unknown[] | undefined {
+  if (declaration === null || typeof declaration !== "object" || Array.isArray(declaration)) return undefined;
+  const def = declaration as Record<string, unknown>;
+  for (const key of ["values", "enum"]) {
+    const v = def[key];
+    if (Array.isArray(v)) return v;
+  }
+  return undefined;
+}
+
+/**
+ * Validate a parsed Agent report against the step's output contract.
+ *
+ * This is the Engine's final-line defense: it runs on every accept path
+ * (autonomous runAll loop and manual `next`/accept) before any state can
+ * advance. Order matches the §2.6 pipeline:
+ *
+ *   1. required_artifacts — each declared artifact path must be present in
+ *      report.artifacts (string refs, matched as path segment).
+ *   2. Declared output keys must all be present.
+ *   3. Array-typed outputs declared in `outputs` are normalized (JSON.parse,
+ *      then newline-split fallback).
+ *   4. outputs_schema type checks.
+ *   5. enum/values checks for outputs (values|enum) and outputs_schema (values).
+ *
+ * Throws ValidationError on any violation — no state transition happens.
+ * Returns the normalized outputs to persist.
+ */
+export function validateReportAgainstStep(
+  stepDef: StepDefinition | undefined,
+  report: { outputs: Record<string, unknown>; artifacts: unknown[] },
+): Record<string, unknown> {
+  // ── 1. required_artifacts ─────────────────────────────────────────────
+  if (stepDef?.required_artifacts && stepDef.required_artifacts.length > 0) {
+    const reportArtifactRefs = report.artifacts
+      .filter((a): a is string => typeof a === "string")
+      .map((a) => a);
+
+    for (const required of stepDef.required_artifacts) {
+      const found = reportArtifactRefs.some((a) => {
+        // Match as a path segment: "summary.md" matches ".../summary.md" or "summary.md"
+        // but NOT "not-summary.md" (substring match is rejected).
+        return a === required || a.endsWith("/" + required);
+      });
+      if (!found) {
+        throw new ValidationError(
+          `Required artifact "${required}" not found in report artifacts. ` +
+          `The step requires this artifact to be produced.`,
+          { details: { required, actual: reportArtifactRefs } }
+        );
+      }
+    }
+  }
+
+  // ── 2. Declared output keys must be present ───────────────────────────
+  if (stepDef?.outputs) {
+    const declaredKeys = Object.keys(stepDef.outputs);
+    const missingKeys = declaredKeys.filter((k) => !(k in report.outputs));
+    if (missingKeys.length > 0) {
+      throw new ValidationError(
+        `Report is missing declared output(s): ${missingKeys.join(", ")}`,
+        { details: { missing: missingKeys, declared: declaredKeys } }
+      );
+    }
+  }
+
+  // ── 3. Normalize array-typed outputs ──────────────────────────────────
+  const normalizedOutputs: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(report.outputs)) {
+    const outputDef = stepDef?.outputs?.[key];
+    const declaredType =
+      outputDef !== null && typeof outputDef === "object" && !Array.isArray(outputDef)
+        ? (outputDef as Record<string, unknown>)["type"]
+        : undefined;
+
+    if (declaredType === "array" && typeof value === "string") {
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (Array.isArray(parsed)) {
+          normalizedOutputs[key] = parsed;
+          continue;
+        }
+      } catch { /* fall through */ }
+      normalizedOutputs[key] = value.split("\n").map((s) => s.trim()).filter(Boolean);
+    } else {
+      normalizedOutputs[key] = value;
+    }
+  }
+
+  // ── 4. outputs_schema type checks ─────────────────────────────────────
+  if (stepDef?.outputs_schema) {
+    for (const [key, schema] of Object.entries(stepDef.outputs_schema)) {
+      const value = normalizedOutputs[key];
+      if (value === undefined) continue;
+
+      const expectedType = schema.type;
+      let actualType: string;
+      if (value === null) {
+        actualType = "null";
+      } else if (Array.isArray(value)) {
+        actualType = "array";
+      } else {
+        actualType = typeof value;
+      }
+
+      if (expectedType !== actualType) {
+        throw new ValidationError(
+          `Output "${key}" type mismatch: expected ${expectedType}, got ${actualType}`,
+          { details: { key, expected: expectedType, actual: actualType } }
+        );
+      }
+    }
+  }
+
+  // ── 5. enum/values final-line check ───────────────────────────────────
+  // If a step declares outputs (values|enum) or outputs_schema (values),
+  // the reported value must be in the declared set.
+  for (const [key, value] of Object.entries(normalizedOutputs)) {
+    const allowedValues: unknown[] | undefined =
+      declaredValuesOf(stepDef?.outputs_schema?.[key]) ??
+      declaredValuesOf(stepDef?.outputs?.[key]);
+
+    if (allowedValues !== undefined && allowedValues.length > 0) {
+      const strValue = String(value ?? "");
+      const matched = allowedValues.some((allowed) => String(allowed) === strValue);
+      if (!matched) {
+        throw new ValidationError(
+          `Output "${key}" value "${strValue}" is not in declared values: [${allowedValues.map(String).join(", ")}]`,
+          { details: { outputKey: key, actualValue: strValue, allowedValues } }
+        );
+      }
+    }
+  }
+
+  return normalizedOutputs;
+}
+
+// ---------------------------------------------------------------------------
 // acceptAgentReport
 // ---------------------------------------------------------------------------
 
@@ -245,118 +387,13 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
 
   const stepDef = wf.jobs[jobId]?.steps.find((s) => s.id === stepId);
 
-  // ── 3b. Validate required artifacts against step definition ────────────────
-  // If the step declares required_artifacts, each must be present in the
-  // report's artifacts array (matched as a path segment or full path, so
-  // "summary.md" does not false-match "not-summary.md" or "old/summary.md.bak").
-
-  if (stepDef?.required_artifacts && stepDef.required_artifacts.length > 0) {
-    const reportArtifactRefs = report.artifacts
-      .filter((a): a is string => typeof a === "string")
-      .map((a) => a);
-
-    for (const required of stepDef.required_artifacts) {
-      const found = reportArtifactRefs.some((a) => {
-        // Match as a path segment: "summary.md" matches ".../summary.md" or "summary.md"
-        // but NOT "not-summary.md" (substring match is rejected).
-        return a === required || a.endsWith("/" + required);
-      });
-      if (!found) {
-        throw new ValidationError(
-          `Required artifact "${required}" not found in report artifacts. ` +
-          `The step requires this artifact to be produced.`,
-          { details: { required, actual: reportArtifactRefs } }
-        );
-      }
-    }
-  }
-
-  // ── 3c. Validate declared output keys are present in report ──────────────
-
-  if (stepDef?.outputs) {
-    const declaredKeys = Object.keys(stepDef.outputs);
-    const missingKeys = declaredKeys.filter((k) => !(k in report.outputs));
-    if (missingKeys.length > 0) {
-      throw new ValidationError(
-        `Report is missing declared output(s): ${missingKeys.join(", ")}`,
-        { details: { missing: missingKeys, declared: declaredKeys } }
-      );
-    }
-  }
-
-  const normalizedOutputs: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(report.outputs)) {
-    const outputDef = stepDef?.outputs?.[key];
-    const declaredType =
-      outputDef !== null && typeof outputDef === "object"
-        ? (outputDef as Record<string, unknown>)["type"]
-        : undefined;
-
-    if (declaredType === "array" && typeof value === "string") {
-      // Try JSON parse first
-      try {
-        const parsed: unknown = JSON.parse(value);
-        if (Array.isArray(parsed)) {
-          normalizedOutputs[key] = parsed;
-          continue;
-        }
-      } catch { /* fall through */ }
-      // Fall back: split by newline, filter empty
-      normalizedOutputs[key] = value.split("\n").map((s) => s.trim()).filter(Boolean);
-    } else {
-      normalizedOutputs[key] = value;
-    }
-  }
-
-  // ── 3d. Validate output value types against outputs_schema ─────────────
-
-  if (stepDef?.outputs_schema) {
-    for (const [key, schema] of Object.entries(stepDef.outputs_schema)) {
-      const value = normalizedOutputs[key];
-      if (value === undefined) continue;
-
-      const expectedType = schema.type;
-      let actualType: string;
-      if (value === null) {
-        actualType = "null";
-      } else if (Array.isArray(value)) {
-        actualType = "array";
-      } else {
-        actualType = typeof value;
-      }
-
-      if (expectedType !== actualType) {
-        throw new ValidationError(
-          `Output "${key}" type mismatch: expected ${expectedType}, got ${actualType}`,
-          { details: { key, expected: expectedType, actual: actualType } }
-        );
-      }
-    }
-  }
-
-  // ── 4c. Validate output values against declared constraints (Issue #172) ───
-  // If a step declares outputs with a "values" constraint (in outputs or
-  // outputs_schema), validate that the report's output value is in the set.
-
-  for (const [key, value] of Object.entries(normalizedOutputs)) {
-    const outputDecl = stepDef?.outputs?.[key];
-    const outputSchema = stepDef?.outputs_schema?.[key];
-    const allowedValues: string[] | undefined =
-      (outputSchema?.values) ??
-      (outputDecl !== null && typeof outputDecl === "object"
-        ? (outputDecl as Record<string, unknown>)["values"] as string[] | undefined
-        : undefined);
-
-    if (allowedValues !== undefined && Array.isArray(allowedValues) && allowedValues.length > 0) {
-      const strValue = String(value ?? "");
-      if (!allowedValues.includes(strValue)) {
-        throw new ValidationError(
-          `Output "${key}" value "${strValue}" is not in declared values: [${allowedValues.join(", ")}]`,
-          { details: { outputKey: key, actualValue: strValue, allowedValues } }
-        );
-      }
-    }
-  }
+  // ── 3b-4c. Shared final-line contract validation (§2.6) ──────────────────
+  // required_artifacts → declared keys → array normalization → outputs_schema
+  // types → enum/values. Throws ValidationError before any state transition.
+  const normalizedOutputs = validateReportAgainstStep(stepDef, {
+    outputs: report.outputs,
+    artifacts: report.artifacts,
+  });
 
   const signalsArray = report.signals;
 

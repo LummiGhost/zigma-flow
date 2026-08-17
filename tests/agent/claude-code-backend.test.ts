@@ -829,6 +829,107 @@ describe("ClaudeCodeBackend — small prompt via argv (T-CCB-013)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// T-CCB-014: Output-schema contract (Issue #289 follow-up)
+// ---------------------------------------------------------------------------
+
+describe("ClaudeCodeBackend — output-schema contract (T-CCB-014)", () => {
+  let temp: TempDirs;
+
+  beforeEach(async () => {
+    temp = await makeTempDirs();
+  });
+
+  afterEach(async () => {
+    await rm(temp.projectRoot, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it(
+    "declares the output-schema capability and injects --json-schema/--output-format with an audit schema file",
+    async () => {
+      // The backend prepends --json-schema/--output-format before the config
+      // args (as the real `claude` CLI expects flags first). `node` rejects
+      // unknown flags before a script path, so a tiny launcher wrapper
+      // (per-platform) mimics a CLI binary that accepts flags first, forwards
+      // argv to a node capture script, and prints the Claude CLI JSON wrapper
+      // { result: "<report JSON>" } that --output-format json expects.
+      const isWindows = process.platform === "win32";
+      const wrapperPath = join(
+        temp.projectRoot,
+        isWindows ? "fake-claude.cmd" : "fake-claude.sh"
+      );
+      await writeFile(
+        wrapperPath,
+        isWindows
+          ? `@echo off\r\nnode "%~dp0capture.mjs" %*\r\n`
+          : `#!/bin/sh\nnode "$(dirname "$0")/capture.mjs" "$@"\n`,
+        "utf-8"
+      );
+      if (!isWindows) {
+        await import("node:fs/promises").then(({ chmod }) => chmod(wrapperPath, 0o755));
+      }
+      await writeFile(
+        join(temp.projectRoot, "capture.mjs"),
+        `import { writeFileSync } from "node:fs";
+const report = { outputs: { verdict: "approved" }, artifacts: ["docs/summary.md"], signals: [], summary: "ok" };
+writeFileSync("captured-argv.json", JSON.stringify(process.argv));
+console.log(JSON.stringify({ result: JSON.stringify(report) }));`,
+        "utf-8"
+      );
+
+      const backend = new ClaudeCodeBackend({
+        command: wrapperPath,
+        args: [],
+        timeout: 30_000,
+      });
+
+      expect(backend.supportsOutputSchema).toBe(true);
+
+      const outputSchema = {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: { artifacts: { type: "array", items: { type: "string" } } },
+      };
+
+      const result = await backend.execute({
+        prompt: "review and report",
+        reportPath: temp.reportPath,
+        stepDir: temp.stepDir,
+        projectRoot: temp.projectRoot,
+        outputSchema,
+      });
+
+      expect(result.success).toBe(true);
+
+      // The compiled schema is persisted for audit and hashed into the invocation.
+      const schemaPath = join(temp.stepDir, "agent-output-schema.json");
+      const schemaFile = JSON.parse(await readFile(schemaPath, "utf-8")) as Record<string, unknown>;
+      expect(schemaFile).toEqual(outputSchema);
+
+      const invocationPath = join(temp.stepDir, "agent.invocation.json");
+      const invocation = JSON.parse(await readFile(invocationPath, "utf-8")) as Record<string, unknown>;
+      expect(invocation["output_schema_path"]).toBe(schemaPath);
+      expect(typeof invocation["output_schema_sha256"]).toBe("string");
+
+      // The spawned process observed the schema-enforcement flags.
+      const capturedArgv = JSON.parse(
+        await readFile(join(temp.projectRoot, "captured-argv.json"), "utf-8")
+      ) as string[];
+      const jsonSchemaIdx = capturedArgv.indexOf("--json-schema");
+      expect(jsonSchemaIdx).toBeGreaterThanOrEqual(0);
+      expect(capturedArgv[jsonSchemaIdx + 1]).toBe(JSON.stringify(outputSchema));
+      const formatIdx = capturedArgv.indexOf("--output-format");
+      expect(formatIdx).toBeGreaterThanOrEqual(0);
+      expect(capturedArgv[formatIdx + 1]).toBe("json");
+
+      // The report extracted from the CLI wrapper is written to reportPath.
+      const report = JSON.parse(await readFile(temp.reportPath, "utf-8")) as Record<string, unknown>;
+      expect(report["outputs"]).toEqual({ verdict: "approved" });
+      expect(report["artifacts"]).toEqual(["docs/summary.md"]);
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
 // T-CCB-010: Returns exitCode in structured result on failure
 // ---------------------------------------------------------------------------
 

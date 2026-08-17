@@ -100,6 +100,7 @@ class FakeClock implements Clock {
 
 class FakeBackend implements AgentBackend {
   readonly name = "fake-resume";
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}

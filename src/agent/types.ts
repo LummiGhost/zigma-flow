@@ -53,6 +53,21 @@ export interface AgentBackend {
   /** Unique name of this backend (e.g. "claude-code"). */
   readonly name: string;
 
+  /**
+   * Output-schema capability contract (Issue #289 follow-up).
+   *
+   * The Engine compiles the step's outputs/outputs_schema into a JSON Schema
+   * and always passes it via `AgentExecuteOptions.outputSchema`. A backend
+   * MUST declare `supportsOutputSchema: true` to receive the schema, and
+   * declaring it means the backend enforces the schema at its model/CLI
+   * boundary (e.g. Claude Code `--json-schema`, Codex `--output-schema`).
+   *
+   * Backends that cannot enforce the schema natively must keep this false:
+   * the Engine fails the step closed before execution instead of falling
+   * back to prompt-only enforcement.
+   */
+  readonly supportsOutputSchema: boolean;
+
   /** The command executable invoked by this backend (e.g. "claude"). Optional for backwards compatibility. */
   readonly backendCommand?: string;
   /** Command-line arguments (excluding the prompt). Optional for backwards compatibility. */

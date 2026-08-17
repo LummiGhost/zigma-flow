@@ -123,6 +123,7 @@ class FakeClock implements Clock {
  */
 class DelayedFakeBackend implements AgentBackend {
   readonly name = "fake-cancel";
+  readonly supportsOutputSchema = true;
 
   constructor(
     _config: AgentBackendConfig,

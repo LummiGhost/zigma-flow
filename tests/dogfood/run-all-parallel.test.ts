@@ -130,6 +130,7 @@ interface BackendCallRecord {
 
 class DogfoodFakeBackend implements AgentBackend {
   readonly name = "fake-dogfood";
+  readonly supportsOutputSchema = true;
   readonly calls: BackendCallRecord[] = [];
 
   // Configurable failure for specific jobs.
@@ -232,6 +233,7 @@ const tickTracker = {
  */
 class TrackingFakeBackend implements AgentBackend {
   readonly name = "fake-tracking";
+  readonly supportsOutputSchema = true;
   readonly calls: BackendCallRecord[] = [];
 
   constructor(_config: AgentBackendConfig) {}

@@ -49,6 +49,7 @@ jobs:
 
 class TestInvokeBackend implements AgentBackend {
   readonly name = TEST_BACKEND;
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}
@@ -231,6 +232,7 @@ describe("invokeAction", () => {
   it("accepts --backend override", async () => {
     class CustomBackend implements AgentBackend {
       readonly name = "custom-backend";
+  readonly supportsOutputSchema = true;
       constructor(_config: AgentBackendConfig) {}
       async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
         await mkdir(dirname(opts.reportPath), { recursive: true });

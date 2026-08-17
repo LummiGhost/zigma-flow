@@ -119,6 +119,7 @@ class FakeClock implements Clock {
  */
 class FakeBackend implements AgentBackend {
   readonly name = "fake-runall";
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}
@@ -150,6 +151,7 @@ class FakeBackend implements AgentBackend {
  */
 class StaleFakeBackend implements AgentBackend {
   readonly name = "fake-stale";
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}
@@ -718,6 +720,7 @@ describe("runAll — backend resolver (T-RUNALL-7)", () => {
 
 class AlwaysFailBackend implements AgentBackend {
   readonly name = "fake-always-fail";
+  readonly supportsOutputSchema = true;
 
   constructor(_config: AgentBackendConfig) {}
 

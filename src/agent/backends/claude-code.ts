@@ -30,6 +30,7 @@ const STDIN_PROMPT_THRESHOLD_BYTES = 20_000;
 
 export class ClaudeCodeBackend implements AgentBackend {
   readonly name = "claude-code";
+  readonly supportsOutputSchema = true;
 
   /** Publicly exposed command/args/timeout for args_hash computation in runAll. */
   readonly backendCommand: string;

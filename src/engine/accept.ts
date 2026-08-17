@@ -121,6 +121,17 @@ export function validateReportShape(parsed: unknown): AgentReport {
 
   if (!Array.isArray(obj["artifacts"])) {
     errors.push('missing required field "artifacts" (must be an array)');
+  } else {
+    // Mirrors the compiled schema's artifacts.items: { type: "string" } —
+    // artifact refs are strings (step-artifact paths or artifact:// refs).
+    // A non-string item must be rejected here on every accept path instead
+    // of being silently filtered out by the required_artifacts matcher.
+    const nonStringArtifact = obj["artifacts"].find((a) => typeof a !== "string");
+    if (nonStringArtifact !== undefined) {
+      errors.push(
+        `field "artifacts" items must be strings, got non-string item ${JSON.stringify(nonStringArtifact)}`
+      );
+    }
   }
 
   if (!Array.isArray(obj["signals"])) {
@@ -174,12 +185,14 @@ export function validateReportShape(parsed: unknown): AgentReport {
     signals,
     summary: obj["summary"] as string,
     // Issue #256: accept status from outputs["status"] when not at top level.
-    // The raw top-level value is preserved alongside the resolved one so the
-    // final-line contract check can compare the two sources strictly.
+    // The resolved status is used only for status-return dispatch, which
+    // requires a string within returns.status.values — the final-line check
+    // enforces that on the raw values, so resolution happens WITHOUT String
+    // coercion (a non-string value never becomes a routable status).
     topLevelStatus,
     status: topLevelStatus !== undefined
-      ? String(topLevelStatus)
-      : (outputsStatus !== undefined ? String(outputsStatus) : undefined),
+      ? (typeof topLevelStatus === "string" ? topLevelStatus : undefined)
+      : (typeof outputsStatus === "string" ? outputsStatus : undefined),
     ...(obj["context_patches"] !== undefined ? { context_patches: obj["context_patches"] as unknown[] } : {}),
   };
 }
@@ -213,6 +226,12 @@ export function validateReportShape(parsed: unknown): AgentReport {
  *      cross-field equality); the schema approximates it with per-value
  *      if/then guards at the native boundary, and this check is the
  *      authoritative enforcement on every accept path.
+ *   4b. Legacy top-level status — when the step declares returns.status, a
+ *      single-source top-level `status` must be a strict string within
+ *      returns.status.values. No String coercion: the compiled schema
+ *      declares the top-level `status` as { type: "string", enum: values },
+ *      so a numeric/null top-level value is rejected instead of being
+ *      coerced into a value that happens to match a routing value.
  *   5. Array-typed outputs (merged type "array") are normalized (JSON.parse,
  *      then newline-split fallback).
  *   6. Type checks against the merged declaration — outputs-only types are
@@ -303,6 +322,29 @@ export function validateReportAgainstStep(
       `Write "outputs.status" only (the canonical location); when both are present they must be strictly equal.`,
       { details: { topLevelStatus: report.topLevelStatus, outputsStatus: report.outputs.status } }
     );
+  }
+
+  // ── 4b. Legacy top-level status: strict string + routing domain ────────
+  // The compiled schema declares the legacy top-level `status` as
+  // { type: "string", enum: returns.status.values }. The Engine enforces the
+  // identical contract on the raw value — no String coercion — so a
+  // numeric/null/object top-level status is rejected before any state change
+  // instead of being coerced into a string that happens to match a routing
+  // value (e.g. a numeric 5 must never route as "5").
+  if (stepDef?.returns?.status && report.topLevelStatus !== undefined) {
+    if (typeof report.topLevelStatus !== "string") {
+      throw new ValidationError(
+        `Top-level "status" must be a string (no String coercion): got ${JSON.stringify(report.topLevelStatus)}`,
+        { details: { topLevelStatus: report.topLevelStatus } }
+      );
+    }
+    if (!stepDef.returns.status.values.includes(report.topLevelStatus)) {
+      throw new ValidationError(
+        `Top-level "status" ${JSON.stringify(report.topLevelStatus)} is not in returns.status.values ` +
+        `[${stepDef.returns.status.values.map((v) => JSON.stringify(v)).join(", ")}]`,
+        { details: { topLevelStatus: report.topLevelStatus, values: stepDef.returns.status.values } }
+      );
+    }
   }
 
   // ── 5. Normalize array-typed outputs (merged declaration) ─────────────

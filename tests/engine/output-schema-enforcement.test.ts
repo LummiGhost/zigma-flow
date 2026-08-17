@@ -429,6 +429,30 @@ jobs:
         uses: zigma/code-skill
 `;
 
+const ACCEPT_NO_OUTPUTS_YAML = `\
+name: accept-no-outputs
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review
+        type: agent
+        uses: zigma/review-skill
+`;
+
+const ACCEPT_REQUIRED_ARTIFACT_YAML = `\
+name: accept-required-artifact
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review
+        type: agent
+        uses: zigma/review-skill
+        required_artifacts:
+          - summary.md
+`;
+
 const ACCEPT_RETURNS_STATUS_YAML = `\
 name: accept-returns-status
 version: "0.1.0"
@@ -1346,6 +1370,221 @@ describe("runAll — output-schema final-line enforcement (Issue #289)", () => {
     const failedStep = events.find((e) => e.type === "step_failed");
     expect(String(failedStep!.payload.reason)).toContain("undeclared output(s): extra");
   });
+
+  // ── artifacts.items: string (Issue #289 P2) ────────────────────────────
+  // The compiled schema declares artifacts as an array of string refs; the
+  // Engine must reject any non-string item on every accept path instead of
+  // silently filtering it out of the required_artifacts match.
+
+  it.each<[string, unknown]>([
+    ["object", { path: "summary.md" }],
+    ["number", 42],
+    ["null", null],
+  ])("rejects a non-string artifacts item (%s) without advancing or persisting state", async (_label, item) => {
+    const report = {
+      outputs: {},
+      artifacts: [item],
+      signals: [],
+      summary: "ok",
+    };
+    const backend = new ReportingBackend(report);
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      NO_DECLARED_OUTPUTS_YAML,
+      "no-declared-outputs",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("failed");
+    const jobOutputs = state.jobs["intake"] as unknown as { outputs?: Record<string, unknown> };
+    expect(jobOutputs.outputs).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain('"artifacts" items must be strings');
+
+    // The compiled schema the backend received rejects the same report —
+    // the native boundary and the Engine agree.
+    const passedSchema = ReportingBackend.calls[0]!.outputSchema;
+    const validate = ajv2020.compile(passedSchema);
+    expect(validate(report)).toBe(false);
+  });
+
+  it.each<[string, unknown]>([
+    ["object", { path: "summary.md" }],
+    ["number", 42],
+    ["null", null],
+  ])("rejects a non-string artifacts item (%s) even when required_artifacts are satisfied", async (_label, item) => {
+    // The required "summary.md" ref IS present; only the non-string item
+    // makes the report invalid. required_artifacts matching itself is
+    // unchanged — it must not be the reason for rejection here.
+    const backend = new ReportingBackend({
+      outputs: {},
+      artifacts: ["docs/summary.md", item],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      REQUIRED_ARTIFACT_YAML,
+      "required-artifact",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("failed");
+    const jobOutputs = state.jobs["intake"] as unknown as { outputs?: Record<string, unknown> };
+    expect(jobOutputs.outputs).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain('"artifacts" items must be strings');
+    expect(String(failedStep!.payload.reason)).not.toContain("Required artifact");
+  });
+
+  // ── Legacy top-level status: strict string + routing domain (Issue #289 P2) ──
+  // The compiled schema declares the top-level status as
+  // { type: "string", enum: returns.status.values }. The Engine must reject
+  // non-string / out-of-domain values instead of String-coercing them into
+  // a routable value.
+
+  it("rejects a numeric top-level status without String coercion and never advances state", async () => {
+    const report = {
+      outputs: {},
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: 5,
+    };
+    const backend = new ReportingBackend(report);
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      RUNALL_RETURNS_STATUS_YAML,
+      "runall-returns-status",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("failed");
+    const jobOutputs = state.jobs["intake"] as unknown as { outputs?: Record<string, unknown> };
+    expect(jobOutputs.outputs).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "step_returned")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain('Top-level "status" must be a string');
+
+    const passedSchema = ReportingBackend.calls[0]!.outputSchema;
+    expect(ajv2020.compile(passedSchema)(report)).toBe(false);
+  });
+
+  it("rejects a null top-level status and never advances state", async () => {
+    const report = {
+      outputs: {},
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: null,
+    };
+    const backend = new ReportingBackend(report);
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      RUNALL_RETURNS_STATUS_YAML,
+      "runall-returns-status",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "step_returned")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain('Top-level "status" must be a string');
+
+    const passedSchema = ReportingBackend.calls[0]!.outputSchema;
+    expect(ajv2020.compile(passedSchema)(report)).toBe(false);
+  });
+
+  it("rejects a top-level status outside returns.status.values and never advances state", async () => {
+    const report = {
+      outputs: {},
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: "bogus",
+    };
+    const backend = new ReportingBackend(report);
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      RUNALL_RETURNS_STATUS_YAML,
+      "runall-returns-status",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("failed");
+    const jobOutputs = state.jobs["intake"] as unknown as { outputs?: Record<string, unknown> };
+    expect(jobOutputs.outputs).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "step_returned")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain("is not in returns.status.values");
+
+    const passedSchema = ReportingBackend.calls[0]!.outputSchema;
+    expect(ajv2020.compile(passedSchema)(report)).toBe(false);
+  });
+
+  it("rejects equal non-string dual-source status values (strict equality, no coercion to a routable value)", async () => {
+    // Both locations carry the same non-string value: strict equality alone
+    // would let it through, but neither location satisfies the compiled
+    // schema's { type: "string" } and no coercion may turn it into "5".
+    const report = {
+      outputs: { status: 5 },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: 5,
+    };
+    const backend = new ReportingBackend(report);
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      RUNALL_RETURNS_STATUS_YAML,
+      "runall-returns-status",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "step_returned")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain('Top-level "status" must be a string');
+
+    const passedSchema = ReportingBackend.calls[0]!.outputSchema;
+    expect(ajv2020.compile(passedSchema)(report)).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1933,5 +2172,294 @@ describe("acceptAgentReport — merged output-contract enforcement (Issue #289 P
 
     const events = await readEvents(runDir);
     expect(events.some((e) => e.type === "step_returned")).toBe(true);
+  });
+
+  // ── artifacts.items: string (Issue #289 P2) ────────────────────────────
+
+  it.each<[string, unknown]>([
+    ["object", { path: "summary.md" }],
+    ["number", 42],
+    ["null", null],
+  ])("rejects a non-string artifacts item (%s) without advancing or persisting state", async (_label, item) => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_NO_OUTPUTS_YAML,
+      "accept-no-outputs",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: {},
+      artifacts: [item],
+      signals: [],
+      summary: "review done",
+    });
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain('"artifacts" items must be strings');
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+  });
+
+  it.each<[string, unknown]>([
+    ["object", { path: "summary.md" }],
+    ["number", 42],
+    ["null", null],
+  ])("rejects a non-string artifacts item (%s) even when required_artifacts are satisfied", async (_label, item) => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_REQUIRED_ARTIFACT_YAML,
+      "accept-required-artifact",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    // The required "summary.md" ref IS present; the non-string item alone
+    // invalidates the report — required_artifacts matching is unchanged.
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: {},
+      artifacts: ["docs/summary.md", item],
+      signals: [],
+      summary: "review done",
+    });
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain('"artifacts" items must be strings');
+    expect((thrown as Error).message).not.toContain("Required artifact");
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+  });
+
+  it("still accepts a report whose string artifacts satisfy required_artifacts (path-segment match preserved)", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_REQUIRED_ARTIFACT_YAML,
+      "accept-required-artifact",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: {},
+      artifacts: ["docs/summary.md"],
+      signals: [],
+      summary: "review done",
+    });
+
+    await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("completed");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(true);
+  });
+
+  // ── Legacy top-level status: strict string + routing domain (Issue #289 P2) ──
+
+  it("rejects a numeric legacy top-level status without String coercion (final line == built-in schema)", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_RETURNS_STATUS_YAML,
+      "accept-returns-status",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    const report = {
+      outputs: {},
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: 5,
+    };
+    await writeReport(runDir, "review", 1, "review", report);
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain('Top-level "status" must be a string');
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "step_returned")).toBe(false);
+
+    // The compiled schema for the SAME workflow rejects the same report.
+    const wf = await loadWorkflowFile(join(sandbox.projectRoot, "accept-returns-status.yml"));
+    const stepDef = wf.jobs["review"]!.steps.find((s) => s.id === "review")!;
+    const validate = ajv2020.compile(compileAgentOutputSchema(stepDef));
+    expect(validate(report)).toBe(false);
+  });
+
+  it("rejects a null legacy top-level status without advancing state", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_RETURNS_STATUS_YAML,
+      "accept-returns-status",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    const report = {
+      outputs: {},
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: null,
+    };
+    await writeReport(runDir, "review", 1, "review", report);
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain('Top-level "status" must be a string');
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(readJobOutputs(snap, "review")).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "step_returned")).toBe(false);
+  });
+
+  it("rejects a top-level status outside returns.status.values without advancing state", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_RETURNS_STATUS_YAML,
+      "accept-returns-status",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    const report = {
+      outputs: {},
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: "bogus",
+    };
+    await writeReport(runDir, "review", 1, "review", report);
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain("is not in returns.status.values");
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "step_returned")).toBe(false);
+
+    const wf = await loadWorkflowFile(join(sandbox.projectRoot, "accept-returns-status.yml"));
+    const stepDef = wf.jobs["review"]!.steps.find((s) => s.id === "review")!;
+    const validate = ajv2020.compile(compileAgentOutputSchema(stepDef));
+    expect(validate(report)).toBe(false);
+  });
+
+  it("still accepts a legacy top-level-only status inside returns.status.values and routes it", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_RETURNS_STATUS_YAML,
+      "accept-returns-status",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    const report = {
+      outputs: {},
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: "fixed",
+    };
+    await writeReport(runDir, "review", 1, "review", report);
+
+    // The compiled schema must accept the same legacy report the runtime
+    // accepts — the top-level location stays schema-compatible.
+    const wf = await loadWorkflowFile(join(sandbox.projectRoot, "accept-returns-status.yml"));
+    const stepDef = wf.jobs["review"]!.steps.find((s) => s.id === "review")!;
+    const validate = ajv2020.compile(compileAgentOutputSchema(stepDef));
+    expect(validate(report)).toBe(true);
+
+    await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "step_returned")).toBe(true);
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("completed");
   });
 });

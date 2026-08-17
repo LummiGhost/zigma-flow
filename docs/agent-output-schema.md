@@ -22,6 +22,12 @@ The legacy top-level `status` remains an optional property (mvp-contracts
   compiled schema) accept a legacy top-level-only report even when
   `returns.status` is required — the Engine's final-line checks are the only
   enforcement there. The compiled schema never claims otherwise.
+- In both cases the legacy top-level `status` itself is held to the exact
+  constraint the compiled schema declares — `{ type: "string", enum:
+  returns.status.values }` — on every accept path: a non-string value
+  (number/null/object) is rejected without String coercion, and a string
+  outside `returns.status.values` is rejected. The Engine never coerces a
+  raw value into a routable status.
 
 Because both locations are accepted, the compiler adds a Draft 2020-12
 equality guard: when a report carries **both** a top-level `status` and an
@@ -67,7 +73,10 @@ The `artifacts` envelope field compiles as an array of **string refs**
 (relative step-artifact paths or `artifact://` refs). This is the same shape
 the Engine's `required_artifacts` check and the canonical prompt contract
 consume; the Engine matches refs as path segments (`summary.md` matches
-`docs/summary.md` but not `not-summary.md`).
+`docs/summary.md` but not `not-summary.md`). A non-string item in the
+`artifacts` array is rejected on every accept path — the Engine enforces
+`artifacts.items: { type: "string" }` exactly like the compiled schema,
+instead of silently filtering the item out of the `required_artifacts` match.
 
 The schema is written to `agent-output-schema.json` in the step attempt
 directory and its SHA-256 hash is recorded in `agent.invocation.json`.
@@ -134,11 +143,15 @@ reported differently:
 
 The checks, in order:
 
-1. `required_artifacts` — each declared path must be present as a string ref.
-2. Declared output keys must all be present — the union of `outputs` and
+1. `artifacts` items must all be strings (the shared report-shape gate) —
+   the compiled schema declares `artifacts.items: { type: "string" }`, and
+   any non-string item (object/number/null) is rejected before the
+   step-contract checks run.
+2. `required_artifacts` — each declared path must be present as a string ref.
+3. Declared output keys must all be present — the union of `outputs` and
    `outputs_schema` keys is required, so an `outputs_schema`-only key is
    required at accept time.
-3. Closed outputs object (`additionalProperties: false`) — any reported key
+4. Closed outputs object (`additionalProperties: false`) — any reported key
    outside the merged declaration is rejected before it can be persisted or
    influence routing. The one implicit key is `status` when the step declares
    `returns.status`: the prompt contract (Issue #256) directs agents to write
@@ -152,7 +165,7 @@ The checks, in order:
    §2.6) is still accepted by the runtime (preferred, in fact, when present)
    and remains an optional property in the compiled schema; only the
    prompt-canonical `outputs.status` is enforced as required.
-4. Dual-source status conflict (fail-closed) — when the step declares
+5. Dual-source status conflict (fail-closed) — when the step declares
    `returns.status` and the report carries **both** a top-level `status` and
    an `outputs.status`, the two values must be strictly equal. Otherwise the
    report is rejected before any state change: routing would follow the
@@ -160,15 +173,21 @@ The checks, in order:
    the compiled schema's equality guard and is authoritative on every accept
    path (the native boundary is bypassed by manual accept and custom
    backends).
-5. Array-typed outputs (merged type `array`) reported as strings are
+6. Legacy top-level status — when the step declares `returns.status`, a
+   top-level `status` is held to the exact constraint the compiled schema
+   declares for that location: a strict `string` within
+   `returns.status.values`, with no String coercion. A number/null/object
+   top-level value is rejected before any state change instead of being
+   coerced into a string that happens to match a routing value.
+7. Array-typed outputs (merged type `array`) reported as strings are
    normalized: JSON parse first, then newline-split fallback.
-6. `type` checks run against the merged declaration after normalization —
+8. `type` checks run against the merged declaration after normalization —
    `outputs`-only type declarations are enforced exactly like
    `outputs_schema` ones. When `returns.status` is declared, the merged
    `status` declaration's `type: "string"` is enforced on `outputs.status`
    too — the same constraint the compiled schema applies without String
    coercion.
-7. `values`/`enum` checks for `outputs` and `outputs_schema` use strict
+9. `values`/`enum` checks for `outputs` and `outputs_schema` use strict
    equality (JSON Schema semantics, no String coercion — `1` does not match
    `"1"`). An empty enum (`values: []`) matches nothing and therefore rejects
    every reported value. When `returns.status` is declared, `outputs.status`

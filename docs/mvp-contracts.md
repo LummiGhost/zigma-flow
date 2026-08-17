@@ -260,6 +260,8 @@ acceptAgentReport 处理顺序固定：
 - 【v0.2】context_patches 必须通过 step.permissions（variables/context_edit/context_blocks）与 workflow 顶层 allowed_writers 双重校验。
 - 【v0.2】context_patches 触及保留字段（jobs/signals/attempts/last_event_id 等）一律拒绝并整批回滚。
 - 【v0.2】status 必须在 `returns.status.values` 列表中；未声明 returns 时 status 仅作 outputs 字段记录，不触发 action。
+- 【v0.2】top-level `status` 不作 String 强制转换：声明 `returns.status` 时，top-level `status` 必须严格为 string 且在 `returns.status.values` 内，否则在任一 accept 路径被拒绝（与编译 schema 的 `status: { type: "string", enum: values }` 一致）。
+- 【v0.2】`artifacts` 数组项必须为 string ref（step-artifact 相对路径或 `artifact://`）；任一非 string 项在任一 accept 路径被拒绝（与编译 schema 的 `artifacts.items: { type: "string" }` 一致）。
 - 若 step 显式在 `outputs`/`outputs_schema` 中声明 `status`，其 `type` 必须为 `"string"` 且 `values`/`enum` 必须是 `returns.status.values` 的子集；否则在编译期即失败（fail-closed）。兼容时按单一共享合并规则合并（显式子集与 description 保留），编译产物与 Engine final-line 校验一致，详见 docs/agent-output-schema.md。
 - 【v0.2】status 触发的 action 优先于 signals；signals 仍记录 `signal_received` 事件。
 

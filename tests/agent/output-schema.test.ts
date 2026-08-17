@@ -353,3 +353,215 @@ describe("compileAgentOutputSchema", () => {
     expect(schema.properties.outputs.properties.verdict).toEqual({ type: "string", enum: ["x"] });
   });
 });
+
+describe("compileAgentOutputSchema — explicit status + returns.status merge (Issue #289 P2)", () => {
+  it("merges a compatible explicit outputs.status subset with returns.status, preserving metadata", () => {
+    const schema = schemaFor({
+      id: "review",
+      type: "agent",
+      outputs: {
+        status: {
+          type: "string",
+          values: ["fixed"],
+          description: "review outcome (restricted subset)",
+        },
+      },
+      returns: { status: { values: ["fixed", "unfixable"], required: true } },
+    });
+
+    // The explicit (stricter) values win the merge instead of being silently
+    // overwritten by returns.status.values; description survives.
+    expect(schema.properties.outputs.properties.status).toEqual({
+      type: "string",
+      enum: ["fixed"],
+      description: "review outcome (restricted subset)",
+    });
+    // Explicit declaration => required regardless of returns.status.required.
+    expect(schema.properties.outputs.required).toEqual(["status"]);
+    // Legacy top-level status keeps the full routing domain.
+    expect(schema.properties.status.enum).toEqual(["fixed", "unfixable"]);
+  });
+
+  it("merges an outputs_schema-only status subset with returns.status", () => {
+    const schema = schemaFor({
+      id: "review",
+      type: "agent",
+      outputs_schema: { status: { type: "string", values: ["fixed"] } },
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    });
+
+    expect(schema.properties.outputs.required).toEqual(["status"]);
+    expect(schema.properties.outputs.properties.status).toEqual({
+      type: "string",
+      enum: ["fixed"],
+    });
+  });
+
+  it("merges a split declaration (outputs metadata + outputs_schema values) with returns.status", () => {
+    const schema = schemaFor({
+      id: "review",
+      type: "agent",
+      outputs: { status: { description: "review outcome" } },
+      outputs_schema: { status: { type: "string", values: ["fixed"] } },
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    });
+
+    expect(schema.properties.outputs.properties.status).toEqual({
+      type: "string",
+      enum: ["fixed"],
+      description: "review outcome",
+    });
+  });
+
+  it("treats an unconstrained explicit status declaration as the full returns domain", () => {
+    const schema = schemaFor({
+      id: "review",
+      type: "agent",
+      outputs: { status: {} },
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    });
+
+    expect(schema.properties.outputs.properties.status).toEqual({
+      type: "string",
+      enum: ["fixed", "unfixable"],
+    });
+  });
+
+  it("merges an explicit enum-key declaration with returns.status", () => {
+    const schema = schemaFor({
+      id: "review",
+      type: "agent",
+      outputs: { status: { enum: ["fixed"] } },
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    });
+
+    expect(schema.properties.outputs.properties.status).toEqual({
+      type: "string",
+      enum: ["fixed"],
+    });
+  });
+
+  it("requires outputs.status when explicitly declared even if returns.status is optional", () => {
+    const schema = schemaFor({
+      id: "review",
+      type: "agent",
+      outputs: { status: { values: ["fixed"] } },
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    });
+
+    // Every declared output key is required — the explicit status
+    // declaration is stricter than (and compatible with) an optional
+    // returns.status, so the merged contract requires it.
+    expect(schema.properties.outputs.required).toEqual(["status"]);
+
+    const step: Partial<StepDefinition> = {
+      id: "review",
+      type: "agent",
+      outputs: { status: { values: ["fixed"] } },
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    };
+    expect(
+      schemaAccepts(step, {
+        outputs: {},
+        artifacts: [],
+        signals: [],
+        summary: "done",
+      })
+    ).toBe(false);
+  });
+
+  it("enforces the explicit subset at the built-in boundary (schema/runtime consistency)", () => {
+    const step: Partial<StepDefinition> = {
+      id: "review",
+      type: "agent",
+      outputs: { status: { values: ["fixed"] } },
+      returns: { status: { values: ["fixed", "unfixable"], required: true } },
+    };
+    const envelope = {
+      outputs: { status: "fixed" },
+      artifacts: [],
+      signals: [],
+      summary: "done",
+    };
+
+    expect(schemaAccepts(step, envelope)).toBe(true);
+    // "unfixable" is routable by returns.status but outside the explicit
+    // subset — the compiled schema must reject it, exactly like the Engine's
+    // final-line enum check on the merged declaration.
+    expect(
+      schemaAccepts(step, {
+        ...envelope,
+        outputs: { status: "unfixable" },
+      })
+    ).toBe(false);
+  });
+
+  it("rejects a type conflict between explicit status and returns.status (fail-closed)", () => {
+    const step: Partial<StepDefinition> = {
+      id: "review",
+      type: "agent",
+      outputs: { status: { type: "number" } },
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    };
+
+    expect(() => compileAgentOutputSchema(step as StepDefinition)).toThrowError(ValidationError);
+    try {
+      compileAgentOutputSchema(step as StepDefinition);
+    } catch (err) {
+      expect((err as Error).message).toContain(
+        `Output "status" declares type "number" which conflicts with returns.status`
+      );
+    }
+  });
+
+  it("rejects an explicit status value outside returns.status.values (fail-closed)", () => {
+    const step: Partial<StepDefinition> = {
+      id: "review",
+      type: "agent",
+      outputs: { status: { values: ["bogus"] } },
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    };
+
+    expect(() => compileAgentOutputSchema(step as StepDefinition)).toThrowError(ValidationError);
+    try {
+      compileAgentOutputSchema(step as StepDefinition);
+    } catch (err) {
+      expect((err as Error).message).toContain('Output "status" declares value(s) "bogus"');
+      expect((err as Error).message).toContain("outside returns.status.values");
+    }
+  });
+
+  it("rejects only the unroutable values on partial overlap (fail-closed)", () => {
+    const step: Partial<StepDefinition> = {
+      id: "review",
+      type: "agent",
+      outputs_schema: { status: { type: "string", values: ["fixed", "bogus"] } },
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    };
+
+    expect(() => compileAgentOutputSchema(step as StepDefinition)).toThrowError(ValidationError);
+    try {
+      compileAgentOutputSchema(step as StepDefinition);
+    } catch (err) {
+      expect((err as Error).message).toContain('declares value(s) "bogus"');
+      expect((err as Error).message).not.toContain('"fixed" outside');
+    }
+  });
+
+  it("rejects non-string explicit status values (unroutable by the string domain)", () => {
+    const step: Partial<StepDefinition> = {
+      id: "review",
+      type: "agent",
+      outputs: { status: { values: [1] } },
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    };
+
+    expect(() => compileAgentOutputSchema(step as StepDefinition)).toThrowError(ValidationError);
+    try {
+      compileAgentOutputSchema(step as StepDefinition);
+    } catch (err) {
+      expect((err as Error).message).toContain('declares value(s) 1');
+      expect((err as Error).message).toContain("outside returns.status.values");
+    }
+  });
+});

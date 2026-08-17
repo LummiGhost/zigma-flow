@@ -44,6 +44,25 @@ is required, and no other key is allowed (`additionalProperties: false`). The
 one additional key is the implicit `status` inside `outputs` when the step
 declares `returns.status` (see "Final-line enforcement" below).
 
+When a step declares **both** an explicit `outputs`/`outputs_schema` `status`
+and a `returns.status`, a single shared merge rule folds the returns routing
+domain into the explicit declaration — the compiler never silently overwrites
+one with the other:
+
+- **Compatible** declarations merge: the explicit (stricter) `values` win when
+  they are a subset of `returns.status.values`, `type` stays `"string"`, and
+  explicit metadata such as `description` is preserved. Both the compiled
+  schema and the Engine's final-line validator enforce this exact merged
+  declaration, so the native boundary and the runtime cannot drift.
+- **Conflicting** declarations fail closed at compile time with
+  `ValidationError` (see "Compile-time validation"): a declared `type` other
+  than `"string"`, or a declared `values`/`enum` entry outside
+  `returns.status.values` (unrouteable by `applyStatusReturn`).
+- **Required** semantics never conflict: an explicitly declared `status` key
+  is required like every declared output key — stricter than, and therefore
+  compatible with, an optional `returns.status`. A required `returns.status`
+  additionally requires `outputs.status` in the compiled schema.
+
 The `artifacts` envelope field compiles as an array of **string refs**
 (relative step-artifact paths or `artifact://` refs). This is the same shape
 the Engine's `required_artifacts` check and the canonical prompt contract
@@ -71,6 +90,14 @@ before the backend is invoked — the step fails as a configuration error:
   (e.g. `integer`) cannot be enforced by the final-line runtime checks and are
   rejected.
 - `values`/`enum` must be arrays of allowed values.
+- An explicit `status` declaration combined with `returns.status` must be
+  compatible with the routing domain, otherwise the step fails closed before
+  the backend is invoked:
+  - a declared `type` other than `"string"` is rejected (status values are
+    strings);
+  - a declared `values`/`enum` entry outside `returns.status.values` is
+    rejected (the value is unrouteable, so the native schema must not
+    advertise it).
 
 ## Backend capability contract
 
@@ -117,7 +144,9 @@ The checks, in order:
    `returns.status`: the prompt contract (Issue #256) directs agents to write
    `outputs.status`, so it is accepted and used for status-return dispatch.
    The compiled schema declares the same key — `outputs.properties.status`
-   with the `returns.status.values` enum, required exactly when
+   with the merged status enum (`returns.status.values`, or the explicit
+   subset when `outputs`/`outputs_schema` declared a compatible one),
+   required exactly when the key is explicitly declared or
    `returns.status.required` — so built-in backends enforce the same
    location the prompt demands. A legacy top-level `status` (mvp-contracts
    §2.6) is still accepted by the runtime (preferred, in fact, when present)
@@ -135,11 +164,16 @@ The checks, in order:
    normalized: JSON parse first, then newline-split fallback.
 6. `type` checks run against the merged declaration after normalization —
    `outputs`-only type declarations are enforced exactly like
-   `outputs_schema` ones.
+   `outputs_schema` ones. When `returns.status` is declared, the merged
+   `status` declaration's `type: "string"` is enforced on `outputs.status`
+   too — the same constraint the compiled schema applies without String
+   coercion.
 7. `values`/`enum` checks for `outputs` and `outputs_schema` use strict
    equality (JSON Schema semantics, no String coercion — `1` does not match
    `"1"`). An empty enum (`values: []`) matches nothing and therefore rejects
-   every reported value.
+   every reported value. When `returns.status` is declared, `outputs.status`
+   is held to the same merged enum the compiled schema declares — the
+   explicit subset when one was declared.
 
 Native CLI schema enforcement is an additional boundary and does not transfer
 state transition ownership to an Agent backend.

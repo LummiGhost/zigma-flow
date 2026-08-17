@@ -61,16 +61,95 @@ function outputProperty(name: string, value: unknown): JsonSchema {
 export interface MergedOutputContract {
   /** Union of outputs and outputs_schema keys — every key is required. */
   names: string[];
-  /** Per-key merged declaration: outputs_schema overlays outputs per field. */
+  /**
+   * Per-key merged declaration: outputs_schema overlays outputs per field.
+   * When the step declares returns.status, declarations["status"] carries
+   * the returns-merged status declaration; "status" joins names only when
+   * explicitly declared in outputs/outputs_schema.
+   */
   declarations: Record<string, Record<string, unknown>>;
+}
+
+/**
+ * Merge an explicitly declared outputs/outputs_schema `status` declaration
+ * with the step's returns.status routing domain — the single shared merge
+ * rule used by both the compiled schema and the Engine's final-line
+ * validator, so the native boundary and the runtime cannot drift.
+ *
+ * returns.status.values is the Engine's routing domain: applyStatusReturn
+ * rejects any reported status outside it. A declaration the compiled schema
+ * advertises but the Engine cannot route (or vice versa) is a contract
+ * conflict, not a merge candidate. Fail-closed rules:
+ *
+ *   - declared type must be "string" (or absent) — returns.status values
+ *     are strings; any other runnable type is rejected at compile time.
+ *   - declared values/enum must be a subset of returns.status.values — a
+ *     value outside the routing domain is unrouteable and rejected.
+ *   - required semantics never conflict: an explicitly declared `status`
+ *     key is required (every declared output key is), which is stricter
+ *     than and therefore compatible with an optional returns.status; a
+ *     required returns.status additionally requires the key in the compiled
+ *     schema.
+ *
+ * When compatible, the merged declaration keeps the explicit (stricter)
+ * values and explicit metadata such as description.
+ */
+function mergeStatusDeclaration(
+  explicit: Record<string, unknown> | undefined,
+  returns: { values: string[]; required?: boolean },
+): Record<string, unknown> {
+  if (explicit === undefined) {
+    return { type: "string", values: [...returns.values] };
+  }
+
+  const declaredType = explicit["type"];
+  if (declaredType !== undefined && declaredType !== "string") {
+    throw new ValidationError(
+      `Output "status" declares type ${JSON.stringify(declaredType)} which conflicts with returns.status ` +
+      `(status values are strings). Declare type: "string" or drop the explicit type.`,
+      { details: { output: "status", type: declaredType, returnsValues: returns.values } }
+    );
+  }
+
+  const explicitValues: unknown[] | undefined =
+    Array.isArray(explicit["values"]) ? (explicit["values"] as unknown[])
+    : Array.isArray(explicit["enum"]) ? (explicit["enum"] as unknown[])
+    : undefined;
+
+  let mergedValues: unknown[] = [...returns.values];
+  if (explicitValues !== undefined) {
+    const returnsSet = new Set<unknown>(returns.values);
+    const unroutable = explicitValues.filter((v) => !returnsSet.has(v));
+    if (unroutable.length > 0) {
+      throw new ValidationError(
+        `Output "status" declares value(s) ${unroutable.map((v) => JSON.stringify(v)).join(", ")} ` +
+        `outside returns.status.values [${returns.values.map((v) => JSON.stringify(v)).join(", ")}]. ` +
+        `Status values outside the routing domain cannot be routed — restrict the declaration to a subset of returns.status.values.`,
+        { details: { output: "status", unroutable, returnsValues: returns.values } }
+      );
+    }
+    mergedValues = explicitValues;
+  }
+
+  const merged: Record<string, unknown> = { type: "string", values: mergedValues };
+  if (typeof explicit["description"] === "string") {
+    merged["description"] = explicit["description"];
+  }
+  return merged;
 }
 
 /**
  * Union outputs + outputs_schema keys and merge each pair with the same
  * semantics the compiled schema uses: outputs_schema overlays its fields
  * (type/values) onto outputs without discarding outputs-only metadata such
- * as description. Shared by compileAgentOutputSchema and the Engine's
- * final-line report validator so both enforce one identical contract.
+ * as description. When the step declares returns.status, the merged
+ * `status` declaration additionally folds in the returns routing domain
+ * (fail-closed on conflicts — see mergeStatusDeclaration) and is exposed
+ * under declarations["status"] WITHOUT joining names: it stays an implicit
+ * key unless explicitly declared, so an optional returns.status never
+ * makes outputs.status required by itself. Shared by compileAgentOutputSchema
+ * and the Engine's final-line report validator so both enforce one
+ * identical contract.
  */
 export function mergeOutputDeclarations(step: StepDefinition): MergedOutputContract {
   const names = [...new Set([
@@ -86,6 +165,10 @@ export function mergeOutputDeclarations(step: StepDefinition): MergedOutputContr
     const outputsDecl = parseOutputDeclaration(name, (step.outputs ?? {})[name]);
     const schemaDecl = parseOutputDeclaration(name, (step.outputs_schema ?? {})[name]);
     declarations[name] = { ...outputsDecl, ...schemaDecl };
+  }
+
+  if (step.returns?.status) {
+    declarations["status"] = mergeStatusDeclaration(declarations["status"], step.returns.status);
   }
   return { names, declarations };
 }
@@ -104,15 +187,18 @@ export function compileAgentOutputSchema(step: StepDefinition): JsonSchema {
   // compiled schema therefore declares status INSIDE outputs so built-in
   // backends (Codex/Claude native schema enforcement) accept the exact shape
   // the prompt demands; a required returns.status makes outputs.status
-  // required. The legacy top-level `status` remains an OPTIONAL property
-  // (mvp-contracts §2.6) so older report shapes still pass native validation
-  // when returns.status is not required (a required returns.status makes
-  // outputs.status required, so a top-level-only report fails native
-  // enforcement).
+  // required. The schema is NOT hardcoded here: it is the merged status
+  // declaration produced by mergeOutputDeclarations (explicit
+  // outputs/outputs_schema `status` merged with returns.status, fail-closed
+  // on conflicts), so the native boundary and the Engine's final-line
+  // validator enforce the exact same type/values contract. The legacy
+  // top-level `status` remains an OPTIONAL property (mvp-contracts §2.6) so
+  // older report shapes still pass native validation when returns.status is
+  // not required (a required returns.status makes outputs.status required,
+  // so a top-level-only report fails native enforcement).
   const outputsRequired = [...names];
   if (step.returns?.status) {
-    const statusSchema: JsonSchema = { type: "string", enum: step.returns.status.values };
-    outputProperties["status"] = statusSchema;
+    outputProperties["status"] = outputProperty("status", declarations["status"]!);
     if (step.returns.status.required && !outputsRequired.includes("status")) {
       outputsRequired.push("status");
     }

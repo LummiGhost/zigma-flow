@@ -216,9 +216,13 @@ export function validateReportShape(parsed: unknown): AgentReport {
  *   5. Array-typed outputs (merged type "array") are normalized (JSON.parse,
  *      then newline-split fallback).
  *   6. Type checks against the merged declaration — outputs-only types are
- *      enforced too, and run after normalization.
+ *      enforced too, and run after normalization. When returns.status is
+ *      declared, the returns-merged `status` declaration (type "string")
+ *      is enforced on outputs.status exactly like the compiled schema.
  *   7. enum/values checks with strict equality (JSON Schema semantics: no
  *      String coercion). An empty enum (values: []) rejects every value.
+ *      outputs.status is held to the same merged enum the compiled schema
+ *      declares (an explicit subset when one was declared).
  *
  * Throws ValidationError on any violation — no state transition happens.
  * Returns the normalized outputs to persist.
@@ -322,12 +326,15 @@ export function validateReportAgainstStep(
 
   // ── 6. Type checks against the merged declaration ─────────────────────
   // Runs AFTER normalization so a string report for an array-typed output
-  // validates as an array. outputs-only types are enforced as well.
-  for (const key of declaredKeys) {
+  // validates as an array. outputs-only types are enforced as well. The
+  // iteration covers the implicit `status` key too: when the step declares
+  // returns.status, declarations["status"] is the same returns-merged
+  // declaration the compiled schema uses, so its type: "string" is enforced
+  // identically here (the compiled schema does not String-coerce).
+  for (const [key, value] of Object.entries(normalizedOutputs)) {
     const expectedType = declarations[key]?.["type"];
     if (typeof expectedType !== "string") continue;
 
-    const value = normalizedOutputs[key];
     const actualType =
       value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
 
@@ -342,7 +349,10 @@ export function validateReportAgainstStep(
   // ── 7. enum/values final-line check ───────────────────────────────────
   // Strict equality (JSON Schema semantics) — no String coercion, so 1 does
   // not match "1". An empty enum (values: []) matches nothing and therefore
-  // rejects every reported value.
+  // rejects every reported value. When the step declares returns.status,
+  // declarations["status"] is the returns-merged declaration, so
+  // outputs.status is held to the exact enum the compiled schema declares
+  // (an explicit subset when one was declared).
   for (const [key, value] of Object.entries(normalizedOutputs)) {
     const decl = declarations[key];
     if (decl === undefined) continue;

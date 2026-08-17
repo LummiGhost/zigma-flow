@@ -473,6 +473,110 @@ jobs:
           unfixable: fail
 `;
 
+const STATUS_SUBSET_YAML = `\
+name: status-subset
+version: "0.1.0"
+jobs:
+  intake:
+    retry:
+      max_attempts: 1
+      on_exceeded:
+        status: failed
+    steps:
+      - id: review
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/review-skill
+        outputs:
+          status:
+            type: string
+            values:
+              - fixed
+            description: review outcome
+        returns:
+          status:
+            values:
+              - fixed
+              - unfixable
+            required: true
+        on_return:
+          fixed: continue
+          unfixable: fail
+`;
+
+const STATUS_CONFLICT_VALUES_YAML = `\
+name: status-conflict-values
+version: "0.1.0"
+jobs:
+  intake:
+    retry:
+      max_attempts: 1
+      on_exceeded:
+        status: failed
+    steps:
+      - id: review
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/review-skill
+        outputs:
+          status:
+            values:
+              - bogus
+        returns:
+          status:
+            values:
+              - fixed
+              - unfixable
+`;
+
+const STATUS_CONFLICT_TYPE_YAML = `\
+name: status-conflict-type
+version: "0.1.0"
+jobs:
+  intake:
+    retry:
+      max_attempts: 1
+      on_exceeded:
+        status: failed
+    steps:
+      - id: review
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/review-skill
+        outputs:
+          status:
+            type: number
+        returns:
+          status:
+            values:
+              - fixed
+              - unfixable
+`;
+
+const ACCEPT_STATUS_SUBSET_YAML = `\
+name: accept-status-subset
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review
+        type: agent
+        uses: zigma/review-skill
+        outputs:
+          status:
+            type: string
+            values:
+              - fixed
+        returns:
+          status:
+            values:
+              - fixed
+              - unfixable
+        on_return:
+          fixed: continue
+          unfixable: fail
+`;
+
 // ---------------------------------------------------------------------------
 // Sandbox helpers
 // ---------------------------------------------------------------------------
@@ -728,6 +832,140 @@ describe("runAll — output-schema final-line enforcement (Issue #289)", () => {
 
     const events = await readEvents(runDir);
     expect(events.some((e) => e.type === "step_returned")).toBe(true);
+  });
+
+  it("merges an explicit status subset with returns.status in the backend schema and final line (Issue #289 P2)", async () => {
+    const backend = new ReportingBackend({
+      outputs: { status: "fixed" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      STATUS_SUBSET_YAML,
+      "status-subset",
+      backend,
+    );
+
+    expect(summary.status).toBe("completed");
+    expect(summary.jobs[0]!.status).toBe("completed");
+
+    expect(ReportingBackend.calls).toHaveLength(1);
+    const passedSchema = ReportingBackend.calls[0]!.outputSchema as
+      | {
+          properties: {
+            outputs: { properties: Record<string, any>; required: string[] };
+          };
+        }
+      | undefined;
+    // The backend enforces the merged declaration — the explicit subset wins
+    // (no silent returns-status override) and description survives.
+    expect(passedSchema?.properties.outputs.properties.status).toEqual({
+      type: "string",
+      enum: ["fixed"],
+      description: "review outcome",
+    });
+    expect(passedSchema?.properties.outputs.required).toContain("status");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "step_returned")).toBe(true);
+  });
+
+  it("rejects an outputs.status outside the explicit subset but inside returns.status.values (final line == built-in schema)", async () => {
+    // "unfixable" is routable by returns.status but outside the explicit
+    // subset — both the compiled schema and the Engine's final-line enum
+    // check must reject it, and state must not advance.
+    const report = {
+      outputs: { status: "unfixable" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    };
+    const backend = new ReportingBackend(report);
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      STATUS_SUBSET_YAML,
+      "status-subset",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    // The compiled schema the backend received rejects the same report.
+    const passedSchema = ReportingBackend.calls[0]!.outputSchema;
+    const validate = ajv2020.compile(passedSchema);
+    expect(validate(report)).toBe(false);
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.jobs["intake"]!.status).toBe("failed");
+    const jobOutputs = state.jobs["intake"] as unknown as { outputs?: Record<string, unknown> };
+    expect(jobOutputs.outputs).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "step_returned")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain(
+      'Output "status" value "unfixable" is not in declared values'
+    );
+  });
+
+  it("fails at compile time when explicit status values fall outside returns.status.values (fail-closed)", async () => {
+    const backend = new ReportingBackend({
+      outputs: { status: "fixed" },
+      artifacts: [],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      STATUS_CONFLICT_VALUES_YAML,
+      "status-conflict-values",
+      backend,
+    );
+
+    expect(ReportingBackend.calls).toHaveLength(0);
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("failed");
+
+    const events = await readEvents(runDir);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain("Agent output schema compile failed");
+    expect(String(failedStep!.payload.reason)).toContain('declares value(s) "bogus"');
+    expect(events.some((e) => e.type === "run_failed")).toBe(true);
+  });
+
+  it("fails at compile time when the explicit status type conflicts with returns.status (fail-closed)", async () => {
+    const backend = new ReportingBackend({
+      outputs: { status: 7 },
+      artifacts: [],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      STATUS_CONFLICT_TYPE_YAML,
+      "status-conflict-type",
+      backend,
+    );
+
+    expect(ReportingBackend.calls).toHaveLength(0);
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const events = await readEvents(runDir);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain("Agent output schema compile failed");
+    expect(String(failedStep!.payload.reason)).toContain(
+      'declares type "number" which conflicts with returns.status'
+    );
+    expect(events.some((e) => e.type === "run_failed")).toBe(true);
   });
 
   it("rejects an illegal outputs value and never advances state", async () => {
@@ -1583,6 +1821,110 @@ describe("acceptAgentReport — merged output-contract enforcement (Issue #289 P
     // report the runtime accepts — no schema/runtime drift for the
     // prompt-canonical outputs.status location.
     const wf = await loadWorkflowFile(join(sandbox.projectRoot, "accept-returns-status.yml"));
+    const stepDef = wf.jobs["review"]!.steps.find((s) => s.id === "review")!;
+    const validate = ajv2020.compile(compileAgentOutputSchema(stepDef));
+    expect(validate(report)).toBe(true);
+
+    await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "step_returned")).toBe(true);
+  });
+
+  it("accepts an outputs.status inside the explicit subset on the manual path (merged contract, Issue #289 P2)", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_STATUS_SUBSET_YAML,
+      "accept-status-subset",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: { status: "fixed" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    });
+
+    await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "step_returned")).toBe(true);
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("completed");
+    expect(readJobOutputs(snap, "review")?.status).toBe("fixed");
+  });
+
+  it("rejects an outputs.status inside returns.values but outside the explicit subset without advancing state", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_STATUS_SUBSET_YAML,
+      "accept-status-subset",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    // "unfixable" is routable by returns.status but outside the explicit
+    // subset — the final-line enum check on the merged declaration must
+    // reject it exactly like the compiled schema would.
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: { status: "unfixable" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    });
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain(
+      'Output "status" value "unfixable" is not in declared values'
+    );
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "step_returned")).toBe(false);
+  });
+
+  it("compiled schema accepts the same explicit-subset report the manual path accepts (schema/runtime consistency)", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_STATUS_SUBSET_YAML,
+      "accept-status-subset",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    const report = {
+      outputs: { status: "fixed" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    };
+    await writeReport(runDir, "review", 1, "review", report);
+
+    const wf = await loadWorkflowFile(join(sandbox.projectRoot, "accept-status-subset.yml"));
     const stepDef = wf.jobs["review"]!.steps.find((s) => s.id === "review")!;
     const validate = ajv2020.compile(compileAgentOutputSchema(stepDef));
     expect(validate(report)).toBe(true);

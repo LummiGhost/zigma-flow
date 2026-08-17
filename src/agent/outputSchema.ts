@@ -58,23 +58,44 @@ function outputProperty(name: string, value: unknown): JsonSchema {
   return schema;
 }
 
-export function compileAgentOutputSchema(step: StepDefinition): JsonSchema {
+export interface MergedOutputContract {
+  /** Union of outputs and outputs_schema keys — every key is required. */
+  names: string[];
+  /** Per-key merged declaration: outputs_schema overlays outputs per field. */
+  declarations: Record<string, Record<string, unknown>>;
+}
+
+/**
+ * Union outputs + outputs_schema keys and merge each pair with the same
+ * semantics the compiled schema uses: outputs_schema overlays its fields
+ * (type/values) onto outputs without discarding outputs-only metadata such
+ * as description. Shared by compileAgentOutputSchema and the Engine's
+ * final-line report validator so both enforce one identical contract.
+ */
+export function mergeOutputDeclarations(step: StepDefinition): MergedOutputContract {
   const names = [...new Set([
     ...Object.keys(step.outputs ?? {}),
     ...Object.keys(step.outputs_schema ?? {}),
   ])].sort();
 
-  const outputProperties: Record<string, JsonSchema> = {};
+  const declarations: Record<string, Record<string, unknown>> = {};
   for (const name of names) {
     // Validate each raw declaration BEFORE merging — a non-object declaration
     // (e.g. `title: "a string"`) must raise ValidationError instead of being
     // silently dropped by the per-key merge.
     const outputsDecl = parseOutputDeclaration(name, (step.outputs ?? {})[name]);
     const schemaDecl = parseOutputDeclaration(name, (step.outputs_schema ?? {})[name]);
-    // Per-key merge: outputs_schema overlays its fields (type/values) without
-    // discarding outputs metadata such as description.
-    const merged: Record<string, unknown> = { ...outputsDecl, ...schemaDecl };
-    outputProperties[name] = outputProperty(name, merged);
+    declarations[name] = { ...outputsDecl, ...schemaDecl };
+  }
+  return { names, declarations };
+}
+
+export function compileAgentOutputSchema(step: StepDefinition): JsonSchema {
+  const { names, declarations } = mergeOutputDeclarations(step);
+
+  const outputProperties: Record<string, JsonSchema> = {};
+  for (const name of names) {
+    outputProperties[name] = outputProperty(name, declarations[name]!);
   }
 
   const properties: Record<string, JsonSchema> = {

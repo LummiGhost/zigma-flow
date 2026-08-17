@@ -36,6 +36,7 @@ import type { Clock, JobState, RunState } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { StepDefinition } from "../workflow/index.js";
 import { FilesystemError, StateError, ValidationError, WorkflowError } from "../utils/index.js";
+import { mergeOutputDeclarations } from "../agent/outputSchema.js";
 import { applyRoutingAction } from "./routing.js";
 import type { ContextPatch } from "./applyContextPatch.js";
 
@@ -176,30 +177,24 @@ export function validateReportShape(parsed: unknown): AgentReport {
 // Shared step-contract validation (acceptAgentReport + runAll inline path)
 // ---------------------------------------------------------------------------
 
-function declaredValuesOf(declaration: unknown): unknown[] | undefined {
-  if (declaration === null || typeof declaration !== "object" || Array.isArray(declaration)) return undefined;
-  const def = declaration as Record<string, unknown>;
-  for (const key of ["values", "enum"]) {
-    const v = def[key];
-    if (Array.isArray(v)) return v;
-  }
-  return undefined;
-}
-
 /**
  * Validate a parsed Agent report against the step's output contract.
  *
  * This is the Engine's final-line defense: it runs on every accept path
  * (autonomous runAll loop and manual `next`/accept) before any state can
- * advance. Order matches the §2.6 pipeline:
+ * advance. The contract is derived from the SAME per-key union/merge of
+ * outputs + outputs_schema that compileAgentOutputSchema builds, so the
+ * prompt-side schema and the runtime enforcement cannot drift:
  *
  *   1. required_artifacts — each declared artifact path must be present in
  *      report.artifacts (string refs, matched as path segment).
- *   2. Declared output keys must all be present.
- *   3. Array-typed outputs declared in `outputs` are normalized (JSON.parse,
+ *   2. Every key in the outputs ∪ outputs_schema union must be present.
+ *   3. Array-typed outputs (merged type "array") are normalized (JSON.parse,
  *      then newline-split fallback).
- *   4. outputs_schema type checks.
- *   5. enum/values checks for outputs (values|enum) and outputs_schema (values).
+ *   4. Type checks against the merged declaration — outputs-only types are
+ *      enforced too, and run after normalization.
+ *   5. enum/values checks with strict equality (JSON Schema semantics: no
+ *      String coercion). An empty enum (values: []) rejects every value.
  *
  * Throws ValidationError on any violation — no state transition happens.
  * Returns the normalized outputs to persist.
@@ -230,28 +225,27 @@ export function validateReportAgainstStep(
     }
   }
 
-  // ── 2. Declared output keys must be present ───────────────────────────
-  if (stepDef?.outputs) {
-    const declaredKeys = Object.keys(stepDef.outputs);
-    const missingKeys = declaredKeys.filter((k) => !(k in report.outputs));
-    if (missingKeys.length > 0) {
-      throw new ValidationError(
-        `Report is missing declared output(s): ${missingKeys.join(", ")}`,
-        { details: { missing: missingKeys, declared: declaredKeys } }
-      );
-    }
+  // ── 2. Union of declared output keys must all be present ──────────────
+  // Same union as compileAgentOutputSchema: outputs_schema-only keys are
+  // required too.
+  const contract = stepDef ? mergeOutputDeclarations(stepDef) : undefined;
+  const declarations = contract?.declarations ?? {};
+  const declaredKeys = contract?.names ?? [];
+
+  const missingKeys = declaredKeys.filter((k) => !(k in report.outputs));
+  if (missingKeys.length > 0) {
+    throw new ValidationError(
+      `Report is missing declared output(s): ${missingKeys.join(", ")}`,
+      { details: { missing: missingKeys, declared: declaredKeys } }
+    );
   }
 
-  // ── 3. Normalize array-typed outputs ──────────────────────────────────
+  // ── 3. Normalize array-typed outputs (merged declaration) ─────────────
   const normalizedOutputs: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(report.outputs)) {
-    const outputDef = stepDef?.outputs?.[key];
-    const declaredType =
-      outputDef !== null && typeof outputDef === "object" && !Array.isArray(outputDef)
-        ? (outputDef as Record<string, unknown>)["type"]
-        : undefined;
+    const mergedType = declarations[key]?.["type"];
 
-    if (declaredType === "array" && typeof value === "string") {
+    if (mergedType === "array" && typeof value === "string") {
       try {
         const parsed: unknown = JSON.parse(value);
         if (Array.isArray(parsed)) {
@@ -265,48 +259,45 @@ export function validateReportAgainstStep(
     }
   }
 
-  // ── 4. outputs_schema type checks ─────────────────────────────────────
-  if (stepDef?.outputs_schema) {
-    for (const [key, schema] of Object.entries(stepDef.outputs_schema)) {
-      const value = normalizedOutputs[key];
-      if (value === undefined) continue;
+  // ── 4. Type checks against the merged declaration ─────────────────────
+  // Runs AFTER normalization so a string report for an array-typed output
+  // validates as an array. outputs-only types are enforced as well.
+  for (const key of declaredKeys) {
+    const expectedType = declarations[key]?.["type"];
+    if (typeof expectedType !== "string") continue;
 
-      const expectedType = schema.type;
-      let actualType: string;
-      if (value === null) {
-        actualType = "null";
-      } else if (Array.isArray(value)) {
-        actualType = "array";
-      } else {
-        actualType = typeof value;
-      }
+    const value = normalizedOutputs[key];
+    const actualType =
+      value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
 
-      if (expectedType !== actualType) {
-        throw new ValidationError(
-          `Output "${key}" type mismatch: expected ${expectedType}, got ${actualType}`,
-          { details: { key, expected: expectedType, actual: actualType } }
-        );
-      }
+    if (expectedType !== actualType) {
+      throw new ValidationError(
+        `Output "${key}" type mismatch: expected ${expectedType}, got ${actualType}`,
+        { details: { key, expected: expectedType, actual: actualType } }
+      );
     }
   }
 
   // ── 5. enum/values final-line check ───────────────────────────────────
-  // If a step declares outputs (values|enum) or outputs_schema (values),
-  // the reported value must be in the declared set.
+  // Strict equality (JSON Schema semantics) — no String coercion, so 1 does
+  // not match "1". An empty enum (values: []) matches nothing and therefore
+  // rejects every reported value.
   for (const [key, value] of Object.entries(normalizedOutputs)) {
-    const allowedValues: unknown[] | undefined =
-      declaredValuesOf(stepDef?.outputs_schema?.[key]) ??
-      declaredValuesOf(stepDef?.outputs?.[key]);
+    const decl = declarations[key];
+    if (decl === undefined) continue;
 
-    if (allowedValues !== undefined && allowedValues.length > 0) {
-      const strValue = String(value ?? "");
-      const matched = allowedValues.some((allowed) => String(allowed) === strValue);
-      if (!matched) {
-        throw new ValidationError(
-          `Output "${key}" value "${strValue}" is not in declared values: [${allowedValues.map(String).join(", ")}]`,
-          { details: { outputKey: key, actualValue: strValue, allowedValues } }
-        );
-      }
+    const allowedValues: unknown[] | undefined =
+      Array.isArray(decl["values"]) ? (decl["values"] as unknown[])
+      : Array.isArray(decl["enum"]) ? (decl["enum"] as unknown[])
+      : undefined;
+    if (allowedValues === undefined) continue;
+
+    const matched = allowedValues.some((allowed) => allowed === value);
+    if (!matched) {
+      throw new ValidationError(
+        `Output "${key}" value ${JSON.stringify(value)} is not in declared values: [${allowedValues.map((v) => JSON.stringify(v)).join(", ")}]`,
+        { details: { outputKey: key, actualValue: value, allowedValues } }
+      );
     }
   }
 

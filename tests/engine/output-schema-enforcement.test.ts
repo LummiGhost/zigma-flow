@@ -24,8 +24,11 @@ import { randomUUID } from "node:crypto";
 import { createRun } from "../../src/engine/index.js";
 import { runAll } from "../../src/engine/runAll.js";
 import type { RunAllSummary } from "../../src/engine/runAll.js";
-import type { Clock, RunState } from "../../src/run/index.js";
+import { acceptAgentReport } from "../../src/engine/accept.js";
+import type { Clock, JobState, RunState } from "../../src/run/index.js";
 import { LocalStateStore } from "../../src/run/index.js";
+import { artifactStepDir } from "../../src/artifact/artifactPaths.js";
+import { ValidationError } from "../../src/utils/index.js";
 import type {
   AgentBackend,
   AgentBackendConfig,
@@ -149,6 +152,146 @@ jobs:
         type: agent
         allow_generic_prompt: true
         uses: zigma/analyze-skill
+`;
+
+const SCHEMA_ONLY_YAML = `\
+name: schema-only
+version: "0.1.0"
+jobs:
+  intake:
+    retry:
+      max_attempts: 1
+      on_exceeded:
+        status: failed
+    steps:
+      - id: review
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/review-skill
+        outputs_schema:
+          verdict:
+            type: string
+`;
+
+const OUTPUTS_ONLY_TYPE_YAML = `\
+name: outputs-only-type
+version: "0.1.0"
+jobs:
+  intake:
+    retry:
+      max_attempts: 1
+      on_exceeded:
+        status: failed
+    steps:
+      - id: review
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/review-skill
+        outputs:
+          score:
+            type: number
+`;
+
+const NUMERIC_ENUM_YAML = `\
+name: numeric-enum
+version: "0.1.0"
+jobs:
+  intake:
+    retry:
+      max_attempts: 1
+      on_exceeded:
+        status: failed
+    steps:
+      - id: review
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/review-skill
+        outputs:
+          code:
+            values:
+              - 1
+              - 2
+`;
+
+const EMPTY_ENUM_YAML = `\
+name: empty-enum
+version: "0.1.0"
+jobs:
+  intake:
+    retry:
+      max_attempts: 1
+      on_exceeded:
+        status: failed
+    steps:
+      - id: review
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/review-skill
+        outputs:
+          verdict:
+            type: string
+            values: []
+`;
+
+const ACCEPT_SCHEMA_ONLY_YAML = `\
+name: accept-schema-only
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review
+        type: agent
+        uses: zigma/review-skill
+        outputs_schema:
+          verdict:
+            type: string
+            values:
+              - passed
+`;
+
+const ACCEPT_OUTPUTS_ONLY_TYPE_YAML = `\
+name: accept-outputs-only-type
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review
+        type: agent
+        uses: zigma/review-skill
+        outputs:
+          score:
+            type: number
+`;
+
+const ACCEPT_NUMERIC_ENUM_YAML = `\
+name: accept-numeric-enum
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review
+        type: agent
+        uses: zigma/review-skill
+        outputs:
+          code:
+            values:
+              - 1
+              - 2
+`;
+
+const ACCEPT_EMPTY_ENUM_SCHEMA_YAML = `\
+name: accept-empty-enum-schema
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review
+        type: agent
+        uses: zigma/review-skill
+        outputs_schema:
+          verdict:
+            type: string
+            values: []
 `;
 
 const REQUIRED_ARTIFACT_YAML = `\
@@ -458,5 +601,419 @@ describe("runAll — output-schema final-line enforcement (Issue #289)", () => {
     expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
     const failedStep = events.find((e) => e.type === "step_failed");
     expect(String(failedStep!.payload.reason)).toContain('Required artifact "summary.md" not found');
+  });
+
+  it("rejects a report missing an outputs_schema-only key and never advances state", async () => {
+    const backend = new ReportingBackend({
+      outputs: {},
+      artifacts: [],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      SCHEMA_ONLY_YAML,
+      "schema-only",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("failed");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain("missing declared output(s): verdict");
+  });
+
+  it("enforces outputs-only type declarations (number vs string) and never advances state", async () => {
+    const backend = new ReportingBackend({
+      outputs: { score: "high" },
+      artifacts: [],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      OUTPUTS_ONLY_TYPE_YAML,
+      "outputs-only-type",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("failed");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain(
+      'Output "score" type mismatch: expected number, got string'
+    );
+  });
+
+  it("accepts a legal outputs-only typed value", async () => {
+    const backend = new ReportingBackend({
+      outputs: { score: 7 },
+      artifacts: [],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary } = await runWithBackend(
+      sandbox,
+      OUTPUTS_ONLY_TYPE_YAML,
+      "outputs-only-type",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("completed");
+  });
+
+  it("rejects enum values with strict equality (no String coercion) and never advances state", async () => {
+    const backend = new ReportingBackend({
+      outputs: { code: "1" },
+      artifacts: [],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      NUMERIC_ENUM_YAML,
+      "numeric-enum",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("failed");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain(
+      'Output "code" value "1" is not in declared values'
+    );
+  });
+
+  it("accepts a strictly-equal numeric enum value", async () => {
+    const backend = new ReportingBackend({
+      outputs: { code: 1 },
+      artifacts: [],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary } = await runWithBackend(
+      sandbox,
+      NUMERIC_ENUM_YAML,
+      "numeric-enum",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("completed");
+  });
+
+  it("treats an empty enum (values: []) as rejecting every value", async () => {
+    const backend = new ReportingBackend({
+      outputs: { verdict: "approved" },
+      artifacts: [],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      EMPTY_ENUM_YAML,
+      "empty-enum",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("failed");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain(
+      'Output "verdict" value "approved" is not in declared values'
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Manual accept path — acceptAgentReport (Issue #289 P1)
+// ---------------------------------------------------------------------------
+//
+// The shared validator must enforce the same merged outputs + outputs_schema
+// contract on the manual `next`/accept path. On any violation, state must not
+// advance: the job stays running on the same step, outputs are not persisted,
+// and no agent_report_accepted event is emitted.
+
+async function bootstrapAcceptRun(
+  sandbox: Sandbox,
+  yamlBody: string,
+  workflowName: string,
+): Promise<{ runId: string; runDir: string }> {
+  const workflowPath = join(sandbox.projectRoot, `${workflowName}.yml`);
+  await writeFile(workflowPath, yamlBody, "utf-8");
+
+  const { runId } = await createRun({
+    workflowPath,
+    task: `exercise ${workflowName}`,
+    runsDir: sandbox.runsDir,
+    skillLockPath: sandbox.skillLockPath,
+    clock: new FakeClock(),
+  });
+  return { runId, runDir: join(sandbox.runsDir, runId) };
+}
+
+async function setJobState(
+  runDir: string,
+  jobId: string,
+  patch: { status?: JobState["status"]; attempt?: number; current_step?: string },
+): Promise<void> {
+  const store = new LocalStateStore();
+  const snap = await store.readSnapshot(runDir);
+  if (snap === null) {
+    throw new Error(`state.json missing at ${runDir}`);
+  }
+  const existing = snap.jobs[jobId];
+  if (existing === undefined) {
+    throw new Error(`job ${jobId} not found in state.json at ${runDir}`);
+  }
+
+  const merged: JobState = { ...existing };
+  if (patch.status !== undefined) merged.status = patch.status;
+  if (patch.attempt !== undefined) merged.attempt = patch.attempt;
+  if (patch.current_step !== undefined) merged.current_step = patch.current_step;
+
+  snap.jobs[jobId] = merged;
+  await store.writeSnapshot(runDir, snap);
+}
+
+async function writeReport(
+  runDir: string,
+  jobId: string,
+  attempt: number,
+  stepId: string,
+  body: unknown,
+): Promise<void> {
+  const dir = artifactStepDir(runDir, jobId, attempt, stepId);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "report.json"), JSON.stringify(body, null, 2), "utf-8");
+}
+
+function readJobOutputs(snap: RunState, jobId: string): Record<string, unknown> | undefined {
+  const js = snap.jobs[jobId] as unknown as { outputs?: Record<string, unknown> };
+  return js?.outputs;
+}
+
+describe("acceptAgentReport — merged output-contract enforcement (Issue #289 P1)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it("rejects a report missing an outputs_schema-only key without advancing state", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_SCHEMA_ONLY_YAML,
+      "accept-schema-only",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: {},
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    });
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain("missing declared output(s): verdict");
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")?.verdict).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+  });
+
+  it("rejects an outputs-only type violation without advancing state", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_OUTPUTS_ONLY_TYPE_YAML,
+      "accept-outputs-only-type",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: { score: "high" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    });
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain(
+      'Output "score" type mismatch: expected number, got string'
+    );
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")?.score).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+  });
+
+  it("rejects enum values with strict equality (no String coercion) without advancing state", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_NUMERIC_ENUM_YAML,
+      "accept-numeric-enum",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    // "1" (string) must NOT match values [1, 2] (numbers) under strict equality.
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: { code: "1" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    });
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain(
+      'Output "code" value "1" is not in declared values'
+    );
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")?.code).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+  });
+
+  it("accepts a strictly-equal numeric enum value and advances state", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_NUMERIC_ENUM_YAML,
+      "accept-numeric-enum",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: { code: 1 },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    });
+
+    await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("completed");
+    expect(readJobOutputs(snap, "review")?.code).toBe(1);
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(true);
+  });
+
+  it("treats an empty outputs_schema enum (values: []) as rejecting every value without advancing state", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_EMPTY_ENUM_SCHEMA_YAML,
+      "accept-empty-enum-schema",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: { verdict: "passed" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    });
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain(
+      'Output "verdict" value "passed" is not in declared values'
+    );
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")?.verdict).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
   });
 });

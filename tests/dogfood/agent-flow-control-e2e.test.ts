@@ -89,6 +89,8 @@ function buildPlanLoopYaml(): string {
     "        type: agent",
     "        uses: zigma/planner",
     "        max_visits: 3",
+    "        outputs:",
+    "          status: {}",
     "      - id: implement",
     "        type: agent",
     "        uses: zigma/implementer",

@@ -215,9 +215,6 @@ async function writeAgentReport(
       outputs[key] = `${key}_value`;
     }
   }
-  if (Object.keys(outputs).length === 0) {
-    outputs.summary = `${jobId} completed`;
-  }
 
   const report = {
     outputs,

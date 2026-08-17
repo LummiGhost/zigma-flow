@@ -79,6 +79,28 @@ class NoSchemaBackend implements AgentBackend {
   }
 }
 
+/**
+ * Writes a per-step report. The step id is derived from the report path
+ * (`.../steps/<stepId>/report.json`); steps without an entry get a valid
+ * empty-outputs report.
+ */
+class StepAwareBackend implements AgentBackend {
+  readonly name = "step-aware-fake";
+  readonly supportsOutputSchema = true;
+
+  constructor(private readonly reports: Record<string, Record<string, unknown>>) {}
+
+  async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
+    const parts = opts.reportPath.split(/[\\/]/);
+    const stepId = parts[parts.length - 2] ?? "";
+    const report =
+      this.reports[stepId] ?? { outputs: {}, artifacts: [], signals: [], summary: "ok" };
+    await mkdir(dirname(opts.reportPath), { recursive: true });
+    await writeFile(opts.reportPath, JSON.stringify(report, null, 2), "utf-8");
+    return { success: true, reportPath: opts.reportPath };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Workflow YAML fixtures
 // ---------------------------------------------------------------------------
@@ -310,6 +332,108 @@ jobs:
         uses: zigma/analyze-skill
         required_artifacts:
           - summary.md
+`;
+
+const NO_DECLARED_OUTPUTS_YAML = `\
+name: no-declared-outputs
+version: "0.1.0"
+jobs:
+  intake:
+    retry:
+      max_attempts: 1
+      on_exceeded:
+        status: failed
+    steps:
+      - id: review
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/review-skill
+`;
+
+const ON_OUTPUT_EXTRA_YAML = `\
+name: on-output-extra
+version: "0.1.0"
+jobs:
+  review:
+    retry:
+      max_attempts: 1
+      on_exceeded:
+        status: failed
+    steps:
+      - id: review
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/review-skill
+        outputs:
+          verdict: {}
+        on_output:
+          verdict:
+            rejected:
+              retry_job: implement
+  implement:
+    retry:
+      max_attempts: 2
+    steps:
+      - id: code
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/code-skill
+`;
+
+const ACCEPT_DECLARED_OUTPUT_YAML = `\
+name: accept-declared-output
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review
+        type: agent
+        uses: zigma/review-skill
+        outputs:
+          verdict: {}
+`;
+
+const ACCEPT_ON_OUTPUT_EXTRA_YAML = `\
+name: accept-on-output-extra
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review
+        type: agent
+        uses: zigma/review-skill
+        outputs:
+          verdict: {}
+        on_output:
+          verdict:
+            rejected:
+              retry_job: implement
+  implement:
+    retry:
+      max_attempts: 2
+    steps:
+      - id: code
+        type: agent
+        uses: zigma/code-skill
+`;
+
+const ACCEPT_RETURNS_STATUS_YAML = `\
+name: accept-returns-status
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review
+        type: agent
+        uses: zigma/review-skill
+        returns:
+          status:
+            values:
+              - fixed
+              - unfixable
+        on_return:
+          fixed: continue
+          unfixable: fail
 `;
 
 // ---------------------------------------------------------------------------
@@ -748,6 +872,90 @@ describe("runAll — output-schema final-line enforcement (Issue #289)", () => {
       'Output "verdict" value "approved" is not in declared values'
     );
   });
+
+  it("rejects undeclared output keys (additionalProperties: false) and never advances state", async () => {
+    const backend = new ReportingBackend({
+      outputs: { verdict: "approved", confidence: 0.9 },
+      artifacts: [],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      ENUM_OUTPUTS_YAML,
+      "enum-outputs",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("failed");
+    expect(state.jobs["intake"]!.status).toBe("failed");
+    // The rejected outputs must never be persisted.
+    const jobOutputs = state.jobs["intake"] as unknown as { outputs?: Record<string, unknown> };
+    expect(jobOutputs.outputs).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(failedStep).toBeDefined();
+    expect(String(failedStep!.payload.reason)).toContain("undeclared output(s): confidence");
+  });
+
+  it("rejects any output key when the step declares no outputs", async () => {
+    const backend = new ReportingBackend({
+      outputs: { note: "hi" },
+      artifacts: [],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      NO_DECLARED_OUTPUTS_YAML,
+      "no-declared-outputs",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(failedStep).toBeDefined();
+    expect(String(failedStep!.payload.reason)).toContain("undeclared output(s): note");
+  });
+
+  it("does not route on_output when the report carries an undeclared key", async () => {
+    const backend = new StepAwareBackend({
+      review: {
+        outputs: { verdict: "rejected", extra: "x" },
+        artifacts: [],
+        signals: [],
+        summary: "ok",
+      },
+    });
+
+    const { runDir } = await runWithBackend(
+      sandbox,
+      ON_OUTPUT_EXTRA_YAML,
+      "on-output-extra",
+      backend,
+    );
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.jobs["review"]!.status).toBe("failed");
+    // on_output routing must NOT have retried the target job.
+    expect(state.jobs["implement"]!.attempt ?? 1).toBe(1);
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "job_retrying")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(String(failedStep!.payload.reason)).toContain("undeclared output(s): extra");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1015,5 +1223,115 @@ describe("acceptAgentReport — merged output-contract enforcement (Issue #289 P
 
     const events = await readEvents(runDir);
     expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+  });
+
+  it("rejects undeclared output keys without advancing state", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_DECLARED_OUTPUT_YAML,
+      "accept-declared-output",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: { verdict: "passed", confidence: 0.9 },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    });
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain("undeclared output(s): confidence");
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")?.verdict).toBeUndefined();
+    expect(readJobOutputs(snap, "review")?.confidence).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+  });
+
+  it("rejects an undeclared key before on_output routing can dispatch", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_ON_OUTPUT_EXTRA_YAML,
+      "accept-on-output-extra",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    // verdict: "rejected" alone would route retry_job → implement; the
+    // undeclared "extra" key must block the whole report first.
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: { verdict: "rejected", extra: "x" },
+      artifacts: [],
+      signals: [],
+      summary: "review found issues",
+    });
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain("undeclared output(s): extra");
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")?.verdict).toBeUndefined();
+    // The routing target must be untouched.
+    expect(snap.jobs["implement"]!.status).toBe("ready");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "job_retrying")).toBe(false);
+  });
+
+  it("accepts outputs.status when the step declares returns.status (Issue #256 carve-out)", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_RETURNS_STATUS_YAML,
+      "accept-returns-status",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: { status: "fixed" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    });
+
+    await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "step_returned")).toBe(true);
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("completed");
   });
 });

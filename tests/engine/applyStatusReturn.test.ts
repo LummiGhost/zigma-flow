@@ -663,7 +663,7 @@ describe("applyStatusReturn — no returns declared (FR-STATUS-RETURN-004)", () 
         reportPath,
         JSON.stringify(
           {
-            outputs: { summary: "done" },
+            outputs: {},
             artifacts: [],
             signals: [],
             status: "anything",

@@ -170,7 +170,7 @@ class DogfoodFakeBackend implements AgentBackend {
     await writeFile(
       opts.reportPath,
       JSON.stringify(
-        { outputs: { completed: true }, artifacts: [], signals: [], summary: `${jobId} step done` },
+        { outputs: {}, artifacts: [], signals: [], summary: `${jobId} step done` },
         null,
         2
       ),
@@ -251,7 +251,7 @@ class TrackingFakeBackend implements AgentBackend {
     await writeFile(
       opts.reportPath,
       JSON.stringify(
-        { outputs: { completed: true }, artifacts: [], signals: [], summary: `${jobId} done` },
+        { outputs: {}, artifacts: [], signals: [], summary: `${jobId} done` },
         null,
         2
       ),

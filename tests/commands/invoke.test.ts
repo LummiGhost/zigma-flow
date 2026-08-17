@@ -61,7 +61,7 @@ class TestInvokeBackend implements AgentBackend {
       opts.reportPath,
       JSON.stringify(
         {
-          outputs: { completed: true },
+          outputs: {},
           artifacts: [],
           signals: [],
           summary: "fake backend completed the agent step",
@@ -238,7 +238,7 @@ describe("invokeAction", () => {
         await mkdir(dirname(opts.reportPath), { recursive: true });
         await writeFile(
           opts.reportPath,
-          JSON.stringify({ outputs: { completed: true }, artifacts: [], signals: [], summary: "custom backend" }, null, 2),
+          JSON.stringify({ outputs: {}, artifacts: [], signals: [], summary: "custom backend" }, null, 2),
           "utf-8",
         );
         return { success: true, reportPath: opts.reportPath };

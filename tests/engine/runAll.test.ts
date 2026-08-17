@@ -131,7 +131,7 @@ class FakeBackend implements AgentBackend {
       opts.reportPath,
       JSON.stringify(
         {
-          outputs: { completed: true },
+          outputs: {},
           artifacts: [],
           signals: [],
           summary: "fake backend executed successfully",
@@ -161,7 +161,7 @@ class StaleFakeBackend implements AgentBackend {
     await mkdir(dirname(opts.reportPath), { recursive: true });
     await writeFile(
       opts.reportPath,
-      JSON.stringify({ outputs: { done: true }, artifacts: [], signals: [], summary: "ok" }, null, 2),
+      JSON.stringify({ outputs: {}, artifacts: [], signals: [], summary: "ok" }, null, 2),
       "utf-8",
     );
     return { success: true, reportPath: opts.reportPath };

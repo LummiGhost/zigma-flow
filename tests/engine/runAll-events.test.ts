@@ -249,7 +249,7 @@ class FakeBackend implements AgentBackend {
         await writeFile(
           reportPath,
           JSON.stringify({
-            outputs: { completed: true },
+            outputs: {},
             artifacts: [],
             signals: [],
             summary: "fake agent completed successfully",

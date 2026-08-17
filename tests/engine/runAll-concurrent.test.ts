@@ -192,7 +192,7 @@ class ConcurrentFakeBackend implements AgentBackend {
       opts.reportPath,
       JSON.stringify(
         {
-          outputs: { completed: true },
+          outputs: {},
           artifacts: [],
           signals: [],
           summary: "fake concurrent backend executed successfully",
@@ -240,7 +240,7 @@ class SignalAwareFakeBackend implements AgentBackend {
       opts.reportPath,
       JSON.stringify(
         {
-          outputs: { completed: true },
+          outputs: {},
           artifacts: [],
           signals: [],
           summary: "signal-aware backend executed",

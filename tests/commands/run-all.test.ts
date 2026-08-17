@@ -36,7 +36,7 @@ class TestRunAllBackend implements AgentBackend {
       opts.reportPath,
       JSON.stringify(
         {
-          outputs: { completed: true },
+          outputs: {},
           artifacts: [],
           signals: [],
           summary: "fake backend completed the agent step",
@@ -132,7 +132,7 @@ describe("runAllAction", () => {
 
     expect(state.status).toBe("completed");
     expect(state.jobs["intake"]?.status).toBe("completed");
-    expect(state.jobs["intake"]?.outputs).toEqual({ completed: true });
+    expect(state.jobs["intake"]?.outputs).toEqual({});
   });
 
   it("advances past agent step when report omits outputs.completed (#147)", async () => {
@@ -145,7 +145,7 @@ describe("runAllAction", () => {
         await mkdir(dirname(opts.reportPath), { recursive: true });
         await writeFile(
           opts.reportPath,
-          JSON.stringify({ outputs: { task_summary: "done" }, artifacts: [], signals: [], summary: "ok" }, null, 2),
+          JSON.stringify({ outputs: {}, artifacts: [], signals: [], summary: "ok" }, null, 2),
           "utf-8",
         );
         return { success: true, reportPath: opts.reportPath };

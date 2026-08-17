@@ -189,11 +189,16 @@ export function validateReportShape(parsed: unknown): AgentReport {
  *   1. required_artifacts — each declared artifact path must be present in
  *      report.artifacts (string refs, matched as path segment).
  *   2. Every key in the outputs ∪ outputs_schema union must be present.
- *   3. Array-typed outputs (merged type "array") are normalized (JSON.parse,
+ *   3. Closed outputs object (additionalProperties: false) — any reported
+ *      key outside the merged contract is rejected before it can be
+ *      persisted or influence routing. The one implicit key is "status"
+ *      when the step declares returns.status: the prompt contract
+ *      (Issue #256) directs agents to write outputs.status.
+ *   4. Array-typed outputs (merged type "array") are normalized (JSON.parse,
  *      then newline-split fallback).
- *   4. Type checks against the merged declaration — outputs-only types are
+ *   5. Type checks against the merged declaration — outputs-only types are
  *      enforced too, and run after normalization.
- *   5. enum/values checks with strict equality (JSON Schema semantics: no
+ *   6. enum/values checks with strict equality (JSON Schema semantics: no
  *      String coercion). An empty enum (values: []) rejects every value.
  *
  * Throws ValidationError on any violation — no state transition happens.
@@ -240,7 +245,22 @@ export function validateReportAgainstStep(
     );
   }
 
-  // ── 3. Normalize array-typed outputs (merged declaration) ─────────────
+  // ── 3. Closed outputs object — no undeclared keys ─────────────────────
+  // Mirrors the compiled schema's additionalProperties: false. Skipped when
+  // the step definition is unknown (the contract cannot be derived).
+  if (stepDef) {
+    const allowedKeys = new Set(declaredKeys);
+    if (stepDef.returns?.status) allowedKeys.add("status");
+    const extraKeys = Object.keys(report.outputs).filter((k) => !allowedKeys.has(k));
+    if (extraKeys.length > 0) {
+      throw new ValidationError(
+        `Report contains undeclared output(s): ${extraKeys.join(", ")}`,
+        { details: { undeclared: extraKeys, declared: declaredKeys } }
+      );
+    }
+  }
+
+  // ── 4. Normalize array-typed outputs (merged declaration) ─────────────
   const normalizedOutputs: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(report.outputs)) {
     const mergedType = declarations[key]?.["type"];
@@ -259,7 +279,7 @@ export function validateReportAgainstStep(
     }
   }
 
-  // ── 4. Type checks against the merged declaration ─────────────────────
+  // ── 5. Type checks against the merged declaration ─────────────────────
   // Runs AFTER normalization so a string report for an array-typed output
   // validates as an array. outputs-only types are enforced as well.
   for (const key of declaredKeys) {
@@ -278,7 +298,7 @@ export function validateReportAgainstStep(
     }
   }
 
-  // ── 5. enum/values final-line check ───────────────────────────────────
+  // ── 6. enum/values final-line check ───────────────────────────────────
   // Strict equality (JSON Schema semantics) — no String coercion, so 1 does
   // not match "1". An empty enum (values: []) matches nothing and therefore
   // rejects every reported value.

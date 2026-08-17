@@ -119,7 +119,7 @@ class FakeBackend implements AgentBackend {
       opts.reportPath,
       JSON.stringify(
         {
-          outputs: { completed: true },
+          outputs: {},
           artifacts: [],
           signals: [],
           summary: "fake backend executed (resume test)",

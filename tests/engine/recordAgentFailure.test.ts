@@ -184,7 +184,7 @@ class RetryFakeBackend implements AgentBackend {
         await writeFile(
           opts.reportPath,
           JSON.stringify({
-            outputs: { completed: true },
+            outputs: {},
             artifacts: [],
             signals: [],
             summary: "fake backend succeeded",

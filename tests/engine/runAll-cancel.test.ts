@@ -177,7 +177,7 @@ class DelayedFakeBackend implements AgentBackend {
       reportPath,
       JSON.stringify(
         {
-          outputs: { completed: true },
+          outputs: {},
           artifacts: [],
           signals: [],
           summary: "fake backend completed (cancel test)",

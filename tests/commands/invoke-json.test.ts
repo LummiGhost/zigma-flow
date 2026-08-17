@@ -51,7 +51,7 @@ class TestBackend implements AgentBackend {
     await writeFile(
       opts.reportPath,
       JSON.stringify({
-        outputs: { completed: true },
+        outputs: {},
         artifacts: [],
         signals: [],
         summary: "ok",

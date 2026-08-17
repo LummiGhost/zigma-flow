@@ -669,6 +669,67 @@ describe("runAll — output-schema final-line enforcement (Issue #289)", () => {
     expect(events.some((e) => e.type === "step_returned")).toBe(true);
   });
 
+  it("rejects conflicting top-level and outputs.status values without advancing, persisting, or routing (fail-closed)", async () => {
+    // Both values are individually legal; only the dual-source conflict
+    // makes this report invalid. Without the fail-closed check the runtime
+    // would route by the top-level "fixed" (on_return: continue) while
+    // persisting outputs.status "unfixable".
+    const backend = new ReportingBackend({
+      outputs: { status: "unfixable" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: "fixed",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      RUNALL_RETURNS_STATUS_YAML,
+      "runall-returns-status",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("failed");
+    expect(state.jobs["intake"]!.status).toBe("failed");
+    // The rejected outputs must never be persisted.
+    const jobOutputs = state.jobs["intake"] as unknown as { outputs?: Record<string, unknown> };
+    expect(jobOutputs.outputs).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    // Status-return routing must not have dispatched either value.
+    expect(events.some((e) => e.type === "step_returned")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(failedStep).toBeDefined();
+    expect(String(failedStep!.payload.reason)).toContain("conflicting status values");
+  });
+
+  it("accepts strictly equal top-level and outputs.status values and routes normally", async () => {
+    const backend = new ReportingBackend({
+      outputs: { status: "fixed" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: "fixed",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      RUNALL_RETURNS_STATUS_YAML,
+      "runall-returns-status",
+      backend,
+    );
+
+    expect(summary.status).toBe("completed");
+    expect(summary.jobs[0]!.status).toBe("completed");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "step_returned")).toBe(true);
+  });
+
   it("rejects an illegal outputs value and never advances state", async () => {
     const backend = new ReportingBackend({
       outputs: { verdict: "bogus" },
@@ -1424,6 +1485,78 @@ describe("acceptAgentReport — merged output-contract enforcement (Issue #289 P
 
     const snap = await readStateSnapshot(runDir);
     expect(snap.jobs["review"]!.status).toBe("completed");
+  });
+
+  it("rejects conflicting top-level and outputs.status values without advancing state", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_RETURNS_STATUS_YAML,
+      "accept-returns-status",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    // Top-level "fixed" alone would route continue; the conflicting nested
+    // "unfixable" must block the whole report before any dispatch.
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: { status: "unfixable" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: "fixed",
+    });
+
+    let thrown: unknown;
+    try {
+      await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+    } catch (err: unknown) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as Error).message).toContain("conflicting status values");
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("running");
+    expect(snap.jobs["review"]!.current_step).toBe("review");
+    expect(readJobOutputs(snap, "review")).toBeUndefined();
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    expect(events.some((e) => e.type === "step_returned")).toBe(false);
+  });
+
+  it("accepts strictly equal top-level and outputs.status values and dispatches normally", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_RETURNS_STATUS_YAML,
+      "accept-returns-status",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    await writeReport(runDir, "review", 1, "review", {
+      outputs: { status: "fixed" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+      status: "fixed",
+    });
+
+    await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "step_returned")).toBe(true);
+
+    const snap = await readStateSnapshot(runDir);
+    expect(snap.jobs["review"]!.status).toBe("completed");
+    expect(readJobOutputs(snap, "review")?.status).toBe("fixed");
   });
 
   it("compiled schema accepts the same outputs.status report the manual path accepts (schema/runtime consistency)", async () => {

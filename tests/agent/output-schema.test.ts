@@ -4,7 +4,7 @@ import { compileAgentOutputSchema } from "../../src/agent/index.js";
 import { ValidationError } from "../../src/utils/index.js";
 import type { StepDefinition } from "../../src/workflow/index.js";
 
-type Envelope = { properties: Record<string, any>; required: string[] };
+type Envelope = { properties: Record<string, any>; required: string[]; allOf?: any[] };
 
 function schemaFor(step: Partial<StepDefinition>): Envelope {
   return compileAgentOutputSchema(step as StepDefinition) as unknown as Envelope;
@@ -112,6 +112,123 @@ describe("compileAgentOutputSchema", () => {
         signals: [],
         summary: "done",
         status: "fixed",
+      })
+    ).toBe(true);
+  });
+
+  it("compiles a Draft 2020 equality guard between top-level status and outputs.status", () => {
+    const schema = schemaFor({
+      id: "review",
+      type: "agent",
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    });
+
+    // JSON Schema has no cross-field equality operator; the compiler
+    // approximates it with one if/then guard per declared status value.
+    // Each guard fires only when BOTH the top-level `status` and
+    // `outputs.status` are present and the top-level value matches its
+    // const — it then pins outputs.status to the same value.
+    expect(schema.allOf).toEqual([
+      {
+        if: {
+          required: ["status"],
+          properties: {
+            status: { const: "fixed" },
+            outputs: { required: ["status"] },
+          },
+        },
+        then: {
+          properties: {
+            outputs: { properties: { status: { const: "fixed" } } },
+          },
+        },
+      },
+      {
+        if: {
+          required: ["status"],
+          properties: {
+            status: { const: "unfixable" },
+            outputs: { required: ["status"] },
+          },
+        },
+        then: {
+          properties: {
+            outputs: { properties: { status: { const: "unfixable" } } },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("rejects conflicting top-level and outputs.status values (built-in boundary)", () => {
+    const step: Partial<StepDefinition> = {
+      id: "review",
+      type: "agent",
+      returns: { status: { values: ["fixed", "unfixable"], required: true } },
+    };
+
+    // Both values are individually in-enum, so per-property validation
+    // alone would accept this; the equality guard must reject it.
+    expect(
+      schemaAccepts(step, {
+        outputs: { status: "unfixable" },
+        artifacts: [],
+        signals: [],
+        summary: "done",
+        status: "fixed",
+      })
+    ).toBe(false);
+  });
+
+  it("rejects conflicting status values even when returns.status is optional (built-in boundary)", () => {
+    const step: Partial<StepDefinition> = {
+      id: "review",
+      type: "agent",
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    };
+
+    expect(
+      schemaAccepts(step, {
+        outputs: { status: "fixed" },
+        artifacts: [],
+        signals: [],
+        summary: "done",
+        status: "unfixable",
+      })
+    ).toBe(false);
+  });
+
+  it("accepts strictly equal top-level and outputs.status values (built-in boundary)", () => {
+    const step: Partial<StepDefinition> = {
+      id: "review",
+      type: "agent",
+      returns: { status: { values: ["fixed", "unfixable"], required: true } },
+    };
+
+    expect(
+      schemaAccepts(step, {
+        outputs: { status: "fixed" },
+        artifacts: [],
+        signals: [],
+        summary: "done",
+        status: "fixed",
+      })
+    ).toBe(true);
+  });
+
+  it("accepts a nested-only outputs.status when returns.status is optional (built-in boundary)", () => {
+    const step: Partial<StepDefinition> = {
+      id: "review",
+      type: "agent",
+      returns: { status: { values: ["fixed", "unfixable"] } },
+    };
+
+    expect(
+      schemaAccepts(step, {
+        outputs: { status: "fixed" },
+        artifacts: [],
+        signals: [],
+        summary: "done",
       })
     ).toBe(true);
   });

@@ -105,7 +105,10 @@ export function compileAgentOutputSchema(step: StepDefinition): JsonSchema {
   // backends (Codex/Claude native schema enforcement) accept the exact shape
   // the prompt demands; a required returns.status makes outputs.status
   // required. The legacy top-level `status` remains an OPTIONAL property
-  // (mvp-contracts §2.6) so older report shapes still pass native validation.
+  // (mvp-contracts §2.6) so older report shapes still pass native validation
+  // when returns.status is not required (a required returns.status makes
+  // outputs.status required, so a top-level-only report fails native
+  // enforcement).
   const outputsRequired = [...names];
   if (step.returns?.status) {
     const statusSchema: JsonSchema = { type: "string", enum: step.returns.status.values };
@@ -128,7 +131,42 @@ export function compileAgentOutputSchema(step: StepDefinition): JsonSchema {
   if (step.returns?.status) {
     properties["status"] = { type: "string", enum: step.returns.status.values };
   }
-  return { $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", properties, required, additionalProperties: false };
+
+  // Dual-source equality guard: a report may legitimately carry a legacy
+  // top-level `status` OR the canonical `outputs.status`, but when BOTH are
+  // present their values must be strictly equal — otherwise routing follows
+  // the top-level value while the nested value is the one persisted. JSON
+  // Schema has no cross-field equality operator, so the compiler approximates
+  // it with one if/then guard per declared status value: the constraint
+  // fires only when both locations are present and the top-level value
+  // matches the guard's const. The Engine's final-line check remains the
+  // authoritative enforcement (manual/custom accept paths bypass the native
+  // schema boundary entirely).
+  const statusGuards: JsonSchema[] = (step.returns?.status?.values ?? []).map((v) => ({
+    if: {
+      required: ["status"],
+      properties: {
+        status: { const: v },
+        outputs: { required: ["status"] },
+      },
+    },
+    then: {
+      properties: {
+        outputs: {
+          properties: { status: { const: v } },
+        },
+      },
+    },
+  }));
+
+  return {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    type: "object",
+    properties,
+    required,
+    additionalProperties: false,
+    ...(statusGuards.length > 0 ? { allOf: statusGuards } : {}),
+  };
 }
 
 export function outputSchemaHash(schema: JsonSchema): string {

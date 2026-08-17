@@ -1036,6 +1036,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     outputs = validateReportAgainstStep(stepDef, {
       outputs: report.outputs,
       artifacts: report.artifacts,
+      topLevelStatus: report.topLevelStatus,
     });
   } catch (err) {
     if (err instanceof ValidationError) {

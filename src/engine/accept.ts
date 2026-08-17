@@ -97,6 +97,10 @@ interface AgentReport {
   signals: Array<{ type: string; reason?: string }>;
   summary: string;
   status?: string | undefined;
+  /** Raw top-level `status` value (uncoerced) — lets the final-line contract
+   * check detect a dual-source conflict against `outputs.status` with strict
+   * equality instead of comparing String-coerced values. */
+  topLevelStatus?: unknown;
   context_patches?: unknown[];
 }
 
@@ -158,17 +162,24 @@ export function validateReportShape(parsed: unknown): AgentReport {
     return entry;
   });
 
+  const topLevelStatus = obj["status"];
+  const outputsStatus =
+    typeof obj["outputs"] === "object" && obj["outputs"] !== null && !Array.isArray(obj["outputs"])
+      ? (obj["outputs"] as Record<string, unknown>)["status"]
+      : undefined;
+
   return {
     outputs: (obj["outputs"] ?? {}) as Record<string, unknown>,
     artifacts: (obj["artifacts"] ?? []) as unknown[],
     signals,
     summary: obj["summary"] as string,
     // Issue #256: accept status from outputs["status"] when not at top level.
-    status: obj["status"] !== undefined
-      ? String(obj["status"])
-      : (typeof obj["outputs"] === "object" && obj["outputs"] !== null && !Array.isArray(obj["outputs"]) && (obj["outputs"] as Record<string, unknown>)["status"] !== undefined)
-        ? String((obj["outputs"] as Record<string, unknown>)["status"])
-        : undefined,
+    // The raw top-level value is preserved alongside the resolved one so the
+    // final-line contract check can compare the two sources strictly.
+    topLevelStatus,
+    status: topLevelStatus !== undefined
+      ? String(topLevelStatus)
+      : (outputsStatus !== undefined ? String(outputsStatus) : undefined),
     ...(obj["context_patches"] !== undefined ? { context_patches: obj["context_patches"] as unknown[] } : {}),
   };
 }
@@ -194,11 +205,19 @@ export function validateReportShape(parsed: unknown): AgentReport {
  *      persisted or influence routing. The one implicit key is "status"
  *      when the step declares returns.status: the prompt contract
  *      (Issue #256) directs agents to write outputs.status.
- *   4. Array-typed outputs (merged type "array") are normalized (JSON.parse,
+ *   4. Dual-source status conflict — when the step declares returns.status
+ *      and the report carries BOTH a top-level `status` and an
+ *      `outputs.status`, the two values must be strictly equal, otherwise
+ *      the report is rejected (fail-closed). The compiled schema's
+ *      per-property enums cannot detect this (JSON Schema has no
+ *      cross-field equality); the schema approximates it with per-value
+ *      if/then guards at the native boundary, and this check is the
+ *      authoritative enforcement on every accept path.
+ *   5. Array-typed outputs (merged type "array") are normalized (JSON.parse,
  *      then newline-split fallback).
- *   5. Type checks against the merged declaration — outputs-only types are
+ *   6. Type checks against the merged declaration — outputs-only types are
  *      enforced too, and run after normalization.
- *   6. enum/values checks with strict equality (JSON Schema semantics: no
+ *   7. enum/values checks with strict equality (JSON Schema semantics: no
  *      String coercion). An empty enum (values: []) rejects every value.
  *
  * Throws ValidationError on any violation — no state transition happens.
@@ -206,7 +225,7 @@ export function validateReportShape(parsed: unknown): AgentReport {
  */
 export function validateReportAgainstStep(
   stepDef: StepDefinition | undefined,
-  report: { outputs: Record<string, unknown>; artifacts: unknown[] },
+  report: { outputs: Record<string, unknown>; artifacts: unknown[]; topLevelStatus?: unknown },
 ): Record<string, unknown> {
   // ── 1. required_artifacts ─────────────────────────────────────────────
   if (stepDef?.required_artifacts && stepDef.required_artifacts.length > 0) {
@@ -260,7 +279,29 @@ export function validateReportAgainstStep(
     }
   }
 
-  // ── 4. Normalize array-typed outputs (merged declaration) ─────────────
+  // ── 4. Dual-source status conflict — fail closed ────────────────────────
+  // When the step declares returns.status, both the legacy top-level
+  // `status` (mvp-contracts §2.6) and the canonical `outputs.status`
+  // (Issue #256) are accepted locations. A report carrying BOTH with values
+  // that are not strictly equal must be rejected: routing would follow the
+  // top-level value while the nested value is the one persisted — a
+  // dual-source contradiction. Native schema enforcement can only approximate
+  // this (per-value if/then guards), so this check is the authoritative
+  // final line for every accept path.
+  if (
+    stepDef?.returns?.status &&
+    report.topLevelStatus !== undefined &&
+    report.outputs.status !== undefined &&
+    report.topLevelStatus !== report.outputs.status
+  ) {
+    throw new ValidationError(
+      `Report declares conflicting status values: top-level "status" is ${JSON.stringify(report.topLevelStatus)} but "outputs.status" is ${JSON.stringify(report.outputs.status)}. ` +
+      `Write "outputs.status" only (the canonical location); when both are present they must be strictly equal.`,
+      { details: { topLevelStatus: report.topLevelStatus, outputsStatus: report.outputs.status } }
+    );
+  }
+
+  // ── 5. Normalize array-typed outputs (merged declaration) ─────────────
   const normalizedOutputs: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(report.outputs)) {
     const mergedType = declarations[key]?.["type"];
@@ -279,7 +320,7 @@ export function validateReportAgainstStep(
     }
   }
 
-  // ── 5. Type checks against the merged declaration ─────────────────────
+  // ── 6. Type checks against the merged declaration ─────────────────────
   // Runs AFTER normalization so a string report for an array-typed output
   // validates as an array. outputs-only types are enforced as well.
   for (const key of declaredKeys) {
@@ -298,7 +339,7 @@ export function validateReportAgainstStep(
     }
   }
 
-  // ── 6. enum/values final-line check ───────────────────────────────────
+  // ── 7. enum/values final-line check ───────────────────────────────────
   // Strict equality (JSON Schema semantics) — no String coercion, so 1 does
   // not match "1". An empty enum (values: []) matches nothing and therefore
   // rejects every reported value.
@@ -404,6 +445,7 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
   const normalizedOutputs = validateReportAgainstStep(stepDef, {
     outputs: report.outputs,
     artifacts: report.artifacts,
+    topLevelStatus: report.topLevelStatus,
   });
 
   const signalsArray = report.signals;

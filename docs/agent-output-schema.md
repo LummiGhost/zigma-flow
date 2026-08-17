@@ -6,10 +6,32 @@ report envelope. Declared output keys are required; `type`, `values`/`enum`, and
 `description` are preserved. A declared `returns.status` becomes an
 `outputs.status` string enum — the canonical location the prompt contract
 (Issue #256) directs agents to write — and a required `returns.status` makes
-`outputs.status` required. The legacy top-level `status` remains an optional
-property (mvp-contracts §2.6), so reports of either shape pass native schema
-enforcement while the prompt-canonical location is the one that is enforced as
-required.
+`outputs.status` required.
+
+The legacy top-level `status` remains an optional property (mvp-contracts
+§2.6), but its compatibility scope is narrower than "any shape passes":
+
+- **With a required `returns.status`**, built-in backends reject a report
+  that carries only the legacy top-level `status`: `outputs.status` is
+  required, so the canonical location is the only one accepted at the native
+  schema boundary.
+- **With an optional `returns.status`**, a top-level-only report still passes
+  native schema enforcement, as does an `outputs.status`-only report.
+- **Boundaries without native schema enforcement** (the manual
+  `acceptAgentReport`/`next` path, and custom backends that never see the
+  compiled schema) accept a legacy top-level-only report even when
+  `returns.status` is required — the Engine's final-line checks are the only
+  enforcement there. The compiled schema never claims otherwise.
+
+Because both locations are accepted, the compiler adds a Draft 2020-12
+equality guard: when a report carries **both** a top-level `status` and an
+`outputs.status`, the two values must be strictly equal. JSON Schema has no
+general cross-field equality operator, so the compiler approximates it with
+one `if`/`then` guard per declared status value (each guard fires only when
+both locations are present and pins `outputs.status` to the top-level value).
+The Engine's final-line validator enforces the same rule with strict equality
+on every accept path — it is the authoritative final defense, since manual and
+custom-runtime boundaries bypass native schema enforcement entirely.
 
 When the same output name is declared in both `outputs` and `outputs_schema`,
 the two declarations are merged per key: `outputs_schema` overlays its
@@ -101,12 +123,20 @@ The checks, in order:
    §2.6) is still accepted by the runtime (preferred, in fact, when present)
    and remains an optional property in the compiled schema; only the
    prompt-canonical `outputs.status` is enforced as required.
-4. Array-typed outputs (merged type `array`) reported as strings are
+4. Dual-source status conflict (fail-closed) — when the step declares
+   `returns.status` and the report carries **both** a top-level `status` and
+   an `outputs.status`, the two values must be strictly equal. Otherwise the
+   report is rejected before any state change: routing would follow the
+   top-level value while the nested value is the one persisted. This mirrors
+   the compiled schema's equality guard and is authoritative on every accept
+   path (the native boundary is bypassed by manual accept and custom
+   backends).
+5. Array-typed outputs (merged type `array`) reported as strings are
    normalized: JSON parse first, then newline-split fallback.
-5. `type` checks run against the merged declaration after normalization —
+6. `type` checks run against the merged declaration after normalization —
    `outputs`-only type declarations are enforced exactly like
    `outputs_schema` ones.
-6. `values`/`enum` checks for `outputs` and `outputs_schema` use strict
+7. `values`/`enum` checks for `outputs` and `outputs_schema` use strict
    equality (JSON Schema semantics, no String coercion — `1` does not match
    `"1"`). An empty enum (`values: []`) matches nothing and therefore rejects
    every reported value.

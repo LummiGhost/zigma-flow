@@ -20,6 +20,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 
 import { createRun } from "../../src/engine/index.js";
 import { runAll } from "../../src/engine/runAll.js";
@@ -29,6 +30,8 @@ import type { Clock, JobState, RunState } from "../../src/run/index.js";
 import { LocalStateStore } from "../../src/run/index.js";
 import { artifactStepDir } from "../../src/artifact/artifactPaths.js";
 import { ValidationError } from "../../src/utils/index.js";
+import { loadWorkflowFile } from "../../src/workflow/index.js";
+import { compileAgentOutputSchema } from "../../src/agent/index.js";
 import type {
   AgentBackend,
   AgentBackendConfig,
@@ -44,6 +47,15 @@ class FakeClock implements Clock {
     return this.iso;
   }
 }
+
+// Ajv is CJS-only (no exports field); load the draft 2020-12 variant via
+// createRequire, mirroring src/check/checks/json-schema.ts. This simulates
+// the native schema boundary built-in backends (Codex/Claude) enforce.
+const _require = createRequire(import.meta.url);
+const Ajv2020Ctor = _require("ajv/dist/2020") as {
+  new (): { compile(schema: unknown): (data: unknown) => boolean };
+};
+const ajv2020 = new Ajv2020Ctor();
 
 // ---------------------------------------------------------------------------
 // Fake backends
@@ -436,6 +448,31 @@ jobs:
           unfixable: fail
 `;
 
+const RUNALL_RETURNS_STATUS_YAML = `\
+name: runall-returns-status
+version: "0.1.0"
+jobs:
+  intake:
+    retry:
+      max_attempts: 1
+      on_exceeded:
+        status: failed
+    steps:
+      - id: review
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/review-skill
+        returns:
+          status:
+            values:
+              - fixed
+              - unfixable
+            required: true
+        on_return:
+          fixed: continue
+          unfixable: fail
+`;
+
 // ---------------------------------------------------------------------------
 // Sandbox helpers
 // ---------------------------------------------------------------------------
@@ -576,6 +613,60 @@ describe("runAll — output-schema final-line enforcement (Issue #289)", () => {
 
     const events = await readEvents(runDir);
     expect(events.some((e) => e.type === "agent_report_accepted")).toBe(true);
+  });
+
+  it("accepts the prompt-canonical outputs.status report under a required returns.status (built-in schema compatible)", async () => {
+    // Issue #256: the prompt directs agents to write outputs.status. The
+    // compiled schema must declare that location (required) so a built-in
+    // backend enforcing the schema natively accepts exactly this report.
+    const report = {
+      outputs: { status: "fixed" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    };
+    const backend = new ReportingBackend(report);
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      RUNALL_RETURNS_STATUS_YAML,
+      "runall-returns-status",
+      backend,
+    );
+
+    expect(summary.status).toBe("completed");
+    expect(summary.jobs[0]!.status).toBe("completed");
+
+    expect(ReportingBackend.calls).toHaveLength(1);
+    const passedSchema = ReportingBackend.calls[0]!.outputSchema as
+      | {
+          properties: {
+            outputs: { properties: Record<string, any>; required: string[] };
+            status: any;
+          };
+          required: string[];
+        }
+      | undefined;
+    expect(passedSchema?.properties.outputs.properties.status).toEqual({
+      type: "string",
+      enum: ["fixed", "unfixable"],
+    });
+    expect(passedSchema?.properties.outputs.required).toContain("status");
+    // The legacy top-level status stays optional — never in the top-level
+    // required list.
+    expect(passedSchema?.required).not.toContain("status");
+    expect(passedSchema?.properties.status).toEqual({
+      type: "string",
+      enum: ["fixed", "unfixable"],
+    });
+
+    // Simulate the native schema boundary: the exact report the backend
+    // wrote must validate against the compiled schema.
+    const validate = ajv2020.compile(passedSchema);
+    expect(validate(report)).toBe(true);
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "step_returned")).toBe(true);
   });
 
   it("rejects an illegal outputs value and never advances state", async () => {
@@ -1333,5 +1424,39 @@ describe("acceptAgentReport — merged output-contract enforcement (Issue #289 P
 
     const snap = await readStateSnapshot(runDir);
     expect(snap.jobs["review"]!.status).toBe("completed");
+  });
+
+  it("compiled schema accepts the same outputs.status report the manual path accepts (schema/runtime consistency)", async () => {
+    const { runId, runDir } = await bootstrapAcceptRun(
+      sandbox,
+      ACCEPT_RETURNS_STATUS_YAML,
+      "accept-returns-status",
+    );
+    await setJobState(runDir, "review", {
+      status: "running",
+      current_step: "review",
+      attempt: 1,
+    });
+
+    const report = {
+      outputs: { status: "fixed" },
+      artifacts: [],
+      signals: [],
+      summary: "review done",
+    };
+    await writeReport(runDir, "review", 1, "review", report);
+
+    // The schema compiled from the SAME workflow must accept the exact
+    // report the runtime accepts — no schema/runtime drift for the
+    // prompt-canonical outputs.status location.
+    const wf = await loadWorkflowFile(join(sandbox.projectRoot, "accept-returns-status.yml"));
+    const stepDef = wf.jobs["review"]!.steps.find((s) => s.id === "review")!;
+    const validate = ajv2020.compile(compileAgentOutputSchema(stepDef));
+    expect(validate(report)).toBe(true);
+
+    await acceptAgentReport({ runDir, runId, jobId: "review", clock: new FakeClock() });
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "step_returned")).toBe(true);
   });
 });

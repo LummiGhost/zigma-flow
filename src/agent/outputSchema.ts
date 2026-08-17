@@ -98,8 +98,25 @@ export function compileAgentOutputSchema(step: StepDefinition): JsonSchema {
     outputProperties[name] = outputProperty(name, declarations[name]!);
   }
 
+  // Issue #256 canonical location: the prompt contract directs agents to
+  // write `outputs.status`, and the Engine's final-line validator accepts
+  // that key (a legacy top-level `status` is still recognized too). The
+  // compiled schema therefore declares status INSIDE outputs so built-in
+  // backends (Codex/Claude native schema enforcement) accept the exact shape
+  // the prompt demands; a required returns.status makes outputs.status
+  // required. The legacy top-level `status` remains an OPTIONAL property
+  // (mvp-contracts §2.6) so older report shapes still pass native validation.
+  const outputsRequired = [...names];
+  if (step.returns?.status) {
+    const statusSchema: JsonSchema = { type: "string", enum: step.returns.status.values };
+    outputProperties["status"] = statusSchema;
+    if (step.returns.status.required && !outputsRequired.includes("status")) {
+      outputsRequired.push("status");
+    }
+  }
+
   const properties: Record<string, JsonSchema> = {
-    outputs: { type: "object", properties: outputProperties, required: names, additionalProperties: false },
+    outputs: { type: "object", properties: outputProperties, required: outputsRequired, additionalProperties: false },
     // Artifact references are strings (relative step-artifact paths or
     // artifact:// refs) — the same shape the Engine's required_artifacts
     // check and the canonical prompt contract consume.
@@ -110,7 +127,6 @@ export function compileAgentOutputSchema(step: StepDefinition): JsonSchema {
   const required = ["outputs", "artifacts", "signals", "summary"];
   if (step.returns?.status) {
     properties["status"] = { type: "string", enum: step.returns.status.values };
-    if (step.returns.status.required) required.push("status");
   }
   return { $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", properties, required, additionalProperties: false };
 }

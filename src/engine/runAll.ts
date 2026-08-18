@@ -747,7 +747,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
 
     const driftMsg =
       `Schema drift detected for step ${jobId}/${bundle.stepId} (attempt ${attempt}): ` +
-      `prior output_schema_sha256 ${priorSchemaHash} != newly compiled ${newSchemaHash}; ` +
+      `prior schema hash ${priorSchemaHash} != newly compiled schema hash ${newSchemaHash}; ` +
       `continuing under the current contract`;
     if (logWriter) {
       void logWriter.writeSystem(driftMsg, {

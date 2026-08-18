@@ -99,6 +99,11 @@ before the backend is invoked — the step fails as a configuration error:
   (e.g. `integer`) cannot be enforced by the final-line runtime checks and are
   rejected.
 - `values`/`enum` must be arrays of allowed values.
+- `outputs_schema` property declarations are validated by the zod layer at
+  workflow load: `description` must be a string and `enum` an array of
+  strings (like `values`). A non-string `description`, or an `enum` containing
+  non-string entries, is **explicitly rejected** at load time — never silently
+  dropped.
 - An explicit `status` declaration combined with `returns.status` must be
   compatible with the routing domain, otherwise the step fails closed before
   the backend is invoked:
@@ -225,6 +230,12 @@ Checkpoint and evidence:
 Degradation: if no prior invocation exists, or none carries
 `output_schema_sha256`, there is no evidence to compare and the check is
 skipped silently.
+
+The hash reflects the **compiled** schema's content, whose shape depends on the
+engine version that compiled it. After an engine upgrade, the same workflow may
+compile to a different hash — the cross-attempt signal then truthfully records
+that the audit evidence is inconsistent; it does not necessarily mean the
+workflow file was edited between attempts.
 
 Signal (all three channels):
 

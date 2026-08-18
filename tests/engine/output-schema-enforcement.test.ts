@@ -2534,7 +2534,13 @@ describe("runAll — missing report.json and invalid-report event ordering (Issu
   it("routes a backend success with no report.json through recordAgentFailure instead of a bare ENOENT rejection (T-295-W3-1, UC-295-008)", async () => {
     const backend = new NoReportBackend();
 
-    // Must resolve (no rejection) with the job failed.
+    // Must resolve (no rejection) with the job terminal.
+    // NOTE (wf-295 Step 2 code-fact correction): SIMPLE_AGENT_YAML declares no
+    // retry config, so the failure-model default applies — on_exceeded.status
+    // defaults to "blocked" (mvp-contracts §2.6: report 缺失 → failed 或
+    // blocked，按 gate 处理). The W3 fix routes the ENOENT through
+    // recordAgentFailure; the terminal status follows the existing policy
+    // machinery, so the job ends "blocked" (job_blocked), not "failed".
     const { summary, runDir } = await runWithBackend(
       sandbox,
       SIMPLE_AGENT_YAML,
@@ -2542,11 +2548,11 @@ describe("runAll — missing report.json and invalid-report event ordering (Issu
       backend,
     );
 
-    expect(summary.jobs[0]!.status).toBe("failed");
+    expect(summary.jobs[0]!.status).toBe("blocked");
 
     const state = await readStateSnapshot(runDir);
-    expect(state.status).toBe("failed");
-    expect(state.jobs["intake"]!.status).toBe("failed");
+    expect(state.status).toBe("blocked");
+    expect(state.jobs["intake"]!.status).toBe("blocked");
 
     const events = await readEvents(runDir);
     // The failure is reported as a step failure — not a success signal.

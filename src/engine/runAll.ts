@@ -20,7 +20,7 @@ import { readFile, stat, appendFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
 import type { AgentBackend } from "../agent/index.js";
-import { compileAgentOutputSchema } from "../agent/outputSchema.js";
+import { compileAgentOutputSchema, outputSchemaHash } from "../agent/outputSchema.js";
 import type { StepBackendOverride } from "../agent/config.js";
 import { buildContext } from "../context/index.js";
 import type { ZigmaFlowEvent } from "../events/index.js";
@@ -102,6 +102,53 @@ async function registerStepArtifact(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Find the most recent prior `output_schema_sha256` recorded for the given
+ * step across attempts N..1 (Issue #295 W1).
+ *
+ * The scan includes the CURRENT attempt directory: resume/reset-run reuse the
+ * attempt number and would overwrite the invocation file during
+ * backend.execute, so the evidence must be read BEFORE execution. Backtracks
+ * from N down to 1 past hash-less invocations (the claude-code catch-path
+ * shape) to the nearest hash-bearing one.
+ *
+ * Degradation: a missing/unreadable invocation file or a missing hash field
+ * contributes no evidence for that attempt. Returns undefined when no
+ * invocation carries a hash — the caller then skips the check.
+ */
+async function findPriorSchemaHash(
+  runDir: string,
+  jobId: string,
+  stepId: string,
+  attempt: number,
+): Promise<string | undefined> {
+  for (let n = attempt; n >= 1; n--) {
+    const invocationPath = join(
+      runDir,
+      "jobs",
+      jobId,
+      "attempts",
+      String(n),
+      "steps",
+      stepId,
+      "agent.invocation.json",
+    );
+    let meta: { output_schema_sha256?: unknown };
+    try {
+      meta = JSON.parse(await readFile(invocationPath, "utf-8")) as {
+        output_schema_sha256?: unknown;
+      };
+    } catch {
+      continue; // missing or unreadable — no evidence for this attempt
+    }
+    const hash = meta.output_schema_sha256;
+    if (typeof hash === "string" && hash.length > 0) {
+      return hash;
+    }
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -657,6 +704,59 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       eventWriter,
     });
     return { jobId, success: false, action: "failed", detail: reason };
+  }
+
+  // ── Cross-attempt schema-hash determinism check (Issue #295 W1) ─────────
+  // Warn-only signal: when a prior attempt's agent.invocation.json records an
+  // output_schema_sha256 that differs from the newly compiled hash, emit
+  // schema_drift_detected + system log + console.warn, then CONTINUE under the
+  // current contract (strategy D1 = A). The evidence scan includes the current
+  // attempt directory and runs BEFORE backend.execute so resume/reset-run
+  // same-number overwrites cannot destroy the only evidence. No evidence
+  // (no invocation, no hash field) → skip silently.
+  // Reference: docs/agent-output-schema.md ("Cross-attempt determinism signal").
+  const newSchemaHash = outputSchemaHash(outputSchema);
+  const priorSchemaHash = await findPriorSchemaHash(
+    runDir,
+    jobId,
+    bundle.stepId,
+    attempt,
+  );
+  if (priorSchemaHash !== undefined && priorSchemaHash !== newSchemaHash) {
+    const driftEventId = await nextSequentialEventId(runDir, eventWriter);
+    const driftEvent: ZigmaFlowEvent = {
+      id: driftEventId,
+      type: "schema_drift_detected",
+      run_id: runId,
+      timestamp: clock.now(),
+      producer: "engine",
+      job: jobId,
+      step: bundle.stepId,
+      attempt,
+      batch_id: batchId,
+      payload: {
+        job_id: jobId,
+        step_id: bundle.stepId,
+        attempt,
+        prior_hash: priorSchemaHash,
+        new_hash: newSchemaHash,
+      },
+    };
+    await eventWriter.appendEvent(runDir, driftEvent);
+    onEvent?.(driftEvent);
+
+    const driftMsg =
+      `Schema drift detected for step ${jobId}/${bundle.stepId} (attempt ${attempt}): ` +
+      `prior output_schema_sha256 ${priorSchemaHash} != newly compiled ${newSchemaHash}; ` +
+      `continuing under the current contract`;
+    if (logWriter) {
+      void logWriter.writeSystem(driftMsg, {
+        job_id: jobId,
+        step_id: bundle.stepId,
+        attempt,
+      });
+    }
+    console.warn(driftMsg);
   }
 
   // Compute args_hash before execution (prompt MUST NOT be included in hash)

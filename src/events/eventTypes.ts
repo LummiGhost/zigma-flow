@@ -71,7 +71,9 @@ export type ZigmaFlowEventType =
   | "iteration_max_reached"
   | "group_completed"
   | "group_blocked"
-  | "group_failed";
+  | "group_failed"
+  // Issue #295: Output-schema determinism event types
+  | "schema_drift_detected";
 
 /**
  * Runtime tuple of all event type tags.
@@ -139,6 +141,8 @@ export const EVENT_TYPES: readonly ZigmaFlowEventType[] = [
   "group_completed",
   "group_blocked",
   "group_failed",
+  // Issue #295: Output-schema determinism event types
+  "schema_drift_detected",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -468,6 +472,20 @@ export interface GroupFailedPayload {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #295: Output-schema determinism payload interfaces
+// ---------------------------------------------------------------------------
+
+export interface SchemaDriftDetectedPayload {
+  job_id: string;
+  step_id: string;
+  attempt: number;
+  /** The most recent prior output_schema_sha256 recorded in an agent.invocation.json. */
+  prior_hash: string;
+  /** The newly compiled output schema hash (outputSchemaHash). */
+  new_hash: string;
+}
+
+// ---------------------------------------------------------------------------
 // WF-P15-HUMAN-GATE payload interfaces
 // ---------------------------------------------------------------------------
 
@@ -636,7 +654,9 @@ export type ZigmaFlowEvent =
   | (EventEnvelope & { type: "iteration_max_reached"; payload: IterationMaxReachedPayload })
   | (EventEnvelope & { type: "group_completed"; payload: GroupCompletedPayload })
   | (EventEnvelope & { type: "group_blocked"; payload: GroupBlockedPayload })
-  | (EventEnvelope & { type: "group_failed"; payload: GroupFailedPayload });
+  | (EventEnvelope & { type: "group_failed"; payload: GroupFailedPayload })
+  // Issue #295: Output-schema determinism event types
+  | (EventEnvelope & { type: "schema_drift_detected"; payload: SchemaDriftDetectedPayload });
 
 // ---------------------------------------------------------------------------
 // nextEventId — sequential event id formatter

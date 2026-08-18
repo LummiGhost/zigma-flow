@@ -25,6 +25,7 @@ const DEFAULT_ARGS = ["exec", "-", "--json", "--color", "never"];
 
 export class CodexCliBackend implements AgentBackend {
   readonly name = "codex-cli";
+  readonly supportsOutputSchema = true;
   readonly backendCommand: string;
   readonly backendArgs: readonly string[];
   readonly backendTimeoutMs: number;

@@ -123,6 +123,7 @@ class FakeClock implements Clock {
  */
 class DelayedFakeBackend implements AgentBackend {
   readonly name = "fake-cancel";
+  readonly supportsOutputSchema = true;
 
   constructor(
     _config: AgentBackendConfig,
@@ -176,7 +177,7 @@ class DelayedFakeBackend implements AgentBackend {
       reportPath,
       JSON.stringify(
         {
-          outputs: { completed: true },
+          outputs: {},
           artifacts: [],
           signals: [],
           summary: "fake backend completed (cancel test)",

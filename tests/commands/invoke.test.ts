@@ -49,6 +49,7 @@ jobs:
 
 class TestInvokeBackend implements AgentBackend {
   readonly name = TEST_BACKEND;
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}
@@ -60,7 +61,7 @@ class TestInvokeBackend implements AgentBackend {
       opts.reportPath,
       JSON.stringify(
         {
-          outputs: { completed: true },
+          outputs: {},
           artifacts: [],
           signals: [],
           summary: "fake backend completed the agent step",
@@ -231,12 +232,13 @@ describe("invokeAction", () => {
   it("accepts --backend override", async () => {
     class CustomBackend implements AgentBackend {
       readonly name = "custom-backend";
+  readonly supportsOutputSchema = true;
       constructor(_config: AgentBackendConfig) {}
       async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
         await mkdir(dirname(opts.reportPath), { recursive: true });
         await writeFile(
           opts.reportPath,
-          JSON.stringify({ outputs: { completed: true }, artifacts: [], signals: [], summary: "custom backend" }, null, 2),
+          JSON.stringify({ outputs: {}, artifacts: [], signals: [], summary: "custom backend" }, null, 2),
           "utf-8",
         );
         return { success: true, reportPath: opts.reportPath };

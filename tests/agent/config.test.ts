@@ -706,24 +706,29 @@ describe("ClaudeCodeBackend — rate limited (T-CONFIG-12)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// T-CONFIG-14: createBackend handles custom (non-claude-code) backend names
+// T-CONFIG-14: createBackend fails closed for unregistered backend names
 // ---------------------------------------------------------------------------
 
 describe("createBackend — custom backend name (T-CONFIG-14)", () => {
   it(
-    "creates an AgentBackend without throwing for a custom backend name (T-CONFIG-14, UC-CONFIG-014, FP-CONFIG-CREATE-CUSTOM-BACKEND)",
+    "throws ConfigError for an unregistered custom backend name instead of assuming Claude compatibility (T-CONFIG-14, UC-CONFIG-014, FP-CONFIG-CREATE-CUSTOM-BACKEND)",
     async () => {
       try {
-        const backend = await callCreateBackend("claude-custom", {
+        await callCreateBackend("claude-custom", {
           command: "node",
           args: ["-e", "1"],
         });
-
-        expect(backend).toBeDefined();
-        expect(typeof backend.execute).toBe("function");
+        // Should have thrown
+        expect(true).toBe(false);
       } catch (e: unknown) {
-        if (!(e instanceof Error) || !e.message.includes("not yet implemented")) {
-          throw e;
+        // RED-PHASE: accept import error
+        if (e instanceof Error && e.message.includes("not yet implemented")) {
+          return;
+        }
+        expect(e).toBeInstanceOf(ConfigError);
+        if (e instanceof ConfigError) {
+          expect(e.message).toContain("claude-custom");
+          expect(e.message).toContain("not registered");
         }
       }
     }

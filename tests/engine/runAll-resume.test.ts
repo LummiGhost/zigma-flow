@@ -100,6 +100,7 @@ class FakeClock implements Clock {
 
 class FakeBackend implements AgentBackend {
   readonly name = "fake-resume";
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}
@@ -118,7 +119,7 @@ class FakeBackend implements AgentBackend {
       opts.reportPath,
       JSON.stringify(
         {
-          outputs: { completed: true },
+          outputs: {},
           artifacts: [],
           signals: [],
           summary: "fake backend executed (resume test)",

@@ -130,6 +130,7 @@ interface BackendCallRecord {
 
 class DogfoodFakeBackend implements AgentBackend {
   readonly name = "fake-dogfood";
+  readonly supportsOutputSchema = true;
   readonly calls: BackendCallRecord[] = [];
 
   // Configurable failure for specific jobs.
@@ -169,7 +170,7 @@ class DogfoodFakeBackend implements AgentBackend {
     await writeFile(
       opts.reportPath,
       JSON.stringify(
-        { outputs: { completed: true }, artifacts: [], signals: [], summary: `${jobId} step done` },
+        { outputs: {}, artifacts: [], signals: [], summary: `${jobId} step done` },
         null,
         2
       ),
@@ -232,6 +233,7 @@ const tickTracker = {
  */
 class TrackingFakeBackend implements AgentBackend {
   readonly name = "fake-tracking";
+  readonly supportsOutputSchema = true;
   readonly calls: BackendCallRecord[] = [];
 
   constructor(_config: AgentBackendConfig) {}
@@ -249,7 +251,7 @@ class TrackingFakeBackend implements AgentBackend {
     await writeFile(
       opts.reportPath,
       JSON.stringify(
-        { outputs: { completed: true }, artifacts: [], signals: [], summary: `${jobId} done` },
+        { outputs: {}, artifacts: [], signals: [], summary: `${jobId} done` },
         null,
         2
       ),

@@ -45,6 +45,7 @@ class FakeClock implements Clock {
 
 class FakeBackend implements AgentBackend {
   readonly name = "fake-skill-err";
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}

@@ -358,7 +358,7 @@ describe("accept pipeline — patches before status (FR-PIPELINE-001)", () => {
         reportPath,
         JSON.stringify(
           {
-            outputs: { summary: "done" },
+            outputs: {},
             artifacts: [],
             signals: [],
             status: "approved",
@@ -447,7 +447,7 @@ describe("accept pipeline — patch failure (FR-PIPELINE-002)", () => {
         reportPath,
         JSON.stringify(
           {
-            outputs: { summary: "done" },
+            outputs: {},
             artifacts: [],
             signals: [],
             status: "approved",
@@ -531,7 +531,7 @@ describe("accept pipeline — no status path (FR-PIPELINE-003)", () => {
         reportPath,
         JSON.stringify(
           {
-            outputs: { summary: "done" },
+            outputs: {},
             artifacts: [],
             signals: [],
             context_patches: [
@@ -622,7 +622,7 @@ describe("accept pipeline — status priority over signals (FR-PIPELINE-004)", (
         reportPath,
         JSON.stringify(
           {
-            outputs: { summary: "done" },
+            outputs: {},
             artifacts: [],
             signals: [{ type: "escalate", reason: "urgent" }],
             status: "rejected",
@@ -712,7 +712,7 @@ describe("accept pipeline — signals path (FR-PIPELINE-005)", () => {
         reportPath,
         JSON.stringify(
           {
-            outputs: { summary: "done" },
+            outputs: {},
             artifacts: [],
             signals: [{ type: "escalate", reason: "needs escalation" }],
             context_patches: [
@@ -794,7 +794,7 @@ describe("accept pipeline — event order (FR-PIPELINE-006)", () => {
         reportPath,
         JSON.stringify(
           {
-            outputs: { summary: "done" },
+            outputs: {},
             artifacts: [],
             signals: [],
             status: "approved",

@@ -40,6 +40,7 @@ jobs:
 
 class TestBackend implements AgentBackend {
   readonly name = TEST_BACKEND;
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}
@@ -50,7 +51,7 @@ class TestBackend implements AgentBackend {
     await writeFile(
       opts.reportPath,
       JSON.stringify({
-        outputs: { completed: true },
+        outputs: {},
         artifacts: [],
         signals: [],
         summary: "ok",

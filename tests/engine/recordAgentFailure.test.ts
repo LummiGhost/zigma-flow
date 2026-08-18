@@ -119,6 +119,7 @@ type BackendBehavior =
 
 class RetryFakeBackend implements AgentBackend {
   readonly name = "fake-retry";
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
   static lastBehavior: string = "none";
 
@@ -183,7 +184,7 @@ class RetryFakeBackend implements AgentBackend {
         await writeFile(
           opts.reportPath,
           JSON.stringify({
-            outputs: { completed: true },
+            outputs: {},
             artifacts: [],
             signals: [],
             summary: "fake backend succeeded",

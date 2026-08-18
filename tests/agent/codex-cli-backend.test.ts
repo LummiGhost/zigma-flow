@@ -19,6 +19,11 @@ const fixtureScript = join(
 );
 
 describe("CodexCliBackend", () => {
+  it("declares the output-schema capability (Issue #289 follow-up)", () => {
+    const backend = new CodexCliBackend({ command: "codex" });
+    expect(backend.supportsOutputSchema).toBe(true);
+  });
+
   it("is available as a zero-configuration built-in backend", () => {
     const resolved = resolveBackendForStep({
       backend: "codex-cli",

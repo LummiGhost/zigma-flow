@@ -28,8 +28,11 @@ and passes it to the Agent CLI. The structured response includes:
 - `artifacts`: list of artifact file paths produced during this step.
 - `signals`: always an empty array (v0.6: signals are deprecated; use status returns instead).
 - `summary`: a short human-readable summary of what was done.
-- `status` (for steps with `returns`): a structured return status from the
-  step's declared `returns.status.values`. Used with `on_return` for flow control.
+- `outputs.status` (for steps with `returns`): a structured return status set
+  to one of the step's declared `returns.status.values`. Used with `on_return`
+  for flow control. Write the status in `outputs.status` only — do not also
+  set a top-level `status` field; if both appear, they must be strictly equal
+  or the Engine rejects the report.
 
 ## Job Expectations
 

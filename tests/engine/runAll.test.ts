@@ -119,6 +119,7 @@ class FakeClock implements Clock {
  */
 class FakeBackend implements AgentBackend {
   readonly name = "fake-runall";
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}
@@ -130,7 +131,7 @@ class FakeBackend implements AgentBackend {
       opts.reportPath,
       JSON.stringify(
         {
-          outputs: { completed: true },
+          outputs: {},
           artifacts: [],
           signals: [],
           summary: "fake backend executed successfully",
@@ -150,6 +151,7 @@ class FakeBackend implements AgentBackend {
  */
 class StaleFakeBackend implements AgentBackend {
   readonly name = "fake-stale";
+  readonly supportsOutputSchema = true;
   static calls: AgentExecuteOptions[] = [];
 
   constructor(_config: AgentBackendConfig) {}
@@ -159,7 +161,7 @@ class StaleFakeBackend implements AgentBackend {
     await mkdir(dirname(opts.reportPath), { recursive: true });
     await writeFile(
       opts.reportPath,
-      JSON.stringify({ outputs: { done: true }, artifacts: [], signals: [], summary: "ok" }, null, 2),
+      JSON.stringify({ outputs: {}, artifacts: [], signals: [], summary: "ok" }, null, 2),
       "utf-8",
     );
     return { success: true, reportPath: opts.reportPath };
@@ -718,6 +720,7 @@ describe("runAll — backend resolver (T-RUNALL-7)", () => {
 
 class AlwaysFailBackend implements AgentBackend {
   readonly name = "fake-always-fail";
+  readonly supportsOutputSchema = true;
 
   constructor(_config: AgentBackendConfig) {}
 

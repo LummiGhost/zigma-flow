@@ -141,6 +141,7 @@ interface FakeBackendConfig {
 
 class FakeBackend implements AgentBackend {
   readonly name = "fake-events";
+  readonly supportsOutputSchema = true;
   readonly backendCommand = "fake";
   readonly backendArgs: readonly string[] = ["-p"];
   readonly backendTimeoutMs = 600_000;
@@ -248,7 +249,7 @@ class FakeBackend implements AgentBackend {
         await writeFile(
           reportPath,
           JSON.stringify({
-            outputs: { completed: true },
+            outputs: {},
             artifacts: [],
             signals: [],
             summary: "fake agent completed successfully",

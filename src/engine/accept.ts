@@ -34,7 +34,9 @@ import { nextEventId as formatEventId } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, JobState, RunState } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
+import type { StepDefinition } from "../workflow/index.js";
 import { FilesystemError, StateError, ValidationError, WorkflowError } from "../utils/index.js";
+import { mergeOutputDeclarations } from "../agent/outputSchema.js";
 import { applyRoutingAction } from "./routing.js";
 import type { ContextPatch } from "./applyContextPatch.js";
 
@@ -95,6 +97,10 @@ interface AgentReport {
   signals: Array<{ type: string; reason?: string }>;
   summary: string;
   status?: string | undefined;
+  /** Raw top-level `status` value (uncoerced) — lets the final-line contract
+   * check detect a dual-source conflict against `outputs.status` with strict
+   * equality instead of comparing String-coerced values. */
+  topLevelStatus?: unknown;
   context_patches?: unknown[];
 }
 
@@ -115,6 +121,17 @@ export function validateReportShape(parsed: unknown): AgentReport {
 
   if (!Array.isArray(obj["artifacts"])) {
     errors.push('missing required field "artifacts" (must be an array)');
+  } else {
+    // Mirrors the compiled schema's artifacts.items: { type: "string" } —
+    // artifact refs are strings (step-artifact paths or artifact:// refs).
+    // A non-string item must be rejected here on every accept path instead
+    // of being silently filtered out by the required_artifacts matcher.
+    const nonStringArtifact = obj["artifacts"].find((a) => typeof a !== "string");
+    if (nonStringArtifact !== undefined) {
+      errors.push(
+        `field "artifacts" items must be strings, got non-string item ${JSON.stringify(nonStringArtifact)}`
+      );
+    }
   }
 
   if (!Array.isArray(obj["signals"])) {
@@ -156,19 +173,248 @@ export function validateReportShape(parsed: unknown): AgentReport {
     return entry;
   });
 
+  const topLevelStatus = obj["status"];
+  const outputsStatus =
+    typeof obj["outputs"] === "object" && obj["outputs"] !== null && !Array.isArray(obj["outputs"])
+      ? (obj["outputs"] as Record<string, unknown>)["status"]
+      : undefined;
+
   return {
     outputs: (obj["outputs"] ?? {}) as Record<string, unknown>,
     artifacts: (obj["artifacts"] ?? []) as unknown[],
     signals,
     summary: obj["summary"] as string,
     // Issue #256: accept status from outputs["status"] when not at top level.
-    status: obj["status"] !== undefined
-      ? String(obj["status"])
-      : (typeof obj["outputs"] === "object" && obj["outputs"] !== null && !Array.isArray(obj["outputs"]) && (obj["outputs"] as Record<string, unknown>)["status"] !== undefined)
-        ? String((obj["outputs"] as Record<string, unknown>)["status"])
-        : undefined,
+    // The resolved status is used only for status-return dispatch, which
+    // requires a string within returns.status.values — the final-line check
+    // enforces that on the raw values, so resolution happens WITHOUT String
+    // coercion (a non-string value never becomes a routable status).
+    topLevelStatus,
+    status: topLevelStatus !== undefined
+      ? (typeof topLevelStatus === "string" ? topLevelStatus : undefined)
+      : (typeof outputsStatus === "string" ? outputsStatus : undefined),
     ...(obj["context_patches"] !== undefined ? { context_patches: obj["context_patches"] as unknown[] } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Shared step-contract validation (acceptAgentReport + runAll inline path)
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate a parsed Agent report against the step's output contract.
+ *
+ * This is the Engine's final-line defense: it runs on every accept path
+ * (autonomous runAll loop and manual `next`/accept) before any state can
+ * advance. The contract is derived from the SAME per-key union/merge of
+ * outputs + outputs_schema that compileAgentOutputSchema builds, so the
+ * prompt-side schema and the runtime enforcement cannot drift:
+ *
+ *   1. required_artifacts — each declared artifact path must be present in
+ *      report.artifacts (string refs, matched as path segment).
+ *   2. Every key in the outputs ∪ outputs_schema union must be present.
+ *   3. Closed outputs object (additionalProperties: false) — any reported
+ *      key outside the merged contract is rejected before it can be
+ *      persisted or influence routing. The one implicit key is "status"
+ *      when the step declares returns.status: the prompt contract
+ *      (Issue #256) directs agents to write outputs.status.
+ *   4. Dual-source status conflict — when the step declares returns.status
+ *      and the report carries BOTH a top-level `status` and an
+ *      `outputs.status`, the two values must be strictly equal, otherwise
+ *      the report is rejected (fail-closed). The compiled schema's
+ *      per-property enums cannot detect this (JSON Schema has no
+ *      cross-field equality); the schema approximates it with per-value
+ *      if/then guards at the native boundary, and this check is the
+ *      authoritative enforcement on every accept path.
+ *   4b. Legacy top-level status — when the step declares returns.status, a
+ *      single-source top-level `status` must be a strict string within
+ *      returns.status.values. No String coercion: the compiled schema
+ *      declares the top-level `status` as { type: "string", enum: values },
+ *      so a numeric/null top-level value is rejected instead of being
+ *      coerced into a value that happens to match a routing value.
+ *   5. Array-typed outputs (merged type "array") are normalized (JSON.parse,
+ *      then newline-split fallback).
+ *   6. Type checks against the merged declaration — outputs-only types are
+ *      enforced too, and run after normalization. When returns.status is
+ *      declared, the returns-merged `status` declaration (type "string")
+ *      is enforced on outputs.status exactly like the compiled schema.
+ *   7. enum/values checks with strict equality (JSON Schema semantics: no
+ *      String coercion). An empty enum (values: []) rejects every value.
+ *      outputs.status is held to the same merged enum the compiled schema
+ *      declares (an explicit subset when one was declared).
+ *
+ * Throws ValidationError on any violation — no state transition happens.
+ * Returns the normalized outputs to persist.
+ */
+export function validateReportAgainstStep(
+  stepDef: StepDefinition | undefined,
+  report: { outputs: Record<string, unknown>; artifacts: unknown[]; topLevelStatus?: unknown },
+): Record<string, unknown> {
+  // ── 1. required_artifacts ─────────────────────────────────────────────
+  if (stepDef?.required_artifacts && stepDef.required_artifacts.length > 0) {
+    const reportArtifactRefs = report.artifacts
+      .filter((a): a is string => typeof a === "string")
+      .map((a) => a);
+
+    for (const required of stepDef.required_artifacts) {
+      const found = reportArtifactRefs.some((a) => {
+        // Match as a path segment: "summary.md" matches ".../summary.md" or "summary.md"
+        // but NOT "not-summary.md" (substring match is rejected).
+        return a === required || a.endsWith("/" + required);
+      });
+      if (!found) {
+        throw new ValidationError(
+          `Required artifact "${required}" not found in report artifacts. ` +
+          `The step requires this artifact to be produced.`,
+          { details: { required, actual: reportArtifactRefs } }
+        );
+      }
+    }
+  }
+
+  // ── 2. Union of declared output keys must all be present ──────────────
+  // Same union as compileAgentOutputSchema: outputs_schema-only keys are
+  // required too.
+  const contract = stepDef ? mergeOutputDeclarations(stepDef) : undefined;
+  const declarations = contract?.declarations ?? {};
+  const declaredKeys = contract?.names ?? [];
+
+  const missingKeys = declaredKeys.filter((k) => !(k in report.outputs));
+  if (missingKeys.length > 0) {
+    throw new ValidationError(
+      `Report is missing declared output(s): ${missingKeys.join(", ")}`,
+      { details: { missing: missingKeys, declared: declaredKeys } }
+    );
+  }
+
+  // ── 3. Closed outputs object — no undeclared keys ─────────────────────
+  // Mirrors the compiled schema's additionalProperties: false. Skipped when
+  // the step definition is unknown (the contract cannot be derived).
+  if (stepDef) {
+    const allowedKeys = new Set(declaredKeys);
+    if (stepDef.returns?.status) allowedKeys.add("status");
+    const extraKeys = Object.keys(report.outputs).filter((k) => !allowedKeys.has(k));
+    if (extraKeys.length > 0) {
+      throw new ValidationError(
+        `Report contains undeclared output(s): ${extraKeys.join(", ")}`,
+        { details: { undeclared: extraKeys, declared: declaredKeys } }
+      );
+    }
+  }
+
+  // ── 4. Dual-source status conflict — fail closed ────────────────────────
+  // When the step declares returns.status, both the legacy top-level
+  // `status` (mvp-contracts §2.6) and the canonical `outputs.status`
+  // (Issue #256) are accepted locations. A report carrying BOTH with values
+  // that are not strictly equal must be rejected: routing would follow the
+  // top-level value while the nested value is the one persisted — a
+  // dual-source contradiction. Native schema enforcement can only approximate
+  // this (per-value if/then guards), so this check is the authoritative
+  // final line for every accept path.
+  if (
+    stepDef?.returns?.status &&
+    report.topLevelStatus !== undefined &&
+    report.outputs.status !== undefined &&
+    report.topLevelStatus !== report.outputs.status
+  ) {
+    throw new ValidationError(
+      `Report declares conflicting status values: top-level "status" is ${JSON.stringify(report.topLevelStatus)} but "outputs.status" is ${JSON.stringify(report.outputs.status)}. ` +
+      `Write "outputs.status" only (the canonical location); when both are present they must be strictly equal.`,
+      { details: { topLevelStatus: report.topLevelStatus, outputsStatus: report.outputs.status } }
+    );
+  }
+
+  // ── 4b. Legacy top-level status: strict string + routing domain ────────
+  // The compiled schema declares the legacy top-level `status` as
+  // { type: "string", enum: returns.status.values }. The Engine enforces the
+  // identical contract on the raw value — no String coercion — so a
+  // numeric/null/object top-level status is rejected before any state change
+  // instead of being coerced into a string that happens to match a routing
+  // value (e.g. a numeric 5 must never route as "5").
+  if (stepDef?.returns?.status && report.topLevelStatus !== undefined) {
+    if (typeof report.topLevelStatus !== "string") {
+      throw new ValidationError(
+        `Top-level "status" must be a string (no String coercion): got ${JSON.stringify(report.topLevelStatus)}`,
+        { details: { topLevelStatus: report.topLevelStatus } }
+      );
+    }
+    if (!stepDef.returns.status.values.includes(report.topLevelStatus)) {
+      throw new ValidationError(
+        `Top-level "status" ${JSON.stringify(report.topLevelStatus)} is not in returns.status.values ` +
+        `[${stepDef.returns.status.values.map((v) => JSON.stringify(v)).join(", ")}]`,
+        { details: { topLevelStatus: report.topLevelStatus, values: stepDef.returns.status.values } }
+      );
+    }
+  }
+
+  // ── 5. Normalize array-typed outputs (merged declaration) ─────────────
+  const normalizedOutputs: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(report.outputs)) {
+    const mergedType = declarations[key]?.["type"];
+
+    if (mergedType === "array" && typeof value === "string") {
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (Array.isArray(parsed)) {
+          normalizedOutputs[key] = parsed;
+          continue;
+        }
+      } catch { /* fall through */ }
+      normalizedOutputs[key] = value.split("\n").map((s) => s.trim()).filter(Boolean);
+    } else {
+      normalizedOutputs[key] = value;
+    }
+  }
+
+  // ── 6. Type checks against the merged declaration ─────────────────────
+  // Runs AFTER normalization so a string report for an array-typed output
+  // validates as an array. outputs-only types are enforced as well. The
+  // iteration covers the implicit `status` key too: when the step declares
+  // returns.status, declarations["status"] is the same returns-merged
+  // declaration the compiled schema uses, so its type: "string" is enforced
+  // identically here (the compiled schema does not String-coerce).
+  for (const [key, value] of Object.entries(normalizedOutputs)) {
+    const expectedType = declarations[key]?.["type"];
+    if (typeof expectedType !== "string") continue;
+
+    const actualType =
+      value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+
+    if (expectedType !== actualType) {
+      throw new ValidationError(
+        `Output "${key}" type mismatch: expected ${expectedType}, got ${actualType}`,
+        { details: { key, expected: expectedType, actual: actualType } }
+      );
+    }
+  }
+
+  // ── 7. enum/values final-line check ───────────────────────────────────
+  // Strict equality (JSON Schema semantics) — no String coercion, so 1 does
+  // not match "1". An empty enum (values: []) matches nothing and therefore
+  // rejects every reported value. When the step declares returns.status,
+  // declarations["status"] is the returns-merged declaration, so
+  // outputs.status is held to the exact enum the compiled schema declares
+  // (an explicit subset when one was declared).
+  for (const [key, value] of Object.entries(normalizedOutputs)) {
+    const decl = declarations[key];
+    if (decl === undefined) continue;
+
+    const allowedValues: unknown[] | undefined =
+      Array.isArray(decl["values"]) ? (decl["values"] as unknown[])
+      : Array.isArray(decl["enum"]) ? (decl["enum"] as unknown[])
+      : undefined;
+    if (allowedValues === undefined) continue;
+
+    const matched = allowedValues.some((allowed) => allowed === value);
+    if (!matched) {
+      throw new ValidationError(
+        `Output "${key}" value ${JSON.stringify(value)} is not in declared values: [${allowedValues.map((v) => JSON.stringify(v)).join(", ")}]`,
+        { details: { outputKey: key, actualValue: value, allowedValues } }
+      );
+    }
+  }
+
+  return normalizedOutputs;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,118 +491,14 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
 
   const stepDef = wf.jobs[jobId]?.steps.find((s) => s.id === stepId);
 
-  // ── 3b. Validate required artifacts against step definition ────────────────
-  // If the step declares required_artifacts, each must be present in the
-  // report's artifacts array (matched as a path segment or full path, so
-  // "summary.md" does not false-match "not-summary.md" or "old/summary.md.bak").
-
-  if (stepDef?.required_artifacts && stepDef.required_artifacts.length > 0) {
-    const reportArtifactRefs = report.artifacts
-      .filter((a): a is string => typeof a === "string")
-      .map((a) => a);
-
-    for (const required of stepDef.required_artifacts) {
-      const found = reportArtifactRefs.some((a) => {
-        // Match as a path segment: "summary.md" matches ".../summary.md" or "summary.md"
-        // but NOT "not-summary.md" (substring match is rejected).
-        return a === required || a.endsWith("/" + required);
-      });
-      if (!found) {
-        throw new ValidationError(
-          `Required artifact "${required}" not found in report artifacts. ` +
-          `The step requires this artifact to be produced.`,
-          { details: { required, actual: reportArtifactRefs } }
-        );
-      }
-    }
-  }
-
-  // ── 3c. Validate declared output keys are present in report ──────────────
-
-  if (stepDef?.outputs) {
-    const declaredKeys = Object.keys(stepDef.outputs);
-    const missingKeys = declaredKeys.filter((k) => !(k in report.outputs));
-    if (missingKeys.length > 0) {
-      throw new ValidationError(
-        `Report is missing declared output(s): ${missingKeys.join(", ")}`,
-        { details: { missing: missingKeys, declared: declaredKeys } }
-      );
-    }
-  }
-
-  const normalizedOutputs: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(report.outputs)) {
-    const outputDef = stepDef?.outputs?.[key];
-    const declaredType =
-      outputDef !== null && typeof outputDef === "object"
-        ? (outputDef as Record<string, unknown>)["type"]
-        : undefined;
-
-    if (declaredType === "array" && typeof value === "string") {
-      // Try JSON parse first
-      try {
-        const parsed: unknown = JSON.parse(value);
-        if (Array.isArray(parsed)) {
-          normalizedOutputs[key] = parsed;
-          continue;
-        }
-      } catch { /* fall through */ }
-      // Fall back: split by newline, filter empty
-      normalizedOutputs[key] = value.split("\n").map((s) => s.trim()).filter(Boolean);
-    } else {
-      normalizedOutputs[key] = value;
-    }
-  }
-
-  // ── 3d. Validate output value types against outputs_schema ─────────────
-
-  if (stepDef?.outputs_schema) {
-    for (const [key, schema] of Object.entries(stepDef.outputs_schema)) {
-      const value = normalizedOutputs[key];
-      if (value === undefined) continue;
-
-      const expectedType = schema.type;
-      let actualType: string;
-      if (value === null) {
-        actualType = "null";
-      } else if (Array.isArray(value)) {
-        actualType = "array";
-      } else {
-        actualType = typeof value;
-      }
-
-      if (expectedType !== actualType) {
-        throw new ValidationError(
-          `Output "${key}" type mismatch: expected ${expectedType}, got ${actualType}`,
-          { details: { key, expected: expectedType, actual: actualType } }
-        );
-      }
-    }
-  }
-
-  // ── 4c. Validate output values against declared constraints (Issue #172) ───
-  // If a step declares outputs with a "values" constraint (in outputs or
-  // outputs_schema), validate that the report's output value is in the set.
-
-  for (const [key, value] of Object.entries(normalizedOutputs)) {
-    const outputDecl = stepDef?.outputs?.[key];
-    const outputSchema = stepDef?.outputs_schema?.[key];
-    const allowedValues: string[] | undefined =
-      (outputSchema?.values) ??
-      (outputDecl !== null && typeof outputDecl === "object"
-        ? (outputDecl as Record<string, unknown>)["values"] as string[] | undefined
-        : undefined);
-
-    if (allowedValues !== undefined && Array.isArray(allowedValues) && allowedValues.length > 0) {
-      const strValue = String(value ?? "");
-      if (!allowedValues.includes(strValue)) {
-        throw new ValidationError(
-          `Output "${key}" value "${strValue}" is not in declared values: [${allowedValues.join(", ")}]`,
-          { details: { outputKey: key, actualValue: strValue, allowedValues } }
-        );
-      }
-    }
-  }
+  // ── 3b-4c. Shared final-line contract validation (§2.6) ──────────────────
+  // required_artifacts → declared keys → array normalization → outputs_schema
+  // types → enum/values. Throws ValidationError before any state transition.
+  const normalizedOutputs = validateReportAgainstStep(stepDef, {
+    outputs: report.outputs,
+    artifacts: report.artifacts,
+    topLevelStatus: report.topLevelStatus,
+  });
 
   const signalsArray = report.signals;
 

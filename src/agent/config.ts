@@ -276,23 +276,35 @@ export function resolveBackendForStep(
 /**
  * Create an AgentBackend instance from a resolved backend name and config.
  *
- * Registers the built-in "claude-code" backend on first call if not already
- * registered, then delegates to the agent factory.
+ * Registers the built-in backends on first call, then delegates to the agent
+ * factory. A configured backend name that is neither built-in nor explicitly
+ * registered fails closed with ConfigError — an unknown CLI must not be
+ * assumed to be Claude-compatible (it would receive Claude-specific flags
+ * such as --json-schema it does not understand).
  */
 export function createBackend(
   name: string,
   config: AgentBackendConfigEntry,
 ): AgentBackend {
-  // Register ClaudeCodeBackend as the default built-in on first access
+  // Register built-ins on first access
   if (!agentFactory.get("claude-code")) {
     agentFactory.register("claude-code", ClaudeCodeBackend);
   }
   if (!agentFactory.get("codex-cli")) {
     agentFactory.register("codex-cli", CodexCliBackend);
   }
-  // Register any configured custom backend using ClaudeCodeBackend as its generic implementation
   if (!agentFactory.get(name)) {
-    agentFactory.register(name, ClaudeCodeBackend);
+    throw new ConfigError(
+      `Agent backend "${name}" is not registered and cannot be created. ` +
+      `Registered backends: ${agentFactory.list().join(", ") || "(none)"}`,
+      {
+        details: { backendName: name, registered: agentFactory.list() },
+        suggestion:
+          `Register the backend with agentFactory.register("${name}", BackendClass) ` +
+          `and declare its output-schema capability (AgentBackend.supportsOutputSchema), ` +
+          `or use a built-in backend ("claude-code", "codex-cli").`,
+      },
+    );
   }
 
   return agentFactory.createBackend(name, {

@@ -428,7 +428,7 @@ describe("acceptAgentReport — no-signal report (T-ACCEPT-1)", () => {
       });
 
       await writeReport(runDir, "intake", 1, "intake", {
-        outputs: { summary: "intake complete" },
+        outputs: {},
         artifacts: [],
         signals: [],
         summary: "intake step done",
@@ -461,6 +461,24 @@ describe("acceptAgentReport — no-signal report (T-ACCEPT-1)", () => {
 // T-ACCEPT-2: outputs persist to JobState.outputs
 // ---------------------------------------------------------------------------
 
+/**
+ * Workflow declaring untyped summary + risks outputs — used by T-ACCEPT-2 to
+ * assert declared outputs persist verbatim to JobState.outputs.
+ */
+const AGENT_OUTPUTS_PERSIST_YAML = `\
+name: accept-outputs-persist
+version: "0.1.0"
+jobs:
+  intake:
+    steps:
+      - id: intake
+        type: agent
+        uses: zigma/intake-skill
+        outputs:
+          summary: {}
+          risks: {}
+`;
+
 describe("acceptAgentReport — outputs persistence (T-ACCEPT-2)", () => {
   let sandbox: Sandbox;
 
@@ -477,8 +495,8 @@ describe("acceptAgentReport — outputs persistence (T-ACCEPT-2)", () => {
     async () => {
       const { runId, runDir } = await bootstrapAcceptRun(
         sandbox,
-        AGENT_NO_SIGNAL_YAML,
-        "accept-no-signal"
+        AGENT_OUTPUTS_PERSIST_YAML,
+        "accept-outputs-persist"
       );
 
       await setJobState(runDir, "intake", {
@@ -541,7 +559,7 @@ describe("acceptAgentReport — valid signal dispatch (T-ACCEPT-3)", () => {
       });
 
       await writeReport(runDir, "plan", 1, "plan", {
-        outputs: { plan: "proposed architecture" },
+        outputs: {},
         artifacts: [],
         signals: [
           {
@@ -1056,7 +1074,7 @@ describe("acceptAgentReport — agent_report_accepted event fields (T-ACCEPT-11)
       });
 
       await writeReport(runDir, "intake", 1, "intake", {
-        outputs: { foo: "bar" },
+        outputs: {},
         artifacts: [],
         signals: [],
         summary: "intake done",
@@ -1155,6 +1173,38 @@ describe("acceptAgentReport — signal without reason (T-ACCEPT-12)", () => {
 // T-ACCEPT-13: signal path — outputs persist to JobState.outputs
 // ---------------------------------------------------------------------------
 
+/**
+ * AGENT_WITH_SIGNAL_YAML variant declaring plan outputs — used by T-ACCEPT-13
+ * to assert declared outputs persist on the signal-dispatch path.
+ */
+const AGENT_SIGNAL_OUTPUTS_PERSIST_YAML = `\
+name: accept-signal-outputs-persist
+version: "0.1.0"
+signals:
+  needs_architecture_design:
+    severity: medium
+    priority: 50
+    allowed_from:
+      - plan
+    action:
+      activate_job: architecture-design
+jobs:
+  plan:
+    steps:
+      - id: plan
+        type: agent
+        uses: zigma/plan-skill
+        outputs:
+          plan: {}
+          confidence: {}
+  architecture-design:
+    activation: optional
+    steps:
+      - id: design
+        type: agent
+        uses: zigma/architecture-skill
+`;
+
 describe("acceptAgentReport — signal path outputs persistence (T-ACCEPT-13)", () => {
   let sandbox: Sandbox;
 
@@ -1171,8 +1221,8 @@ describe("acceptAgentReport — signal path outputs persistence (T-ACCEPT-13)", 
     async () => {
       const { runId, runDir } = await bootstrapAcceptRun(
         sandbox,
-        AGENT_WITH_SIGNAL_YAML,
-        "accept-with-signal"
+        AGENT_SIGNAL_OUTPUTS_PERSIST_YAML,
+        "accept-signal-outputs-persist"
       );
 
       await setJobState(runDir, "plan", {
@@ -1237,6 +1287,23 @@ jobs:
             type: array
           summary:
             type: string
+`;
+
+/**
+ * Workflow declaring an untyped `summary` output — used by T-ACCEPT-16c to
+ * assert values for untyped declarations pass through without coercion.
+ */
+const AGENT_UNTYPED_OUTPUT_YAML = `\
+name: accept-untyped-output
+version: "0.1.0"
+jobs:
+  intake:
+    steps:
+      - id: intake
+        type: agent
+        uses: zigma/intake-skill
+        outputs:
+          summary: {}
 `;
 
 describe("acceptAgentReport — typed output normalization (T-ACCEPT-16)", () => {
@@ -1332,8 +1399,8 @@ describe("acceptAgentReport — typed output normalization (T-ACCEPT-16)", () =>
     async () => {
       const { runId, runDir } = await bootstrapAcceptRun(
         sandbox,
-        AGENT_NO_SIGNAL_YAML,
-        "accept-no-signal"
+        AGENT_UNTYPED_OUTPUT_YAML,
+        "accept-untyped-output"
       );
 
       await setJobState(runDir, "intake", {
@@ -1448,7 +1515,7 @@ describe("acceptAgentReport — signal path retry_job advances source job (T-ACC
       });
 
       await writeReport(runDir, "review", 1, "review-step", {
-        outputs: { decision: "rejected" },
+        outputs: {},
         artifacts: [],
         signals: [
           {
@@ -1588,7 +1655,7 @@ describe("acceptAgentReport — artifact index registration (T-ACCEPT-16)", () =
       });
 
       await writeReport(runDir, "intake", 1, "intake", {
-        outputs: { result: "done" },
+        outputs: {},
         artifacts: [],
         signals: [],
         summary: "intake complete",
@@ -1660,7 +1727,7 @@ describe("acceptAgentReport — signal path activate_job advances source job (T-
       expect(initialSnap.jobs["architecture-design"]!.status).toBe("inactive");
 
       await writeReport(runDir, "plan", 1, "plan-step", {
-        outputs: { suggested_design: "module-split" },
+        outputs: {},
         artifacts: [],
         signals: [
           {
@@ -1771,7 +1838,7 @@ describe("acceptAgentReport — required_artifacts policy (T-ACCEPT-17)", () => 
 
       // Report has no artifacts at all — missing required "summary.md"
       await writeReport(runDir, "intake", 1, "intake", {
-        outputs: { summary: "done" },
+        outputs: {},
         artifacts: [],
         signals: [],
         summary: "intake done",
@@ -1817,7 +1884,7 @@ describe("acceptAgentReport — required_artifacts policy (T-ACCEPT-17)", () => 
       // "document-summary.md". This test confirms the match is exact
       // (no false-positive on "document-summary.md" either).
       await writeReport(runDir, "intake", 1, "intake", {
-        outputs: { summary: "done" },
+        outputs: {},
         artifacts: ["not-summary.md"],
         signals: [],
         summary: "intake done",
@@ -1860,7 +1927,7 @@ describe("acceptAgentReport — required_artifacts policy (T-ACCEPT-17)", () => 
 
       // Report has exactly "summary.md" — should pass
       await writeReport(runDir, "intake", 1, "intake", {
-        outputs: { summary: "done" },
+        outputs: {},
         artifacts: ["summary.md"],
         signals: [],
         summary: "intake done",
@@ -1895,7 +1962,7 @@ describe("acceptAgentReport — required_artifacts policy (T-ACCEPT-17)", () => 
       // Report has "jobs/intake/attempts/1/steps/intake/summary.md" — should match
       // via endsWith("/summary.md")
       await writeReport(runDir, "intake", 1, "intake", {
-        outputs: { summary: "done" },
+        outputs: {},
         artifacts: ["jobs/intake/attempts/1/steps/intake/summary.md"],
         signals: [],
         summary: "intake done",
@@ -1991,7 +2058,7 @@ describe("acceptAgentReport — required status missing (T-ACCEPT-18)", () => {
 
       // Report with NO status field — step requires it
       await writeReport(runDir, "review", 1, "review-step", {
-        outputs: { summary: "done" },
+        outputs: {},
         artifacts: [],
         signals: [],
         summary: "review completed without status",
@@ -2046,7 +2113,7 @@ describe("acceptAgentReport — optional status missing continues (T-ACCEPT-19)"
 
       // Report with NO status field — step has required: false so this is OK
       await writeReport(runDir, "review", 1, "review-step", {
-        outputs: { summary: "done" },
+        outputs: {},
         artifacts: [],
         signals: [],
         summary: "review completed without status",
@@ -2071,6 +2138,32 @@ describe("acceptAgentReport — optional status missing continues (T-ACCEPT-19)"
   );
 });
 
+/**
+ * AGENT_RETURNS_REQUIRED_YAML variant declaring an untyped `summary` output —
+ * used by T-ACCEPT-20 to assert outputs persist on the status-return path.
+ */
+const AGENT_RETURNS_WITH_OUTPUTS_YAML = `\
+name: accept-returns-with-outputs
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review-step
+        type: agent
+        uses: zigma/review-skill
+        returns:
+          status:
+            values:
+              - approved
+              - rejected
+            required: true
+        on_return:
+          approved: continue
+          rejected: fail
+        outputs:
+          summary: {}
+`;
+
 describe("acceptAgentReport — status present dispatches via applyStatusReturn (T-ACCEPT-20)", () => {
   let sandbox: Sandbox;
 
@@ -2087,8 +2180,8 @@ describe("acceptAgentReport — status present dispatches via applyStatusReturn 
     async () => {
       const { runId, runDir } = await bootstrapAcceptRun(
         sandbox,
-        AGENT_RETURNS_REQUIRED_YAML,
-        "accept-returns-required"
+        AGENT_RETURNS_WITH_OUTPUTS_YAML,
+        "accept-returns-with-outputs"
       );
 
       await setJobState(runDir, "review", {
@@ -2194,7 +2287,6 @@ describe("acceptAgentReport — outputs.status satisfies returns.status (T-ACCEP
       await writeReport(runDir, "static-check", 1, "autofix", {
         outputs: {
           status: "fixed",
-          gate: "static-check",
         },
         artifacts: [],
         signals: [],
@@ -2244,7 +2336,6 @@ describe("acceptAgentReport — outputs.status satisfies returns.status (T-ACCEP
       await writeReport(runDir, "static-check", 1, "autofix", {
         outputs: {
           status: "unfixable",
-          gate: "static-check",
         },
         artifacts: [],
         signals: [],
@@ -2288,7 +2379,7 @@ describe("acceptAgentReport — outputs.status satisfies returns.status (T-ACCEP
 
       // Report with no status anywhere — should still fail
       await writeReport(runDir, "static-check", 1, "autofix", {
-        outputs: { gate: "static-check" },
+        outputs: {},
         artifacts: [],
         signals: [],
         summary: "no status provided",

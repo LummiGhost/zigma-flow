@@ -23,6 +23,7 @@
 import { describe, expect, it } from "vitest";
 
 import { loadWorkflow } from "../../src/workflow/index.js";
+import { compileAgentOutputSchema } from "../../src/agent/index.js";
 import { ValidationError, WorkflowError } from "../../src/utils/index.js";
 
 // ---------------------------------------------------------------------------
@@ -369,5 +370,65 @@ describe("on_output schema — on_output with status action", () => {
 
     const def = loadWorkflow(yaml);
     expect(def).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #295 W2: outputs_schema enum/description must survive the zod layer
+// ---------------------------------------------------------------------------
+//
+// docs/agent-output-schema.md declares "type, values/enum, and description
+// are preserved". The compiler (src/agent/outputSchema.ts) already supports
+// both fields, but the outputs_schema zod object (src/workflow/index.ts
+// StepBaseSchema) only allows type/values/on_value, so `enum`/`description`
+// are silently stripped before the compiler ever sees them.
+//
+// Red-phase note (wf-295 Step 1): these tests fail until Step 2 adds
+// `enum: z.array(z.string()).optional()` and `description: z.string().optional()`
+// to the outputs_schema zod object.
+
+const ENUM_DESCRIPTION_OUTPUTS_SCHEMA_YAML = `name: outputs-schema-enum-desc
+version: "0.1.0"
+jobs:
+  review:
+    steps:
+      - id: review
+        type: agent
+        uses: zigma/review-skill
+        outputs_schema:
+          verdict:
+            type: string
+            enum:
+              - approved
+              - rejected
+            description: Review verdict must be approved or rejected.
+`;
+
+function compileVerdictProperty(
+  yaml: string
+): Record<string, unknown> {
+  const wf = loadWorkflow(yaml);
+  const step = wf.jobs["review"]!.steps[0]!;
+  const schema = compileAgentOutputSchema(step) as Record<string, unknown>;
+  const properties = schema["properties"] as Record<string, unknown>;
+  const outputs = properties["outputs"] as Record<string, unknown>;
+  const outputProps = outputs["properties"] as Record<string, unknown>;
+  return outputProps["verdict"] as Record<string, unknown>;
+}
+
+describe("outputs_schema enum/description preservation (Issue #295 W2)", () => {
+  it("preserves outputs_schema `enum` through the zod layer into the compiled schema (T-295-W2-1, UC-295-007)", () => {
+    const verdict = compileVerdictProperty(ENUM_DESCRIPTION_OUTPUTS_SCHEMA_YAML);
+
+    expect(verdict["type"]).toBe("string");
+    expect(verdict["enum"]).toEqual(["approved", "rejected"]);
+  });
+
+  it("preserves outputs_schema `description` through the zod layer into the compiled schema (T-295-W2-2, UC-295-007)", () => {
+    const verdict = compileVerdictProperty(ENUM_DESCRIPTION_OUTPUTS_SCHEMA_YAML);
+
+    expect(verdict["description"]).toBe(
+      "Review verdict must be approved or rejected."
+    );
   });
 });

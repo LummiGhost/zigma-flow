@@ -713,23 +713,17 @@ describe("createBackend — custom backend name (T-CONFIG-14)", () => {
   it(
     "throws ConfigError for an unregistered custom backend name instead of assuming Claude compatibility (T-CONFIG-14, UC-CONFIG-014, FP-CONFIG-CREATE-CUSTOM-BACKEND)",
     async () => {
-      try {
-        await callCreateBackend("claude-custom", {
-          command: "node",
-          args: ["-e", "1"],
-        });
-        // Should have thrown
-        expect(true).toBe(false);
-      } catch (e: unknown) {
-        // RED-PHASE: accept import error
-        if (e instanceof Error && e.message.includes("not yet implemented")) {
-          return;
-        }
-        expect(e).toBeInstanceOf(ConfigError);
-        if (e instanceof ConfigError) {
-          expect(e.message).toContain("claude-custom");
-          expect(e.message).toContain("not registered");
-        }
+      const err = await callCreateBackend("claude-custom", {
+        command: "node",
+        args: ["-e", "1"],
+      }).catch((e: unknown) => e);
+
+      // Unregistered backend names must fail closed as ConfigError — the
+      // RED-PHASE "not yet implemented" escape branch is gone (Issue #295 W5).
+      expect(err).toBeInstanceOf(ConfigError);
+      if (err instanceof ConfigError) {
+        expect(err.message).toContain("claude-custom");
+        expect(err.message).toContain("not registered");
       }
     }
   );

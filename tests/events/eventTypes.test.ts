@@ -48,6 +48,7 @@ import type {
   RunCompletedPayload,
   RunCreatedPayload,
   RunFailedPayload,
+  SchemaDriftDetectedPayload,
   ScriptCompletedPayload,
   SignalReceivedPayload,
   StepCompletedPayload,
@@ -104,7 +105,7 @@ function runEnvelope(id: string, type: ZigmaFlowEventType): EventEnvelope {
 // ---------------------------------------------------------------------------
 
 describe("ZigmaFlowEventType", () => {
-  it("enumerates all 58 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
+  it("enumerates all 59 event types (T-EVT-CATALOG-1, UC-EVT-CATALOG, RC-E03, RC-E10)", () => {
     const expected: ZigmaFlowEventType[] = [
       "run_created",
       "job_ready",
@@ -167,12 +168,14 @@ describe("ZigmaFlowEventType", () => {
       "group_completed",
       "group_blocked",
       "group_failed",
+      // Issue #295: Output-schema determinism event types
+      "schema_drift_detected",
     ];
 
     // Set equality both ways — guards against missing or extra types.
     expect(new Set(EVENT_TYPES)).toEqual(new Set(expected));
-    expect(EVENT_TYPES.length).toBe(58);
-    expect(expected.length).toBe(58);
+    expect(EVENT_TYPES.length).toBe(59);
+    expect(expected.length).toBe(59);
   });
 });
 
@@ -377,6 +380,9 @@ describe("ZigmaFlowEvent", () => {
           return "step_poll_tick";
         case "step_poll_timeout":
           return "step_poll_timeout";
+        // Issue #295: Output-schema determinism event types
+        case "schema_drift_detected":
+          return "schema_drift_detected";
         default: {
           const _exhaustive: never = event;
           return _exhaustive;
@@ -812,6 +818,24 @@ describe("ZigmaFlowEvent JSON round-trip", () => {
     const back = roundTrip(ev);
     expect(back).toEqual(ev);
     expect(back.type).toBe("job_reset");
+  });
+
+  it("round-trips schema_drift_detected (T-EVT-RT-59, UC-EVT-ROUND-TRIP, RC-E09..E11, RC-E14)", () => {
+    const payload: SchemaDriftDetectedPayload = {
+      job_id: "intake",
+      step_id: "analyze",
+      attempt: 2,
+      prior_hash: "a".repeat(64),
+      new_hash: "b".repeat(64),
+    };
+    const ev: ZigmaFlowEvent = {
+      ...stepEnvelope("evt-059", "schema_drift_detected", "engine", "intake", "analyze", 2),
+      type: "schema_drift_detected",
+      payload,
+    };
+    const back = roundTrip(ev);
+    expect(back).toEqual(ev);
+    expect(back.type).toBe("schema_drift_detected");
   });
 });
 

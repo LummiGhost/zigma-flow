@@ -286,6 +286,8 @@ const StepBaseSchema = z.object({
   outputs_schema: z.record(z.string(), z.object({
     type: z.string(),
     values: z.array(z.string()).optional(),
+    enum: z.array(z.string()).optional(),
+    description: z.string().optional(),
     on_value: z.record(z.string(), RouterActionSchema).optional(),
   })).optional(),
   // Output-based routing (Issue #172)

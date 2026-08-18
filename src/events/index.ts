@@ -46,6 +46,7 @@ export {
   type RunCompletedPayload,
   type RunCreatedPayload,
   type RunFailedPayload,
+  type SchemaDriftDetectedPayload,
   type ScriptCompletedPayload,
   type SignalReceivedPayload,
   type StepCompletedPayload,

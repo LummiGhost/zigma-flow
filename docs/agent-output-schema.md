@@ -99,6 +99,11 @@ before the backend is invoked — the step fails as a configuration error:
   (e.g. `integer`) cannot be enforced by the final-line runtime checks and are
   rejected.
 - `values`/`enum` must be arrays of allowed values.
+- `outputs_schema` property declarations are validated by the zod layer at
+  workflow load: `description` must be a string and `enum` an array of
+  strings (like `values`). A non-string `description`, or an `enum` containing
+  non-string entries, is **explicitly rejected** at load time — never silently
+  dropped.
 - An explicit `status` declaration combined with `returns.status` must be
   compatible with the routing domain, otherwise the step fails closed before
   the backend is invoked:
@@ -196,3 +201,49 @@ The checks, in order:
 
 Native CLI schema enforcement is an additional boundary and does not transfer
 state transition ownership to an Agent backend.
+
+## Cross-attempt determinism signal
+
+The Engine never snapshots the workflow file — state stores only step/job ids
+and the workflow is loaded fresh on every resume/retry. A user editing the
+workflow's `outputs`/`outputs_schema` declarations between attempts therefore
+silently changes the schema the next attempt executes under. To keep that
+drift explicit in the audit trail, the Engine compares the newly compiled
+schema hash against the prior attempt's recorded evidence and signals a
+difference — **warn-only** (strategy D1 = A): the signal is emitted and
+execution continues under the current contract, because the drift affects only
+the consistency of historical audit evidence, never run state.
+
+Checkpoint and evidence:
+
+- The check runs in `executeAgentStep` after `compileAgentOutputSchema`
+  succeeds and before `agent_invoked` is emitted (before `backend.execute`).
+- Evidence is the `output_schema_sha256` field of `agent.invocation.json`
+  under `jobs/<jobId>/attempts/1..N/steps/<stepId>/`. The scan covers the
+  **current attempt directory too**, and runs before execution — resume and
+  reset-run reuse the attempt number, so the backend would otherwise overwrite
+  the only evidence.
+- Backtracking runs from attempt N down to 1 and uses the **most recent
+  hash-bearing** invocation: a hash-less invocation (the claude-code
+  catch-path shape) does not shadow older evidence.
+
+Degradation: if no prior invocation exists, or none carries
+`output_schema_sha256`, there is no evidence to compare and the check is
+skipped silently.
+
+The hash reflects the **compiled** schema's content, whose shape depends on the
+engine version that compiled it. After an engine upgrade, the same workflow may
+compile to a different hash — the cross-attempt signal then truthfully records
+that the audit evidence is inconsistent; it does not necessarily mean the
+workflow file was edited between attempts.
+
+Signal (all three channels):
+
+- New event `schema_drift_detected` (mvp-contracts §2.4) with payload
+  `job_id`/`step_id`/`attempt`/`prior_hash`/`new_hash`, written to the shared
+  `events.jsonl` sequence before `agent_invoked`.
+- A system log line via `RunLogWriter.writeSystem`.
+- A `console.warn` for CLI users.
+
+The signal never alters execution: the compiled schema, backend invocation,
+and final-line validation all proceed unchanged.

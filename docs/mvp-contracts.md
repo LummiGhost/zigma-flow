@@ -164,6 +164,10 @@ Event 是审计事实流，不是终端展示文本。MVP event 至少包含：
 - `human_gate_waiting` — 进入 human step
 - `human_decision` — 收到 approve/reject
 
+**输出 schema 一致性（Issue #295）：**
+
+- `schema_drift_detected` — 跨 attempt 检查发现该 step 新编译的 output-schema hash 与某历史先例（`agent.invocation.json` 的 `output_schema_sha256`）不一致时发出；warn-only，不改变任何执行语义。payload 含 job_id、step_id、attempt、prior_hash、new_hash
+
 约束：
 
 - 所有 v0.2 新事件都通过 `nextSequentialEventId` 获取单调 ID，与既有事件共享同一序列。

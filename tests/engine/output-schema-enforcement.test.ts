@@ -113,6 +113,22 @@ class StepAwareBackend implements AgentBackend {
   }
 }
 
+/**
+ * Returns success WITHOUT writing report.json — simulates a backend that
+ * exited 0 but never produced the canonical report (Issue #295 W3). Under the
+ * current implementation runAll hits a bare ENOENT rejection on
+ * readFile(reportPath); after Step 2 it routes through recordAgentFailure.
+ */
+class NoReportBackend implements AgentBackend {
+  readonly name = "no-report-fake";
+  readonly supportsOutputSchema = true;
+
+  async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
+    await mkdir(dirname(opts.reportPath), { recursive: true });
+    return { success: true, reportPath: opts.reportPath };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Workflow YAML fixtures
 // ---------------------------------------------------------------------------
@@ -663,6 +679,21 @@ async function readEvents(runDir: string): Promise<EventRecord[]> {
       .split("\n")
       .filter((l) => l.trim().length > 0)
       .map((l) => JSON.parse(l) as EventRecord);
+  } catch {
+    return [];
+  }
+}
+
+/** System log lines (stream: "system") from run.log.jsonl. */
+async function readSystemLogTexts(runDir: string): Promise<string[]> {
+  try {
+    const text = await readFile(join(runDir, "run.log.jsonl"), "utf-8");
+    return text
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as { stream?: string; text?: string })
+      .filter((r) => r.stream === "system")
+      .map((r) => r.text ?? "");
   } catch {
     return [];
   }
@@ -2461,5 +2492,107 @@ describe("acceptAgentReport — merged output-contract enforcement (Issue #289 P
 
     const snap = await readStateSnapshot(runDir);
     expect(snap.jobs["review"]!.status).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #295 W3/W4: missing report.json and invalid-report event ordering
+// ---------------------------------------------------------------------------
+//
+// docs/agent-output-schema.md "Final-line enforcement": the Engine validates
+// report.json before changing workflow state, and a violation on the
+// autonomous runAll path routes through recordAgentFailure
+// (errorType "execution").
+//
+// W3: readFile(reportPath) currently sits OUTSIDE the try block
+// (src/engine/runAll.ts:1018), so a backend success without report.json
+// rejects the run with a bare ENOENT instead of failing the job.
+//
+// W4: the agent_completed event and the "completed" system log are currently
+// emitted BEFORE the report is read and validated (runAll.ts:983-1012), so an
+// invalid report produces agent_completed → step_failed, contradicting
+// mvp-contracts §2.4 ("agent_completed — backend 成功且 report.json 合法").
+//
+// Red-phase note (wf-295 Step 1): T-295-W3-1 fails because runAll rejects
+// with ENOENT; T-295-W4-1 fails because agent_completed exists in the event
+// stream. Both pass after Step 2 moves the report read + validation ahead of
+// the completion signal and wraps readFile in the ValidationError try.
+
+describe("runAll — missing report.json and invalid-report event ordering (Issue #295 W3/W4)", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+    ReportingBackend.calls = [];
+    NoSchemaBackend.calls = 0;
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.projectRoot, { recursive: true, force: true });
+  });
+
+  it("routes a backend success with no report.json through recordAgentFailure instead of a bare ENOENT rejection (T-295-W3-1, UC-295-008)", async () => {
+    const backend = new NoReportBackend();
+
+    // Must resolve (no rejection) with the job terminal.
+    // NOTE (wf-295 Step 2 code-fact correction): SIMPLE_AGENT_YAML declares no
+    // retry config, so the failure-model default applies — on_exceeded.status
+    // defaults to "blocked" (mvp-contracts §2.6: report 缺失 → failed 或
+    // blocked，按 gate 处理). The W3 fix routes the ENOENT through
+    // recordAgentFailure; the terminal status follows the existing policy
+    // machinery, so the job ends "blocked" (job_blocked), not "failed".
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      SIMPLE_AGENT_YAML,
+      "simple-agent",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("blocked");
+
+    const state = await readStateSnapshot(runDir);
+    expect(state.status).toBe("blocked");
+    expect(state.jobs["intake"]!.status).toBe("blocked");
+
+    const events = await readEvents(runDir);
+    // The failure is reported as a step failure — not a success signal.
+    expect(events.some((e) => e.type === "agent_completed")).toBe(false);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(failedStep).toBeDefined();
+    expect(String(failedStep!.payload.reason)).toContain("report.json");
+  });
+
+  it("emits no agent_completed before failing an invalid report (T-295-W4-1, UC-295-009)", async () => {
+    const backend = new ReportingBackend({
+      outputs: { verdict: "bogus" },
+      artifacts: [],
+      signals: [],
+      summary: "ok",
+    });
+
+    const { summary, runDir } = await runWithBackend(
+      sandbox,
+      ENUM_OUTPUTS_YAML,
+      "enum-outputs",
+      backend,
+    );
+
+    expect(summary.jobs[0]!.status).toBe("failed");
+
+    const events = await readEvents(runDir);
+    expect(events.some((e) => e.type === "agent_completed")).toBe(false);
+    expect(events.some((e) => e.type === "agent_report_accepted")).toBe(false);
+    const failedStep = events.find((e) => e.type === "step_failed");
+    expect(failedStep).toBeDefined();
+    expect(String(failedStep!.payload.reason)).toContain(
+      'Output "verdict" value "bogus" is not in declared values'
+    );
+
+    // The "completed" system log must not be written for an invalid report
+    // (the "started" line is fine).
+    const systemTexts = await readSystemLogTexts(runDir);
+    expect(systemTexts.some((t) => t.includes("started"))).toBe(true);
+    expect(systemTexts.some((t) => t.includes("completed"))).toBe(false);
   });
 });

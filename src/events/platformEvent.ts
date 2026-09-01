@@ -11,6 +11,8 @@
 
 import type { ZigmaFlowEvent } from "./eventTypes.js";
 
+export const FLOW_PLATFORM_EVENT_CONTRACT_VERSION = 1;
+
 // ---------------------------------------------------------------------------
 // FlowPlatformEvent
 // ---------------------------------------------------------------------------
@@ -24,6 +26,8 @@ export type FlowPlatformEventType =
   | "run.cancelled";
 
 export interface FlowPlatformEvent {
+  contractVersion: number;
+  producer: "zigma-flow";
   eventId: string;
   runId: string;
   type: FlowPlatformEventType;
@@ -168,6 +172,8 @@ export function mapZigmaFlowEventToPlatformEvent(
   const platformType = EVENT_TYPE_MAP[event.type] ?? "run.progress";
 
   return {
+    contractVersion: FLOW_PLATFORM_EVENT_CONTRACT_VERSION,
+    producer: "zigma-flow",
     eventId: derivePlatformEventId(event.run_id, event.id),
     runId: event.run_id,
     type: platformType,

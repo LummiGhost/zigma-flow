@@ -129,6 +129,14 @@ describe("mapZigmaFlowEventToPlatformEvent — type mapping", () => {
 describe("mapZigmaFlowEventToPlatformEvent — output shape", () => {
   const runId = "20260714-0001";
 
+  it("identifies the versioned Flow producer contract", () => {
+    const result = mapZigmaFlowEventToPlatformEvent(
+      makeEvent("evt-1", "run_created", runId),
+    );
+    expect(result.contractVersion).toBe(1);
+    expect(result.producer).toBe("zigma-flow");
+  });
+
   it("produces correct eventId", () => {
     const result = mapZigmaFlowEventToPlatformEvent(
       makeEvent("evt-042", "run_created", runId),

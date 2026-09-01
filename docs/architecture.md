@@ -70,6 +70,11 @@
 
 ## 1. 设计结论
 
+平台调用方应使用 [Platform Integration Contract](platform-integration-contract.md)
+作为 Core/Execution Host 与 Flow 之间的版本化 published language。该契约
+明确区分当前 v1 CLI/JSON 行为与 M1 尚需补齐的可靠投递、外部取消确认和
+Windows 进程回收语义。
+
 Zigma Flow MVP 采用本地单进程 TypeScript CLI 的模块化单体架构。核心运行时以 Workflow、Job、Step、Skill Pack、Artifact、Signal、Gate 和 Event 为领域模型，Engine 是唯一状态推进者，Agent 只能提交结构化结果和 signal，不能直接修改 workflow 状态。
 
 架构目标不是构建通用工作流平台，而是验证一个本地 Agent Workflow Runtime 的最小可行内核：

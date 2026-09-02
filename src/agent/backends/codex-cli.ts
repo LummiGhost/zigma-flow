@@ -11,6 +11,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { execa } from "execa";
+import { waitForSubprocess } from "../../process/lifecycle.js";
 
 import type {
   AgentBackend,
@@ -99,13 +100,26 @@ export class CodexCliBackend implements AgentBackend {
 
     const startedAt = Date.now();
     try {
-      const result = await execa(this.command, args, {
+      const subprocess = execa(this.command, args, {
         cwd: projectRoot,
-        timeout: this.timeout,
         env: { ...process.env, ...this.env } as Record<string, string>,
         input: fullPrompt,
-        ...(signal !== undefined ? { cancelSignal: signal } : {}),
+        ...(process.platform !== "win32" ? { detached: true } : {}),
       });
+      const settled = await waitForSubprocess(subprocess, {
+        timeoutMs: this.timeout,
+        ...(signal !== undefined ? { signal } : {}),
+      });
+      const { result } = settled;
+      if (settled.cancelled || settled.timedOut) {
+        throw Object.assign(new Error(settled.cancelled ? "Agent execution was cancelled." : "Agent execution timed out."), {
+          isCanceled: settled.cancelled,
+          timedOut: settled.timedOut,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode,
+        });
+      }
       const durationMs = Date.now() - startedAt;
       await writeFile(stdoutPath, result.stdout ?? "", "utf-8");
       await writeFile(stderrPath, result.stderr ?? "", "utf-8");

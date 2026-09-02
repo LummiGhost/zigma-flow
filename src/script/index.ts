@@ -4,11 +4,12 @@
  * Reference: docs/phases/p6-script-step/02-development-plan.md §4 (WF-P6-RUNNER)
  */
 
-import { execSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 
 import { execa } from "execa";
 
 import { ScriptError } from "../utils/errors.js";
+import { waitForSubprocess } from "../process/lifecycle.js";
 
 // ---------------------------------------------------------------------------
 // Port interface
@@ -28,6 +29,8 @@ export interface RunCommandOptions {
   env?: Record<string, string>;
   /** Upper bound on wall-clock duration in milliseconds; no timeout if omitted. */
   timeoutMs?: number;
+  /** Abort the command and wait for its process tree to exit. */
+  signal?: AbortSignal;
   /**
    * Callback invoked for each stdout chunk in real time (Issue #280).
    * Receives raw text chunks as they arrive from the subprocess.
@@ -94,9 +97,7 @@ async function probeSpawn(command: string, cwd: string | undefined, env: NodeJS.
     child.on("spawn", () => {
       // Spawn succeeded — kill the probe and report no error.
       if (!settled) {
-        settled = true;
         child.kill();
-        resolve(null);
       }
     });
 
@@ -108,44 +109,6 @@ async function probeSpawn(command: string, cwd: string | undefined, env: NodeJS.
       }
     });
   });
-}
-
-/**
- * Kill a process and its entire process tree cross-platform.
- *
- * On Windows, Node's ChildProcess.kill() only terminates the immediate child
- * (cmd.exe when shell:true), leaving any grandchild processes (e.g. node.exe)
- * running as orphans. `taskkill /F /T` terminates the tree recursively.
- *
- * On POSIX, when the subprocess was spawned with `detached: true` it becomes
- * the process group leader (PGID = PID). `process.kill(-pid, "SIGKILL")`
- * delivers SIGKILL to every process in that group — the shell AND all its
- * grandchildren — so execa's stdio pipes close immediately.
- */
-function killProcessTree(subprocess: { readonly pid?: number; kill(): boolean }): void {
-  const pid = subprocess.pid;
-  if (process.platform === "win32") {
-    if (pid !== undefined) {
-      try {
-        execSync(`taskkill /F /T /PID ${pid}`, { stdio: "ignore" });
-      } catch {
-        // Process was already terminated — ignore.
-      }
-    }
-  } else {
-    if (pid !== undefined) {
-      try {
-        // Kill the entire process group: -pid targets all members of the group
-        // whose PGID equals pid (set via detached:true at spawn time).
-        process.kill(-pid, "SIGKILL");
-      } catch {
-        // Process already terminated or no such group — fall back.
-        subprocess.kill();
-      }
-    } else {
-      subprocess.kill();
-    }
-  }
 }
 
 export class ExecaProcessRunner implements ProcessRunner {
@@ -179,11 +142,8 @@ export class ExecaProcessRunner implements ProcessRunner {
     // (cmd.exe on Windows), leaving grandchild processes alive until the
     // forceKillAfterDelay fires — which takes 5s by default and races against
     // the vitest test timeout.
-    let timedOut = false;
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-
     // On POSIX: detached:true makes the subprocess the process group leader
-    // (PGID = child PID). killProcessTree() can then send -pid to kill the
+    // (PGID = child PID). The shared lifecycle can then send -pid to kill the
     // entire group (shell + grandchildren) atomically. On Windows taskkill
     // handles the tree walk, so detached must stay false (it would open a new
     // console window otherwise).
@@ -215,19 +175,15 @@ export class ExecaProcessRunner implements ProcessRunner {
       });
     }
 
-    if (opts.timeoutMs !== undefined) {
-      timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        killProcessTree(subprocess);
-      }, opts.timeoutMs);
-    }
-
     try {
-      const result = await subprocess;
+      const { result, timedOut, cancelled } = await waitForSubprocess(subprocess, {
+        ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      });
       const endedAt = new Date().toISOString();
 
       const isTimedOut = timedOut || result.timedOut === true;
-      const exitCode = isTimedOut ? 124 : (result.exitCode ?? 0);
+      const exitCode = isTimedOut ? 124 : cancelled ? 130 : (result.exitCode ?? 0);
       const stdout = typeof result.stdout === "string" ? result.stdout : "";
       const stderr = typeof result.stderr === "string" ? result.stderr : "";
 
@@ -246,8 +202,6 @@ export class ExecaProcessRunner implements ProcessRunner {
         `Failed to spawn process: ${opts.command}`,
         { cause: err }
       );
-    } finally {
-      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
     }
   }
 }

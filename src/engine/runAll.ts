@@ -1402,6 +1402,7 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     jobId,
     clock,
     ...(jobCwd !== undefined ? { jobCwd } : {}),
+    ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     // Real-time stdout/stderr forwarding (Issue #280)
     ...(logWriter
       ? {
@@ -2001,6 +2002,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
     // ── Create per-job AbortControllers for fail-fast (AD-P14-005) ───────
 
     const jobControllers = new Map<string, AbortController>();
+    const externalAbortForwarders = new Map<string, () => void>();
     for (const j of jobsToRun) {
       // Merge external signal with per-job controller
       const ctrl = new AbortController();
@@ -2008,7 +2010,13 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
       // Forward external abort to per-job controller
       if (signal !== undefined) {
-        signal.addEventListener("abort", () => ctrl.abort(), { once: true });
+        const forwardAbort = (): void => ctrl.abort();
+        externalAbortForwarders.set(j.jobId, forwardAbort);
+        if (signal.aborted) {
+          forwardAbort();
+        } else {
+          signal.addEventListener("abort", forwardAbort, { once: true });
+        }
       }
     }
 
@@ -2065,6 +2073,11 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
     // Wait for all jobs in the batch to settle
     const settled = await Promise.allSettled(jobPromises);
+    if (signal !== undefined) {
+      for (const forwardAbort of externalAbortForwarders.values()) {
+        signal.removeEventListener("abort", forwardAbort);
+      }
+    }
 
     // Log any rejections (these indicate bugs in executeJobOnce, not
     // expected agent/script failures which are returned as structured
@@ -2075,6 +2088,36 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
           `Job promise rejected (unexpected error in executeJobOnce): ${String(result.reason)}`,
         );
       }
+    }
+
+    // External cancellation is acknowledged only after every job promise has
+    // settled, which in turn means every owned child process has been reaped.
+    // Agent steps may already have recorded this transition; script/check
+    // batches converge here on the same run-level terminal boundary.
+    if (signal?.aborted) {
+      const cancelledState = await stateStore.readSnapshot(runDir);
+      if (cancelledState !== null && cancelledState.status !== "cancelled") {
+        const cancelledEventId = await nextSequentialEventId(runDir, eventWriter);
+        const cancelledEvent: ZigmaFlowEvent = {
+          id: cancelledEventId,
+          type: "run_cancelled",
+          run_id: runId,
+          timestamp: clock.now(),
+          producer: "engine",
+          job: null,
+          step: null,
+          attempt: null,
+          payload: { reason: "Run cancelled by caller" },
+        };
+        await eventWriter.appendEvent(runDir, cancelledEvent);
+        onEvent?.(cancelledEvent);
+        await stateStore.updateState(runDir, (current) => ({
+          ...current,
+          status: "cancelled",
+          last_event_id: cancelledEventId,
+        }));
+      }
+      break;
     }
 
     // ── Post-batch: human gate check (WF-P15-ENGINE, AD-P15-007) ─────────

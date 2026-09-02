@@ -26,7 +26,7 @@
  * `process.execPath` so PATH lookups cannot interfere.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -169,4 +169,53 @@ describe("ExecaProcessRunner", () => {
       expect((err as ScriptError).kind).toBe("ScriptError");
     }
   });
+
+  it("waits for an aborted subprocess to exit before resolving", async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+    const startedAt = Date.now();
+
+    const result = await runner.run({
+      command: nodeCommand("setTimeout(() => {}, 5000)"),
+      signal: controller.signal,
+    });
+
+    expect(result.exitCode).toBe(130);
+    expect(result.timedOut).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(4000);
+  }, 8000);
+
+  it.skipIf(process.platform !== "win32")(
+    "terminates and reaps a Windows subprocess tree before acknowledging abort",
+    async () => {
+      const treeDir = await mkdtemp(join(tmpdir(), "zigma-runner-tree-"));
+      const markerPath = join(treeDir, "late-marker.txt");
+      const childPath = join(treeDir, "child.cjs");
+      const parentPath = join(treeDir, "parent.cjs");
+      await writeFile(
+        childPath,
+        `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "late"), 1200);`,
+        "utf-8",
+      );
+      await writeFile(
+        parentPath,
+        `require("node:child_process").spawn(process.execPath, [${JSON.stringify(childPath)}], { stdio: "ignore" }); setInterval(() => {}, 1000);`,
+        "utf-8",
+      );
+
+      try {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), 250);
+        await runner.run({
+          command: `"${process.execPath}" "${parentPath}"`,
+          signal: controller.signal,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await expect(access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await rm(treeDir, { recursive: true, force: true });
+      }
+    },
+    8000,
+  );
 });

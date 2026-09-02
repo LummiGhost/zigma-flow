@@ -2222,6 +2222,32 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
   let finalState = await stateStore.readSnapshot(runDir);
 
+  // Also cover cancellation observed before a batch starts (for example an
+  // already-aborted signal). The terminal state is persisted before summary
+  // construction, so cancellation acknowledgement is never ambiguous.
+  if (signal?.aborted && finalState !== null && finalState.status !== "cancelled") {
+    const cancelledEventId = await nextSequentialEventId(runDir, eventWriter);
+    const cancelledEvent: ZigmaFlowEvent = {
+      id: cancelledEventId,
+      type: "run_cancelled",
+      run_id: runId,
+      timestamp: clock.now(),
+      producer: "engine",
+      job: null,
+      step: null,
+      attempt: null,
+      payload: { reason: "Run cancelled by caller" },
+    };
+    await eventWriter.appendEvent(runDir, cancelledEvent);
+    onEvent?.(cancelledEvent);
+    await stateStore.updateState(runDir, (current) => ({
+      ...current,
+      status: "cancelled",
+      last_event_id: cancelledEventId,
+    }));
+    finalState = await stateStore.readSnapshot(runDir);
+  }
+
   if (finalState !== null && finalState.status !== "cancelled") {
     const deadlockedIds = Object.entries(finalState.jobs)
       .filter(([jobId, js]) => {

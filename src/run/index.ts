@@ -8,6 +8,7 @@
 import { copyFile, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { stringify } from "yaml";
 
@@ -384,6 +385,22 @@ function getWriteQueue(runDir: string): AsyncQueue {
   return queue;
 }
 
+async function replaceStateFile(tmpPath: string, statePath: string): Promise<void> {
+  const retryable = new Set(["EPERM", "EACCES", "EBUSY"]);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(tmpPath, statePath);
+      return;
+    } catch (error: unknown) {
+      const code = typeof error === "object" && error !== null && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+      if (!retryable.has(code) || attempt >= 5) throw error;
+      await delay(10 * 2 ** attempt);
+    }
+  }
+}
+
 /** Wait for all state writes currently queued for a run. */
 export async function drainStateWrites(runDir: string): Promise<void> {
   await writeQueues.get(runDir)?.drain();
@@ -434,7 +451,7 @@ export class LocalStateStore implements StateStore {
       const tmpPath = join(runDir, `state.json.tmp-${randomUUID()}`);
       const text = JSON.stringify(state, null, 2);
       await writeFile(tmpPath, text, "utf-8");
-      await rename(tmpPath, statePath);
+      await replaceStateFile(tmpPath, statePath);
     });
   }
 
@@ -452,7 +469,7 @@ export class LocalStateStore implements StateStore {
       const tmpPath = join(runDir, `state.json.tmp-${randomUUID()}`);
       const text = JSON.stringify(newState, null, 2);
       await writeFile(tmpPath, text, "utf-8");
-      await rename(tmpPath, statePath);
+      await replaceStateFile(tmpPath, statePath);
     });
   }
 

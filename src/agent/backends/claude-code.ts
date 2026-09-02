@@ -17,6 +17,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { execa } from "execa";
+import { waitForSubprocess } from "../../process/lifecycle.js";
 
 import type { AgentBackend, AgentBackendConfig, AgentExecuteOptions, AgentExecuteResult } from "../types.js";
 import { outputSchemaHash } from "../outputSchema.js";
@@ -138,12 +139,11 @@ export class ClaudeCodeBackend implements AgentBackend {
 
       const subprocess = execa(this.command, execArgs, {
         cwd: projectRoot,
-        timeout: this.timeout,
         env: mergedEnv,
         stdout: "pipe" as const,
         stderr: "pipe" as const,
-        ...(signal !== undefined ? { cancelSignal: signal } : {}),
         ...(useStdin ? { input: fullPrompt } : {}),
+        ...(process.platform !== "win32" ? { detached: true } : {}),
       });
 
       // Real-time stdout/stderr forwarding (Issue #280).
@@ -160,7 +160,20 @@ export class ClaudeCodeBackend implements AgentBackend {
         });
       }
 
-      const result = await subprocess;
+      const settled = await waitForSubprocess(subprocess, {
+        timeoutMs: this.timeout,
+        ...(signal !== undefined ? { signal } : {}),
+      });
+      const { result } = settled;
+      if (settled.cancelled || settled.timedOut) {
+        throw Object.assign(new Error(settled.cancelled ? "Agent execution was cancelled." : "Agent execution timed out."), {
+          isCanceled: settled.cancelled,
+          timedOut: settled.timedOut,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode,
+        });
+      }
 
       durationMs = Date.now() - startTime;
 

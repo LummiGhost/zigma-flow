@@ -342,6 +342,8 @@ export interface ExecuteCurrentStepOpts {
   onStdout?: (chunk: string) => void;
   /** Callback for real-time stderr chunks (Issue #280). */
   onStderr?: (chunk: string) => void;
+  /** Cancellation propagated to owned child processes. */
+  signal?: AbortSignal;
 }
 
 export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<void> {
@@ -390,6 +392,7 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       ...(jobCwd !== undefined ? { jobCwd } : {}),
       ...(opts.onStdout !== undefined ? { onStdout: opts.onStdout } : {}),
       ...(opts.onStderr !== undefined ? { onStderr: opts.onStderr } : {}),
+      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
   } else if (stepDef.type === "check") {
     const actualRunner = (opts.runner as CheckRunner | undefined) ?? new LocalCheckRunner();

@@ -171,6 +171,29 @@ describe("nextSequentialEventId — empty events.jsonl (T-SEQ-1)", () => {
   );
 });
 
+describe("nextSequentialEventId — concurrent allocation", () => {
+  let sandbox: Sandbox;
+
+  beforeEach(async () => {
+    sandbox = await makeSandbox();
+  });
+
+  afterEach(async () => {
+    await rm(sandbox.runDir, { recursive: true, force: true });
+  });
+
+  it("allocates unique monotonic IDs to concurrent callers", async () => {
+    const ids = await Promise.all(
+      Array.from({ length: 50 }, () => callNextSequentialEventId(sandbox.runDir)),
+    );
+
+    expect(new Set(ids).size).toBe(50);
+    expect(ids).toEqual(
+      Array.from({ length: 50 }, (_, index) => `evt-${String(index + 1).padStart(3, "0")}`),
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // T-SEQ-2: events.jsonl ending at evt-005 returns "evt-006"
 // ---------------------------------------------------------------------------

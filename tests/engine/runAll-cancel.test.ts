@@ -128,12 +128,14 @@ class DelayedFakeBackend implements AgentBackend {
   constructor(
     _config: AgentBackendConfig,
     private readonly delayMs: number = 500,
+    private readonly onStarted?: () => void,
   ) {}
 
   async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
     const { reportPath, signal } = opts;
 
     await mkdir(dirname(reportPath), { recursive: true });
+    this.onStarted?.();
 
     // Simulate work with a delay
     const startTime = Date.now();
@@ -196,6 +198,20 @@ class DelayedFakeBackend implements AgentBackend {
       durationMs,
     };
   }
+}
+
+function makeStartedBackend(delayMs = 10_000): {
+  backend: DelayedFakeBackend;
+  started: Promise<void>;
+} {
+  let notifyStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    notifyStarted = resolve;
+  });
+  return {
+    backend: new DelayedFakeBackend({ command: "fake" }, delayMs, notifyStarted),
+    started,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -325,15 +341,7 @@ describe("runAll — abort during backend execution (T-CANCEL-1)", () => {
 
       const controller = new AbortController();
       const capturedEvents: EventRecord[] = [];
-      const backend = new DelayedFakeBackend({ command: "fake" }, 10_000); // long delay
-
-      // Abort after a short delay to ensure backend execution has started
-      const abortPromise = new Promise<void>((resolve) => {
-        setTimeout(() => {
-          controller.abort();
-          resolve();
-        }, 50);
-      });
+      const { backend, started } = makeStartedBackend();
 
       const runAllPromise = callRunAll({
         task: "exercise cancel during execution",
@@ -350,14 +358,11 @@ describe("runAll — abort during backend execution (T-CANCEL-1)", () => {
         },
       });
 
-      await abortPromise;
+      await started;
+      controller.abort();
       const summary = await runAllPromise;
 
-      // summary.status is "cancelled" or undefined in the normal case.
-      // Under CPU-starved conditions the abort may arrive after runAll has
-      // already completed, yielding "completed" — that is a race condition,
-      // not a product bug (RISK-STABILITY-CANCEL-ASSERTION-NARROW).
-      expect(["cancelled", "completed", undefined]).toContain(summary.status);
+      expect(summary.status).toBe("cancelled");
 
       const runDir = join(sandbox.runsDir, summary.runId);
 
@@ -365,8 +370,7 @@ describe("runAll — abort during backend execution (T-CANCEL-1)", () => {
       const agentCancelled = capturedEvents.filter(
         (e) => e.type === "agent_cancelled"
       );
-      // RED-PHASE: agent_cancelled may not be emitted until Step 2
-      expect(agentCancelled.length).toBeGreaterThanOrEqual(0);
+      expect(agentCancelled).toHaveLength(1);
 
       // Find run_cancelled in captured events
       const runCancelled = capturedEvents.filter(
@@ -383,12 +387,10 @@ describe("runAll — abort during backend execution (T-CANCEL-1)", () => {
         expect(typeof cancelled.payload["reason"]).toBe("string");
       }
 
-      // If run_cancelled was emitted, verify its payload
-      if (runCancelled.length > 0) {
-        const rc = runCancelled[0]!;
-        expect(rc.producer).toBe("engine");
-        expect(typeof rc.payload["reason"]).toBe("string");
-      }
+      expect(runCancelled).toHaveLength(1);
+      const rc = runCancelled[0]!;
+      expect(rc.producer).toBe("engine");
+      expect(typeof rc.payload["reason"]).toBe("string");
     },
     // WF-V022-STABILITY: explicit 15 s per-test timeout. The DelayedFakeBackend
     // above is configured with a 10 s "should never elapse" safety delay so a
@@ -424,12 +426,9 @@ describe("runAll — state transitions to cancelled (T-CANCEL-2)", () => {
       await rm(_precreatedRunDir, { recursive: true, force: true });
 
       const controller = new AbortController();
-      const backend = new DelayedFakeBackend({ command: "fake" }, 10_000);
+      const { backend, started } = makeStartedBackend();
 
-      // Abort after short delay
-      setTimeout(() => controller.abort(), 50);
-
-      const summary = await callRunAll({
+      const runAllPromise = callRunAll({
         task: "exercise cancel state",
         workflowPath,
         runsDir: sandbox.runsDir,
@@ -440,18 +439,14 @@ describe("runAll — state transitions to cancelled (T-CANCEL-2)", () => {
         signal: controller.signal,
         maxIterations: 10,
       });
+      await started;
+      controller.abort();
+      const summary = await runAllPromise;
 
       const runDir = join(sandbox.runsDir, summary.runId);
 
-      // RED-PHASE: state.status may not be "cancelled" until Step 2
-      // If the loop just exits on abort without setting state.cancelled,
-      // the status will be undefined. Both are acceptable in red-phase.
-      // "completed" is also valid — see RISK-STABILITY-CANCEL-ASSERTION-NARROW:
-      // under CPU contention the 50 ms abort can arrive after the advance-
-      // unconditionally fix (v0.3.3) has already completed the job, leaving
-      // the run in a "completed" state before the cancel path is reached.
       const state = await readStateSnapshot(runDir);
-      expect(["cancelled", undefined, "running", "completed"]).toContain(state.status);
+      expect(state.status).toBe("cancelled");
     },
     // WF-V022-STABILITY: see T-CANCEL-1 above for rationale (15 s = 10 s
     // safety delay + 5 s arrangement headroom).
@@ -484,11 +479,9 @@ describe("runAll — cancel event chain order (T-CANCEL-3)", () => {
 
       const controller = new AbortController();
       const capturedEvents: EventRecord[] = [];
-      const backend = new DelayedFakeBackend({ command: "fake" }, 10_000);
+      const { backend, started } = makeStartedBackend();
 
-      setTimeout(() => controller.abort(), 50);
-
-      await callRunAll({
+      const runAllPromise = callRunAll({
         task: "exercise cancel chain",
         workflowPath,
         runsDir: sandbox.runsDir,
@@ -502,6 +495,9 @@ describe("runAll — cancel event chain order (T-CANCEL-3)", () => {
           capturedEvents.push(JSON.parse(JSON.stringify(e)) as EventRecord);
         },
       });
+      await started;
+      controller.abort();
+      await runAllPromise;
 
       // Find indices of the three key event types
       const invokedIdx = capturedEvents.findIndex(
@@ -616,11 +612,9 @@ describe("runAll — summary reflects cancelled state (T-CANCEL-5)", () => {
       await rm(_precreatedRunDir, { recursive: true, force: true });
 
       const controller = new AbortController();
-      const backend = new DelayedFakeBackend({ command: "fake" }, 10_000);
+      const { backend, started } = makeStartedBackend();
 
-      setTimeout(() => controller.abort(), 50);
-
-      const summary = await callRunAll({
+      const runAllPromise = callRunAll({
         task: "exercise cancel summary",
         workflowPath,
         runsDir: sandbox.runsDir,
@@ -631,6 +625,9 @@ describe("runAll — summary reflects cancelled state (T-CANCEL-5)", () => {
         signal: controller.signal,
         maxIterations: 10,
       });
+      await started;
+      controller.abort();
+      const summary = await runAllPromise;
 
       // RED-PHASE: summary structure should be valid regardless of cancel state
       expect(typeof summary.runId).toBe("string");

@@ -68,6 +68,8 @@ export interface ExecuteScriptStepOpts {
    * Receives raw text chunks as they arrive from the subprocess.
    */
   onStderr?: (chunk: string) => void;
+  /** Cancellation propagated by the run scheduler. */
+  signal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +360,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     env: { CI: "true", ...(stepDef.env ?? {}) },
     ...(opts.onStdout !== undefined ? { onStdout: opts.onStdout } : {}),
     ...(opts.onStderr !== undefined ? { onStderr: opts.onStderr } : {}),
+    ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   });
 
   // ── 7. Write stdout/stderr artifacts ─────────────────────────────────────

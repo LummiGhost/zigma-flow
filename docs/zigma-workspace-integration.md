@@ -369,6 +369,7 @@ zigma-flow 开始 managed workspace 集成前，zigma-workspace 需要提供：
 - untracked、rename、delete 和 binary changes 不丢失。
 - Agent、script、check 和 router 使用同一个 resolved workspace cwd。
 - 取消时子进程先终止并被 reap，workspace 才进入 cleanup。
+- Run 返回 terminal acknowledgement 前，Flow-owned state/event/log writer 必须 drain；abort、timeout 和 fail-fast 共用同一幂等进程树终止边界。
 - cleanup 删除失败准确表现为 cleanup_failed。
 - 最终 validation 在所有 Job 合并后的 Run workspace 上执行。
 - Windows 长路径、中文路径和文件占用场景有自动化证据。

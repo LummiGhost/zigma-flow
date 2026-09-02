@@ -13,6 +13,19 @@ import { FilesystemError } from "../utils/index.js";
 import { nextEventId } from "./eventTypes.js";
 import { JsonlEventWriter } from "./appendEvent.js";
 import type { EventWriter } from "./appendEvent.js";
+import { AsyncQueue } from "../run/asyncQueue.js";
+
+const sequenceQueues = new Map<string, AsyncQueue>();
+const lastAllocatedCounters = new Map<string, number>();
+
+function getSequenceQueue(runDir: string): AsyncQueue {
+  let queue = sequenceQueues.get(runDir);
+  if (queue === undefined) {
+    queue = new AsyncQueue();
+    sequenceQueues.set(runDir, queue);
+  }
+  return queue;
+}
 
 /**
  * Read the last event from events.jsonl in `runDir` and return the next
@@ -31,31 +44,42 @@ export async function nextSequentialEventId(
   runDir: string,
   eventWriter?: EventWriter,
 ): Promise<string> {
-  const writer: EventWriter = eventWriter ?? new JsonlEventWriter();
-  const lastId: string | null = await writer.readLastEventId(runDir);
+  return getSequenceQueue(runDir).run(async () => {
+    const allocated = lastAllocatedCounters.get(runDir);
+    if (allocated !== undefined) {
+      const nextCounter = allocated + 1;
+      lastAllocatedCounters.set(runDir, nextCounter);
+      return nextEventId(nextCounter);
+    }
 
-  if (lastId === null) {
-    return nextEventId(1); // "evt-001"
-  }
+    const writer: EventWriter = eventWriter ?? new JsonlEventWriter();
+    const lastId: string | null = await writer.readLastEventId(runDir);
+
+    if (lastId === null) {
+      lastAllocatedCounters.set(runDir, 1);
+      return nextEventId(1); // "evt-001"
+    }
 
   // Runtime guard: lastId could be undefined at runtime if the JSON was valid
   // but had no `id` field (readLastEventId casts JSON.parse result).
-  if (typeof (lastId as string | undefined) !== "string") {
-    throw new FilesystemError(
-      "events.jsonl last line does not contain an id field",
-      { details: { runDir } },
-    );
-  }
+    if (typeof (lastId as string | undefined) !== "string") {
+      throw new FilesystemError(
+        "events.jsonl last line does not contain an id field",
+        { details: { runDir } },
+      );
+    }
 
   // Parse the numeric suffix from "evt-NNN"
-  const evtMatch = lastId.match(/^evt-(\d+)$/);
-  if (evtMatch === null) {
-    throw new FilesystemError(
-      `events.jsonl last line has invalid event id format: "${lastId}" — expected "evt-<N>"`,
-      { details: { lastId } },
-    );
-  }
+    const evtMatch = lastId.match(/^evt-(\d+)$/);
+    if (evtMatch === null) {
+      throw new FilesystemError(
+        `events.jsonl last line has invalid event id format: "${lastId}" — expected "evt-<N>"`,
+        { details: { lastId } },
+      );
+    }
 
-  const counter = parseInt(evtMatch[1]!, 10);
-  return nextEventId(counter + 1);
+    const counter = parseInt(evtMatch[1]!, 10) + 1;
+    lastAllocatedCounters.set(runDir, counter);
+    return nextEventId(counter);
+  });
 }

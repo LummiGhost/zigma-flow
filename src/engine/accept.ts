@@ -30,7 +30,7 @@ import { parse as parseYaml } from "yaml";
 
 import { artifactStepDir } from "../artifact/artifactPaths.js";
 import { appendArtifactIndex, artifactId, artifactFileRelativePath } from "../artifact/index.js";
-import { nextEventId as formatEventId } from "../events/index.js";
+import { nextSequentialEventId } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, JobState, RunState } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
@@ -755,9 +755,7 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
 
   // ── 9. Emit agent_report_accepted event ───────────────────────────────────
 
-  const lastId = await eventWriter.readLastEventId(runDir);
-  const counter = lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
-  const acceptedEventId = formatEventId(counter + 1);
+  const acceptedEventId = await nextSequentialEventId(runDir, eventWriter);
 
   // Compute run-relative report artifact path (forward slashes for portability)
   const reportArtifact = relative(runDir, reportPath).replace(/\\/g, "/");

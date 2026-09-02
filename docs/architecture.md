@@ -593,8 +593,8 @@ MVP 采用 event log 加 state snapshot：
 P14 引入并发调度，让 read-only jobs 在 `run-all` 中并行执行。v0.7 增加 Concurrency Group 控制层。核心设计原则：
 
 1. **Scheduler 是纯函数**（`src/engine/scheduler.ts`）：`selectExecutable(state, workflow, config)` 不执行任何 IO。它从 `RunState` 和 `WorkflowDefinition` 中计算出一个 `ExecutableBatch`。输入决定输出——无文件访问、无异步行为。
-2. **Read-only 并行，writable 串行**：Read-only jobs 可以同时运行，上限由 `parallelism` 控制。Writable jobs 最多同时运行一个（AD-P14-002）。判定依据是 job 的 `workspace.mode` 字段：`"read-only"` 以外的所有值视为 writable。
-3. **AsyncQueue 提供 per-runDir 写串行**（`src/run/asyncQueue.ts`）：`LocalStateStore.writeSnapshot` 和 `JsonlEventWriter.appendEvent` 各自通过 per-runDir 的 AsyncQueue 排队。多个 job 并发写入同一 run 目录时，写操作按 FIFO 顺序执行，不会出现部分写或行交错。
+2. **当前共享目录下 read-only 并行、writable 串行**：Read-only jobs 可以同时运行，上限由 `parallelism` 控制。当前 external/shared workspace 模式下 Writable jobs 最多同时运行一个（AD-P14-002）。引入 managed workspace 后，位于不同 Job attempt workspace 的 writable jobs 可以并行执行，但回收到 Run workspace 的 integration 必须串行。判定依据最终以 invocation execution context 为准；`job.workspace.mode` 仅是迁移期兼容输入。
+3. **AsyncQueue 提供 per-runDir 写串行**（`src/run/asyncQueue.ts`）：`LocalStateStore.writeSnapshot` 和 `JsonlEventWriter.appendEvent` 各自通过 per-runDir 的 AsyncQueue 排队。并行 executor 提交局部 job 结果时必须使用 `updateState`，在队列内合并到最新快照，禁止用启动时旧快照覆盖 peer job。Windows 原子替换遇到短暂文件占用时执行有界重试。
 4. **`updateState` 原子 read-modify-write**：AsyncQueue 内调用 `updateState(fn)`，其中 `fn` 以当前 state 快照为输入，返回新 state。read-modify-write 在同一队列任务中连续完成，不会被其他写操作打断。
 5. **Event ID 全局单调**：`nextSequentialEventId` 通过 `events.jsonl` 确定下一个 ID。同批次所有并发 job 都经过同一个 AsyncQueue 写事件，因此事件 ID 仍是全局严格递增的。
 6. **`batch_id` 事件分组**：每个调度批次生成一个 `randomUUID()` 作为 `batch_id`，该批次所有事件（`step_started`、`step_completed`、`agent_invoked` 等）的 payload 都包含此 ID。回放工具可按 `batch_id` 分组，识别同批次并发 job。

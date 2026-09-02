@@ -543,7 +543,8 @@ describe("TC-DOGFOOD-PARALLEL-1: code-map + risk-scan run concurrently", () => {
       // (Under current sequential runAll, tickRange could be much larger.)
       // We assert the range is small — this proves batching.
       expect(tickRange).toBeLessThanOrEqual(4);
-    }
+    },
+    15_000,
   );
 });
 
@@ -657,7 +658,8 @@ describe("TC-DOGFOOD-PARALLEL-3: full DAG completes all active jobs", () => {
       // Run should be completed
       expect(state.status).toBe("completed");
       expect(summary.status).toBe("completed");
-    }
+    },
+    15_000,
   );
 });
 

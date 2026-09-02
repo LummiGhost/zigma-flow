@@ -138,3 +138,41 @@ describe("AsyncQueue result passthrough (UC-QUEUE-RESULT)", () => {
     expect(result).toEqual({ key: "value", num: 42, nested: { flag: true } });
   });
 });
+
+describe("AsyncQueue drain", () => {
+  it("waits for work queued before the drain call", async () => {
+    const queue = new AsyncQueue();
+    const completed: number[] = [];
+    void queue.run(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      completed.push(1);
+    });
+    void queue.run(async () => {
+      completed.push(2);
+    });
+
+    await queue.drain();
+
+    expect(completed).toEqual([1, 2]);
+  });
+
+  it("is idempotent when empty or already drained", async () => {
+    const queue = new AsyncQueue();
+    await queue.drain();
+    await queue.run(async () => 1);
+    await queue.drain();
+    await queue.drain();
+  });
+
+  it("still drains after a queued task rejects", async () => {
+    const queue = new AsyncQueue();
+    const failed = queue.run(async () => {
+      throw new Error("write failed");
+    });
+    const completed = queue.run(async () => "after failure");
+
+    await expect(failed).rejects.toThrow("write failed");
+    await queue.drain();
+    await expect(completed).resolves.toBe("after failure");
+  });
+});

@@ -72,6 +72,8 @@ export {
 } from "./eventTypes.js";
 
 export {
+  disposeEventWriter,
+  drainEventWrites,
   JsonlEventWriter,
   type EventWriter,
   type WorkflowEvent,

@@ -54,6 +54,21 @@ function getAppendQueue(runDir: string): AsyncQueue {
   return queue;
 }
 
+/** Wait for all event appends currently queued for a run. */
+export async function drainEventWrites(runDir: string): Promise<void> {
+  await appendQueues.get(runDir)?.drain();
+}
+
+/** Drain and release the per-run event queue. */
+export async function disposeEventWriter(runDir: string): Promise<void> {
+  const queue = appendQueues.get(runDir);
+  if (queue === undefined) return;
+  await queue.drain();
+  if (appendQueues.get(runDir) === queue) {
+    appendQueues.delete(runDir);
+  }
+}
+
 // JsonlEventWriter — append-only JSONL implementation
 export class JsonlEventWriter implements EventWriter {
   async appendEvent(runDir: string, event: ZigmaFlowEvent): Promise<void> {

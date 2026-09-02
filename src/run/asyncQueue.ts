@@ -33,4 +33,9 @@ export class AsyncQueue {
 
     return result;
   }
+
+  /** Wait until every task queued before this call has settled. */
+  async drain(): Promise<void> {
+    await this._tail;
+  }
 }

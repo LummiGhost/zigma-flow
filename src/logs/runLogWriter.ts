@@ -45,14 +45,24 @@ export class RunLogWriter {
     return writer;
   }
 
-  /** Remove the singleton writer (e.g. after run completes). */
-  static dispose(runDir: string): void {
-    writers.delete(runDir);
+  /** Drain pending writes, then remove the singleton writer. */
+  static async dispose(runDir: string): Promise<void> {
+    const writer = writers.get(runDir);
+    if (writer === undefined) return;
+    await writer.drain();
+    if (writers.get(runDir) === writer) {
+      writers.delete(runDir);
+    }
   }
 
   /** Current counter value (last written id). */
   get lastId(): number {
     return this.counter;
+  }
+
+  /** Wait until all writes queued so far have settled. */
+  async drain(): Promise<void> {
+    await this.queue.drain();
   }
 
   /**

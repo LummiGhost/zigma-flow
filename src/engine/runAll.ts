@@ -23,7 +23,7 @@ import type { AgentBackend } from "../agent/index.js";
 import { compileAgentOutputSchema, outputSchemaHash } from "../agent/outputSchema.js";
 import type { StepBackendOverride } from "../agent/config.js";
 import { buildContext } from "../context/index.js";
-import type { ZigmaFlowEvent } from "../events/index.js";
+import { drainEventWrites, type ZigmaFlowEvent } from "../events/index.js";
 import { nextSequentialEventId } from "../events/sequence.js";
 import { mapZigmaFlowEventToPlatformEvent } from "../events/platformEvent.js";
 import type { FlowPlatformEvent } from "../events/platformEvent.js";
@@ -35,6 +35,8 @@ import {
 } from "../prompt/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import {
+  AsyncQueue,
+  drainStateWrites,
   JsonlEventWriter,
   LocalStateStore,
   SystemClock,
@@ -1622,14 +1624,20 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
   // Clamp parallelism to at least 1
   const parallelism = Math.max(1, rawParallelism ?? 4);
 
-  // ── Event sink: fire-and-forget write to event sink file ───────────────
+  // ── Event sink: ordered writes drained before runAll returns ───────────
+
+  const eventSinkQueue = new AsyncQueue();
 
   function writeToEventSink(e: ZigmaFlowEvent): void {
     if (eventSinkPath === undefined) return;
     try {
       const platformEvent = mapZigmaFlowEventToPlatformEvent(e);
-      appendFile(eventSinkPath, JSON.stringify(platformEvent) + "\n", "utf-8").catch(() => {
-        // Best-effort: silently drop sink write failures
+      void eventSinkQueue.run(async () => {
+        try {
+          await appendFile(eventSinkPath, JSON.stringify(platformEvent) + "\n", "utf-8");
+        } catch {
+          // Best-effort: silently drop sink write failures
+        }
       });
     } catch {
       // Best-effort
@@ -2325,6 +2333,16 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         : `Run ${runId} finished (max iterations reached)`,
     );
   }
+
+  // Real-time log/event callbacks enqueue writes synchronously. Their I/O may
+  // still be pending, so make completion a quiescence boundary for consumers
+  // that immediately archive or delete the run directory.
+  await Promise.all([
+    drainEventWrites(runDir),
+    drainStateWrites(runDir),
+    logWriter.drain(),
+    eventSinkQueue.drain(),
+  ]);
 
   const jobs = Object.entries(finalState?.jobs ?? {}).map(([id, js]) => ({
     id,

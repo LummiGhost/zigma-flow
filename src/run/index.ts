@@ -384,6 +384,21 @@ function getWriteQueue(runDir: string): AsyncQueue {
   return queue;
 }
 
+/** Wait for all state writes currently queued for a run. */
+export async function drainStateWrites(runDir: string): Promise<void> {
+  await writeQueues.get(runDir)?.drain();
+}
+
+/** Drain and release the per-run state queue. */
+export async function disposeStateStore(runDir: string): Promise<void> {
+  const queue = writeQueues.get(runDir);
+  if (queue === undefined) return;
+  await queue.drain();
+  if (writeQueues.get(runDir) === queue) {
+    writeQueues.delete(runDir);
+  }
+}
+
 export class LocalStateStore implements StateStore {
   async readSnapshot(runDir: string): Promise<RunState | null> {
     const statePath = join(runDir, "state.json");

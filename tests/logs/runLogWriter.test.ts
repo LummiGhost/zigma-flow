@@ -123,12 +123,20 @@ describe("RunLogWriter", () => {
     expect(w1).not.toBe(w3);
   });
 
-  test("dispose removes singleton", () => {
+  test("dispose drains pending writes before removing singleton", async () => {
     const w1 = RunLogWriter.forRun(runDir, runId);
-    RunLogWriter.dispose(runDir);
+    void w1.writeSystem("pending");
+    await RunLogWriter.dispose(runDir);
+    const content = await readFile(join(runDir, "run.log.jsonl"), "utf-8");
+    expect(content).toContain("pending");
     const w2 = RunLogWriter.forRun(runDir, runId);
     expect(w1).not.toBe(w2);
     expect(w2.lastId).toBe(0); // fresh counter
+  });
+
+  test("dispose is idempotent when no writer is pending", async () => {
+    await RunLogWriter.dispose(runDir);
+    await RunLogWriter.dispose(runDir);
   });
 
   test("writeSystem with attribution", async () => {

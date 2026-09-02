@@ -509,17 +509,13 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
 
   if (report.status !== undefined && stepDef?.returns?.status) {
     // Write outputs to state first (pipeline step 2)
-    const stateWithOutputs: RunState = {
-      ...state,
+    await stateStore.updateState(runDir, (current) => ({
+      ...current,
       jobs: {
-        ...state.jobs,
-        [jobId]: {
-          ...jobState,
-          outputs: normalizedOutputs,
-        },
+        ...current.jobs,
+        [jobId]: { ...current.jobs[jobId]!, outputs: normalizedOutputs },
       },
-    };
-    await stateStore.writeSnapshot(runDir, stateWithOutputs);
+    }));
 
     // ── 3b. Apply context patches (AD-P13-013 pipeline step 3) ────────────
     if (report.context_patches && report.context_patches.length > 0) {
@@ -573,17 +569,13 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
         const action = valueMap[outputValue]!;
 
         // Persist outputs to state before dispatch
-        const stateWithOutputs: RunState = {
-          ...state,
+        await stateStore.updateState(runDir, (current) => ({
+          ...current,
           jobs: {
-            ...state.jobs,
-            [jobId]: {
-              ...jobState,
-              outputs: normalizedOutputs,
-            },
+            ...current.jobs,
+            [jobId]: { ...current.jobs[jobId]!, outputs: normalizedOutputs },
           },
-        };
-        await stateStore.writeSnapshot(runDir, stateWithOutputs);
+        }));
 
         // Apply context patches if present
         if (report.context_patches && report.context_patches.length > 0) {
@@ -677,17 +669,13 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
     // applyRoutingAction re-reads the snapshot internally, so we write outputs
     // to disk first so they are included in the state it reads and spreads.
 
-    const stateWithOutputs: RunState = {
-      ...state,
+    await stateStore.updateState(runDir, (current) => ({
+      ...current,
       jobs: {
-        ...state.jobs,
-        [jobId]: {
-          ...jobState,
-          outputs: normalizedOutputs,
-        },
+        ...current.jobs,
+        [jobId]: { ...current.jobs[jobId]!, outputs: normalizedOutputs },
       },
-    };
-    await stateStore.writeSnapshot(runDir, stateWithOutputs);
+    }));
 
     // ── 3b. Apply context patches (AD-P13-013 pipeline step 3) ────────────
     if (report.context_patches && report.context_patches.length > 0) {
@@ -742,17 +730,13 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
 
   // ── 7. Persist outputs to job state (before context patches) ──────────────
 
-  const outputsState: RunState = {
-    ...state,
+  await stateStore.updateState(runDir, (current) => ({
+    ...current,
     jobs: {
-      ...state.jobs,
-      [jobId]: {
-        ...jobState,
-        outputs: normalizedOutputs,
-      },
+      ...current.jobs,
+      [jobId]: { ...current.jobs[jobId]!, outputs: normalizedOutputs },
     },
-  };
-  await stateStore.writeSnapshot(runDir, outputsState);
+  }));
 
   // ── 8. Apply context patches (AD-P13-013 pipeline step 3) ────────────────
 
@@ -824,15 +808,14 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
     outputs: normalizedOutputs,
   };
 
-  const intermediateState: RunState = {
-    ...latestState,
+  await stateStore.updateState(runDir, (current) => ({
+    ...current,
     last_event_id: acceptedEventId,
     jobs: {
-      ...latestState.jobs,
-      [jobId]: updatedJobState,
+      ...current.jobs,
+      [jobId]: { ...current.jobs[jobId]!, ...updatedJobState },
     },
-  };
-  await stateStore.writeSnapshot(runDir, intermediateState);
+  }));
 
   // ── 10. Delegate to advanceJob (lazy import, avoids circular dependency) ───
 

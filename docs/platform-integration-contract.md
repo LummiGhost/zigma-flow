@@ -307,8 +307,8 @@ contract version and capability set must both match.
 | Event ID/type/envelope | `tests/events/platformEvent.test.ts` | Durable projection flush and at-least-once delivery: M1/M2 |
 | Resume command envelope | `tests/commands/resume-json.test.ts` | Host retry/duplicate integration: M2 |
 | Abort command envelope | `tests/commands/abort-json.test.ts` | Out-of-process termination acknowledgement: M1/M2 |
-| In-process cancellation | `tests/engine/runAll-cancel.test.ts`, `tests/engine/runAll-events.test.ts` | Deterministic full-suite and Windows reaping/soak evidence: M1 |
-| Parallel scheduling | `tests/dogfood/run-all-parallel.test.ts` | Repeated mixed-load soak with cancellation: M1/M4 |
+| In-process cancellation | `tests/engine/runAll-cancel.test.ts`, `tests/engine/runAll-events.test.ts`, `tests/process/lifecycle.test.ts` | Deterministic cancellation and process-tree reaping are gated by Windows CI; see `docs/windows-lifecycle-soak.md` |
+| Parallel scheduling | `tests/engine/runAll-concurrent.test.ts`, `tests/dogfood/run-all-parallel.test.ts` | Repeated mixed-load coverage is gated by Windows CI; see `docs/windows-lifecycle-soak.md` |
 
 This contract is accepted for M0 because current limitations are explicit and
 assigned. It does not claim M1 reliability before the missing evidence is

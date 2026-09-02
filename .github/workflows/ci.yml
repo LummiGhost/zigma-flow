@@ -66,3 +66,38 @@ jobs:
           node dist/cli.js --help
           test -f dist/templates/step-prompt.md
           test -f dist/templates/system-prompt.md
+
+  windows-lifecycle:
+    name: Windows lifecycle stress
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run bounded lifecycle stress
+        shell: pwsh
+        run: |
+          1..3 | ForEach-Object {
+            pnpm run test:lifecycle
+            if ($LASTEXITCODE -ne 0) {
+              throw "Lifecycle stress iteration $_ failed"
+            }
+          }

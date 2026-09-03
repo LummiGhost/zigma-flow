@@ -22,56 +22,16 @@
 // Supporting types
 // ---------------------------------------------------------------------------
 
-/**
- * Identity and origin of the caller invoking a Host API method.
- *
- * Every Host API method that mutates state requires a CallerContext so
- * the engine can record who triggered the action and under what authority.
- */
-export interface CallerContext {
-  /** Authenticated end-user who initiated the action. */
-  user: {
-    /** Unique user identifier (provider-agnostic). */
-    id: string;
-    /** Display name. */
-    name: string;
-    /** Contact email. */
-    email: string;
-  };
-  /** Actor that executed the action (may differ from user for service accounts). */
-  actor: Actor;
-  /** Originating system metadata. */
-  source: {
-    /** System name (e.g. "zigma-host", "zigma-cli"). */
-    system: string;
-    /** System version string. */
-    version: string;
-  };
-  /** Permission grants held by the caller. */
-  permissions: string[];
-  /** Project scope the action targets. */
-  project: {
-    /** Project identifier. */
-    id: string;
-    /** Project scope / tenant. */
-    scope: string;
-  };
-}
+import type { CallerActorV1, CallerContextV1 } from "./caller-context-contract.js";
 
 /**
- * Actor that performs a Host API action.
+ * Versioned Core-to-Flow caller identity and authority envelope.
  *
- * The actor may be the same as the authenticated user or a distinct
- * service identity (e.g. a CI system, webhook handler, or scheduled job).
+ * This type alias keeps the Host API and `--context-file` protocol on one
+ * canonical schema while preserving the public Host API type name.
  */
-export interface Actor {
-  /** Actor category. */
-  type: "user" | "system" | "service";
-  /** Unique actor identifier. */
-  id: string;
-  /** Human-readable name (optional for system actors). */
-  name?: string;
-}
+export type CallerContext = CallerContextV1;
+export type Actor = CallerActorV1;
 
 /**
  * Human gate decision values.

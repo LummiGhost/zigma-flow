@@ -6,122 +6,42 @@
  * (which is a pure-types contract file with zero runtime logic) so that engine
  * code can import from this module without coupling to the Host API contract.
  *
- * v0.7 (ISSUE #254): Extended CallerContext with platform integration fields
- * (coreTaskId, flowRunId, permissionSnapshotId/Hash, repository, branch,
- * callbackConfig) and added validateCallerContext for --context-file parsing.
+ * CallerContextV1 defines the explicit Core-to-Flow envelope. Its version is
+ * validated before an invocation can create a run or dispatch a backend.
  *
  * Reference: docs/caller-context.md, GitHub issues #190-#192, #254
  */
 
 import { UserInputError } from "./utils/index.js";
+import {
+  CALLER_CONTEXT_CONTRACT_VERSION,
+  type CallerActorV1,
+  type CallerContextV1,
+  type CallerConstraintsV1,
+  type CallerSourceV1,
+  type RepositoryContextV1,
+  type WorkspacePolicyContextV1,
+} from "./caller-context-contract.js";
 
-// ---------------------------------------------------------------------------
-// CallbackConfig
-// ---------------------------------------------------------------------------
+export {
+  CALLER_CONTEXT_CONTRACT_VERSION,
+  type CallerActorV1,
+  type CallerConstraintsV1,
+  type CallerContextV1,
+  type CallerSourceV1,
+  type RepositoryContextV1,
+  type WorkspacePolicyContextV1,
+} from "./caller-context-contract.js";
 
-/**
- * Event sink / callback configuration supplied via caller context.
- *
- * When provided, the engine forwards FlowPlatformEvents to the configured
- * destination in addition to writing the internal events.jsonl.
- */
-export interface CallbackConfig {
-  /** Sink type. "webhook" POSTs events; "file" writes NDJSON; "none" disables. */
-  type: "webhook" | "file" | "none";
-  /** Target URI (URL for webhook, absolute path for file). */
-  uri?: string;
-}
-
-// ---------------------------------------------------------------------------
-// CallerContext
-// ---------------------------------------------------------------------------
-
-/**
- * Identity and origin of the caller invoking an engine operation.
- *
- * This interface mirrors {@link import("../host-api.js").CallerContext} from the
- * Host API contract but lives in the engine layer so that implementations
- * (createRun, step executors, artifact writers) can reference it without
- * importing the pure-types Host API file.
- *
- * Core fields (user, actor, source, permissions, project) are required when
- * supplied via a Host. The CLI may omit the entire CallerContext for backward
- * compatibility.
- *
- * v0.7 (ISSUE #254): Extended with platform integration fields.
- */
-export interface CallerContext {
-  /** Authenticated end-user who initiated the action. */
-  user: {
-    /** Unique user identifier (provider-agnostic). */
-    id: string;
-    /** Display name. */
-    name: string;
-    /** Contact email. */
-    email: string;
-  };
-  /** Actor that executed the action (may differ from user for service accounts). */
-  actor: Actor;
-  /** Originating system metadata. */
-  source: {
-    /** System name (e.g. "zigma-host", "zigma-cli"). */
-    system: string;
-    /** System version string. */
-    version: string;
-  };
-  /** Permission grants held by the caller at the time of the request. */
-  permissions: string[];
-  /** Project scope the action targets. */
-  project: {
-    /** Project identifier. */
-    id: string;
-    /** Project scope / tenant. */
-    scope: string;
-  };
-
-  // ── v0.7 platform integration fields (ISSUE #254) ─────────────────────
-
-  /** Core Task ID from the platform control plane. */
-  coreTaskId?: string;
-  /** Flow Run ID from the platform (may differ from engine-generated runId). */
-  flowRunId?: string;
-  /** External permission snapshot identifier. */
-  permissionSnapshotId?: string;
-  /** SHA-256 hash of the permission snapshot (hex-encoded). */
-  permissionSnapshotHash?: string;
-  /** Repository constraint (e.g. "owner/repo"). */
-  repository?: string;
-  /** Branch constraint (e.g. "main"). */
-  branch?: string;
-  /** Workflow name constraint. */
-  workflow?: string;
-  /** Tool name constraint. */
-  tool?: string;
-  /** Event sink / callback configuration. */
-  callbackConfig?: CallbackConfig;
-}
-
-/**
- * Actor that performs an engine operation.
- *
- * The actor may be the same as the authenticated user or a distinct
- * service identity (e.g. a CI system, webhook handler, or scheduled job).
- */
-export interface Actor {
-  /** Actor category. */
-  type: "user" | "system" | "service";
-  /** Unique actor identifier. */
-  id: string;
-  /** Human-readable name (optional for system actors). */
-  name?: string;
-}
+/** @deprecated Use the explicit `CallerContextV1` name at new boundaries. */
+export type CallerContext = CallerContextV1;
 
 // ---------------------------------------------------------------------------
 // PermissionSnapshot
 // ---------------------------------------------------------------------------
 
 /**
- * Frozen permission record stored in the run directory at creation time.
+ * Frozen Core authorization record stored in the run directory at creation time.
  *
  * The snapshot is deep-copied from the original CallerContext so that the
  * caller cannot mutate permissions after the run has started. It is written
@@ -134,7 +54,7 @@ export interface PermissionSnapshot {
   /** Run identifier this snapshot belongs to. */
   runId: string;
   /** Deep-copied caller context at creation time. */
-  callerContext: CallerContext;
+  callerContext: CallerContextV1;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +75,7 @@ export interface PermissionSnapshot {
  * @returns A new, deeply-immutable PermissionSnapshot.
  */
 export function createPermissionSnapshot(
-  callerContext: CallerContext,
+  callerContext: CallerContextV1,
   runId: string,
   frozenAt: string,
 ): PermissionSnapshot {
@@ -173,15 +93,14 @@ export function createPermissionSnapshot(
 /**
  * Validate and normalize a caller context JSON payload from --context-file.
  *
- * Required top-level fields: user.id, user.name, user.email, actor.type,
- * actor.id, source.system, source.version, project.id, project.scope.
- *
- * Platform fields (coreTaskId, flowRunId, etc.) are optional but type-checked
- * when present.
+ * A context file is always the explicit Core-to-Flow v1 envelope. Direct CLI
+ * invocation remains backwards compatible by omitting `--context-file`; an
+ * unversioned or legacy context file is not accepted because its authority
+ * cannot be interpreted safely.
  *
  * @throws {UserInputError} on validation failure.
  */
-export function validateCallerContext(raw: unknown): CallerContext {
+export function validateCallerContext(raw: unknown): CallerContextV1 {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new UserInputError(
       "caller context must be a JSON object",
@@ -191,107 +110,147 @@ export function validateCallerContext(raw: unknown): CallerContext {
 
   const obj = raw as Record<string, unknown>;
 
-  // Validate required nested objects
-  const user = obj["user"];
-  if (typeof user !== "object" || user === null) {
-    throw new UserInputError("caller context must have a 'user' object");
-  }
-  const u = user as Record<string, unknown>;
-  if (typeof u["id"] !== "string") {
-    throw new UserInputError("caller context 'user.id' is required and must be a string");
-  }
-  if (typeof u["name"] !== "string") {
-    throw new UserInputError("caller context 'user.name' is required and must be a string");
-  }
-  if (typeof u["email"] !== "string") {
-    throw new UserInputError("caller context 'user.email' is required and must be a string");
-  }
-
-  const actor = obj["actor"];
-  if (typeof actor !== "object" || actor === null) {
-    throw new UserInputError("caller context must have an 'actor' object");
-  }
-  const a = actor as Record<string, unknown>;
-  if (a["type"] !== "user" && a["type"] !== "system" && a["type"] !== "service") {
+  if (obj["contractVersion"] !== CALLER_CONTEXT_CONTRACT_VERSION) {
     throw new UserInputError(
-      `caller context 'actor.type' must be "user", "system", or "service", got: ${String(a["type"])}`,
+      `caller context contractVersion must be ${CALLER_CONTEXT_CONTRACT_VERSION}, got: ${String(obj["contractVersion"])}`,
+      { suggestion: "Use the CallerContextV1 envelope documented in docs/platform-integration-contract.md." },
     );
   }
-  if (typeof a["id"] !== "string") {
-    throw new UserInputError("caller context 'actor.id' is required and must be a string");
-  }
 
-  const source = obj["source"];
-  if (typeof source !== "object" || source === null) {
-    throw new UserInputError("caller context must have a 'source' object");
-  }
-  const s = source as Record<string, unknown>;
-  if (typeof s["system"] !== "string") {
-    throw new UserInputError("caller context 'source.system' is required and must be a string");
-  }
-
-  const project = obj["project"];
-  if (typeof project !== "object" || project === null) {
-    throw new UserInputError("caller context must have a 'project' object");
-  }
-  const p = project as Record<string, unknown>;
-  if (typeof p["id"] !== "string") {
-    throw new UserInputError("caller context 'project.id' is required and must be a string");
-  }
-
-  // Validate optional platform fields
-  if (obj["coreTaskId"] !== undefined && typeof obj["coreTaskId"] !== "string") {
-    throw new UserInputError("caller context 'coreTaskId' must be a string");
-  }
-  if (obj["flowRunId"] !== undefined && typeof obj["flowRunId"] !== "string") {
-    throw new UserInputError("caller context 'flowRunId' must be a string");
-  }
-  if (obj["permissionSnapshotHash"] !== undefined && typeof obj["permissionSnapshotHash"] !== "string") {
-    throw new UserInputError("caller context 'permissionSnapshotHash' must be a string");
-  }
-  if (obj["repository"] !== undefined && typeof obj["repository"] !== "string") {
-    throw new UserInputError("caller context 'repository' must be a string");
-  }
-  if (obj["branch"] !== undefined && typeof obj["branch"] !== "string") {
-    throw new UserInputError("caller context 'branch' must be a string");
-  }
-
-  const callbackConfig = obj["callbackConfig"];
-  let cc: Record<string, unknown> | undefined;
-  if (callbackConfig !== undefined) {
-    if (typeof callbackConfig !== "object" || callbackConfig === null) {
-      throw new UserInputError("caller context 'callbackConfig' must be an object");
-    }
-    cc = callbackConfig as Record<string, unknown>;
-    if (cc["type"] !== "webhook" && cc["type"] !== "file" && cc["type"] !== "none") {
-      throw new UserInputError(
-        `callbackConfig.type must be "webhook", "file", or "none", got: ${String(cc["type"])}`,
-      );
-    }
-  }
-
-  // Build and return normalized context
-  const permissions = Array.isArray(obj["permissions"])
-    ? (obj["permissions"] as string[]).filter((v): v is string => typeof v === "string")
-    : [];
-
-  return {
-    user: { id: u["id"] as string, name: u["name"] as string, email: u["email"] as string },
-    actor: { type: a["type"] as Actor["type"], id: a["id"] as string, ...(typeof a["name"] === "string" ? { name: a["name"] } : {}) },
-    source: {
-      system: s["system"] as string,
-      version: typeof s["version"] === "string" ? s["version"] : "0.0.0",
-    },
-    permissions,
-    project: { id: p["id"] as string, scope: typeof p["scope"] === "string" ? p["scope"] : "default" },
-    ...(typeof obj["coreTaskId"] === "string" ? { coreTaskId: obj["coreTaskId"] } : {}),
-    ...(typeof obj["flowRunId"] === "string" ? { flowRunId: obj["flowRunId"] } : {}),
-    ...(typeof obj["permissionSnapshotId"] === "string" ? { permissionSnapshotId: obj["permissionSnapshotId"] } : {}),
-    ...(typeof obj["permissionSnapshotHash"] === "string" ? { permissionSnapshotHash: obj["permissionSnapshotHash"] } : {}),
-    ...(typeof obj["repository"] === "string" ? { repository: obj["repository"] } : {}),
-    ...(typeof obj["branch"] === "string" ? { branch: obj["branch"] } : {}),
-    ...(typeof obj["workflow"] === "string" ? { workflow: obj["workflow"] } : {}),
-    ...(typeof obj["tool"] === "string" ? { tool: obj["tool"] } : {}),
-    ...(cc !== undefined ? { callbackConfig: cc as unknown as CallbackConfig } : {}),
+  const actor = requireRecord(obj, "actor");
+  const actorType = requireOneOf(actor, "type", ["user", "agent", "service", "system"] as const);
+  const normalizedActor: CallerActorV1 = {
+    type: actorType,
+    id: requireString(actor, "id"),
+    ...optionalString(actor, "displayName"),
+    ...optionalString(actor, "provider"),
+    ...optionalString(actor, "externalId"),
   };
+
+  const constraints = requireRecord(obj, "constraints");
+  const normalizedConstraints: CallerConstraintsV1 = {
+    repositoryIds: requireStringArray(constraints, "repositoryIds"),
+    workflowRefs: requireStringArray(constraints, "workflowRefs"),
+    toolNames: requireStringArray(constraints, "toolNames"),
+    branchPatterns: requireStringArray(constraints, "branchPatterns"),
+    ...optionalPositiveInteger(constraints, "maxRunDurationMs"),
+    ...optionalString(constraints, "expiresAt"),
+  };
+
+  const source = requireRecord(obj, "source");
+  const normalizedSource: CallerSourceV1 = {
+    kind: requireOneOf(source, "kind", ["api", "web", "mail", "code-platform", "schedule", "cli", "system"] as const),
+    ...optionalString(source, "provider"),
+    ...optionalString(source, "externalId"),
+    ...optionalString(source, "url"),
+    metadata: requireRecord(source, "metadata"),
+  };
+
+  const result: CallerContextV1 = {
+    contractVersion: CALLER_CONTEXT_CONTRACT_VERSION,
+    actor: normalizedActor,
+    capabilities: requireNonEmptyStringArray(obj, "capabilities"),
+    constraints: normalizedConstraints,
+    source: normalizedSource,
+    taskId: requireString(obj, "taskId"),
+    flowRunId: requireString(obj, "flowRunId"),
+    projectId: requireString(obj, "projectId"),
+    permissionSnapshotId: requireString(obj, "permissionSnapshotId"),
+    integrityHash: requireString(obj, "integrityHash"),
+    ...optionalString(obj, "operationId"),
+    ...optionalString(obj, "callbackCorrelationId"),
+    ...optionalString(obj, "baseRef"),
+    ...optionalString(obj, "coreCallbackUrl"),
+  };
+
+  if (obj["repository"] !== undefined) result.repository = validateRepository(obj["repository"]);
+  if (obj["workspacePolicy"] !== undefined) result.workspacePolicy = validateWorkspacePolicy(obj["workspacePolicy"]);
+  return result;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(parent: Record<string, unknown>, field: string): Record<string, unknown> {
+  const value = parent[field];
+  if (!isRecord(value)) throw new UserInputError(`caller context '${field}' is required and must be an object`);
+  return value;
+}
+
+function requireString(parent: Record<string, unknown>, field: string): string {
+  const value = parent[field];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new UserInputError(`caller context '${field}' is required and must be a non-empty string`);
+  }
+  return value;
+}
+
+function optionalString(parent: Record<string, unknown>, field: string): Record<string, string> {
+  const value = parent[field];
+  if (value === undefined) return {};
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new UserInputError(`caller context '${field}' must be a non-empty string when provided`);
+  }
+  return { [field]: value };
+}
+
+function requireStringArray(parent: Record<string, unknown>, field: string): string[] {
+  const value = parent[field];
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item.trim().length > 0)) {
+    throw new UserInputError(`caller context '${field}' is required and must be an array of non-empty strings`);
+  }
+  return [...value] as string[];
+}
+
+function requireNonEmptyStringArray(parent: Record<string, unknown>, field: string): string[] {
+  const value = requireStringArray(parent, field);
+  if (value.length === 0) throw new UserInputError(`caller context '${field}' must not be empty`);
+  return value;
+}
+
+function optionalPositiveInteger(parent: Record<string, unknown>, field: string): Record<string, number> {
+  const value = parent[field];
+  if (value === undefined) return {};
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new UserInputError(`caller context '${field}' must be a positive integer when provided`);
+  }
+  return { [field]: value };
+}
+
+function requireOneOf<T extends readonly string[]>(parent: Record<string, unknown>, field: string, values: T): T[number] {
+  const value = parent[field];
+  if (typeof value !== "string" || !values.includes(value)) {
+    throw new UserInputError(`caller context '${field}' must be one of: ${values.join(", ")}`);
+  }
+  return value as T[number];
+}
+
+function validateRepository(value: unknown): RepositoryContextV1 {
+  if (!isRecord(value)) throw new UserInputError("caller context 'repository' must be an object when provided");
+  return {
+    id: requireString(value, "id"),
+    provider: requireString(value, "provider"),
+    url: requireString(value, "url"),
+    defaultRef: requireString(value, "defaultRef"),
+    writable: requireBoolean(value, "writable"),
+    metadata: requireRecord(value, "metadata"),
+  };
+}
+
+function validateWorkspacePolicy(value: unknown): WorkspacePolicyContextV1 {
+  if (!isRecord(value)) throw new UserInputError("caller context 'workspacePolicy' must be an object when provided");
+  return {
+    provider: requireString(value, "provider"),
+    mode: requireOneOf(value, "mode", ["writable", "read-only"] as const),
+    branchTemplate: requireString(value, "branchTemplate"),
+    cleanup: requireOneOf(value, "cleanup", ["always", "on-success", "manual"] as const),
+    snapshotOnTerminal: requireBoolean(value, "snapshotOnTerminal"),
+  };
+}
+
+function requireBoolean(parent: Record<string, unknown>, field: string): boolean {
+  const value = parent[field];
+  if (typeof value !== "boolean") throw new UserInputError(`caller context '${field}' is required and must be a boolean`);
+  return value;
 }

@@ -1,26 +1,33 @@
 # Caller Context & Permissions
 
-Zigma Flow v0.5 introduces caller context wiring into the run creation flow so every run carries a frozen permission snapshot that records who initiated the action, under what authority, and within which project scope. This document defines the schema, the Host-vs-Flow permission boundary, the creation-time snapshot mechanism, and the audit trail guarantees.
+Zigma Flow accepts a versioned `CallerContextV1` from Zigma Core through
+`invoke --context-file`. Every accepted platform run carries a frozen copy of
+that envelope, recording Core's actor, authority, task, Flow-run, project, and
+permission-snapshot references. Interactive CLI runs may omit the file and do
+not produce this snapshot.
 
 ## 1. Caller Context Schema
 
-The `CallerContext` interface captures the full identity and origin of the caller invoking a Host API method. It is defined in `src/host-api.ts` as the pure-type contract between Zigma Host (the upper platform) and Zigma Flow (the workflow engine). An implementation-compatible copy lives in `src/caller-context.ts` for engine-internal use.
+`CallerContextV1` is defined in `src/caller-context-contract.ts`; runtime
+validation lives in `src/caller-context.ts`. This shared schema is the
+published language between Core and Flow, rather than a Flow-specific rewrite
+of Core identity fields.
 
 | Field | Type | Description |
 |---|---|---|
-| `user.id` | `string` | Unique user identifier (provider-agnostic). |
-| `user.name` | `string` | Display name. |
-| `user.email` | `string` | Contact email. |
-| `actor.type` | `"user" \| "system" \| "service"` | Actor category. |
+| `contractVersion` | literal `1` | Version discriminator; unknown or omitted versions fail closed. |
+| `actor.type` | `"user" \| "agent" \| "system" \| "service"` | Core actor category. |
 | `actor.id` | `string` | Unique actor identifier. |
-| `actor.name` | `string?` | Human-readable name (optional for system actors). |
-| `source.system` | `string` | Originating system name (e.g. `"zigma-host"`, `"zigma-cli"`). |
-| `source.version` | `string` | System version string. |
-| `permissions` | `string[]` | Permission grants held by the caller (e.g. `["workflow:execute"]`). |
-| `project.id` | `string` | Project identifier. |
-| `project.scope` | `string` | Project scope / tenant. |
+| `capabilities` | non-empty `string[]` | Core-granted authority at dispatch. |
+| `constraints` | object | Required repository/workflow/tool/branch arrays, plus optional expiry and duration. |
+| `source.kind` / `source.metadata` | enum / object | Core task-origin record. |
+| `taskId` / `flowRunId` / `projectId` | non-empty strings | Durable Core identities. |
+| `permissionSnapshotId` / `integrityHash` | non-empty strings | Core's frozen authorization evidence. |
 
-The `actor` may differ from `user` when a service account or system process executes on behalf of an end-user. Both identities are recorded for full auditability.
+Optional correlation (`operationId`, `callbackCorrelationId`) and workspace
+records are validated when provided. The prior unversioned
+`user/project/source.system` context file is intentionally not accepted by
+this protocol: it has no unambiguous Core semantics.
 
 ## 2. Host vs Flow Permission Boundary
 
@@ -106,11 +113,11 @@ Once written, the snapshot file is never modified by the engine. Any step that n
 
 The caller context and permission snapshot provide the following audit guarantees:
 
-1. **Non-repudiation**: Every run carries an immutable record of who initiated it and under what permissions. A reviewer can open `caller-context.json` and see the exact identity, actor, and permission set at creation time.
+1. **Non-repudiation**: Every platform run carries an immutable Core actor, capability, constraint, and snapshot-evidence record. A reviewer can open `caller-context.json` and see the exact accepted v1 envelope.
 
 2. **Permission time-bounding**: Because the snapshot is frozen at creation, a permission revocation after run start does not affect an in-flight run. Conversely, a permission grant after run start is not retroactively available. This prevents time-of-check-time-of-use (TOCTOU) issues.
 
-3. **Cross-layer traceability**: The Host's identity provider logs can be correlated with the Flow run's `caller-context.json` via `user.id` and `actor.id`. Discrepancies between the two layers indicate a bug or an attack.
+3. **Cross-layer traceability**: Core logs can be correlated with Flow's `caller-context.json` through `taskId`, `flowRunId`, `projectId`, `permissionSnapshotId`, and `actor.id`. Discrepancies between these durable records indicate a bug or an attack.
 
 4. **Evidence bundle inclusion**: When `collectRunEvidence` is called, the caller context snapshot is included in the evidence bundle, providing a complete chain from identity through execution to output.
 

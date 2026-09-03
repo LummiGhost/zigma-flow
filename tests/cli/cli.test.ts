@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -139,6 +139,59 @@ describe("zigma-flow CLI entry", () => {
     for (const required of ["workflows", "skills", "runs", "config.json"]) {
       expect(entries).toContain(required);
     }
+  });
+
+  it("invoke accepts CallerContextV1 through the real CLI command and freezes it", async () => {
+    const zigmaDir = join(tempDir, ".zigma-flow");
+    const runsDir = join(zigmaDir, "runs");
+    const workflowPath = join(tempDir, "context-workflow.yml");
+    const contextPath = join(tempDir, "caller-context-v1.json");
+    await mkdir(runsDir, { recursive: true });
+    await writeFile(join(zigmaDir, "config.json"), JSON.stringify({
+      tool_version: "0.1.0",
+      active_run: null,
+      agent: { backend: "claude-code", backends: { "claude-code": { command: "claude" } } },
+    }), "utf-8");
+    await writeFile(join(zigmaDir, "skill-lock.json"), JSON.stringify({ skills: {} }), "utf-8");
+    await writeFile(workflowPath, [
+      "name: context-cli-smoke",
+      "version: \"0.1.0\"",
+      "jobs:",
+      "  validate:",
+      "    steps:",
+      "      - id: context",
+      "        type: script",
+      "        run: echo context-ok",
+      "",
+    ].join("\n"), "utf-8");
+    await writeFile(contextPath, JSON.stringify({
+      contractVersion: 1,
+      actor: { type: "service", id: "zigma-core" },
+      capabilities: ["task:start", "workflow:invoke"],
+      constraints: { repositoryIds: [], workflowRefs: [], toolNames: [], branchPatterns: [] },
+      source: { kind: "api", metadata: {} },
+      taskId: "task-cli-1",
+      flowRunId: "flow-run-cli-1",
+      projectId: "project-cli-1",
+      permissionSnapshotId: "snapshot-cli-1",
+      integrityHash: "sha256:cli",
+    }), "utf-8");
+
+    const result = await runMain([
+      "--cwd", tempDir,
+      "invoke", workflowPath,
+      "--task", "exercise context command",
+      "--context-file", contextPath,
+      "--json",
+    ]);
+
+    expect(result.exitCode ?? 0).toBe(0);
+    const [runId] = await readdir(runsDir);
+    expect(runId).toBeTruthy();
+    const snapshot = JSON.parse(await readFile(join(runsDir, runId!, "caller-context.json"), "utf-8")) as {
+      callerContext: { projectId: string; flowRunId: string };
+    };
+    expect(snapshot.callerContext).toMatchObject({ projectId: "project-cli-1", flowRunId: "flow-run-cli-1" });
   });
 });
 

@@ -1,215 +1,109 @@
-/**
- * Caller context validation tests (ISSUE #254).
- *
- * Covers:
- *   - Valid minimal payload accepted
- *   - Valid full payload with all optional fields accepted
- *   - Null / non-object rejected
- *   - Missing required fields rejected
- *   - Wrong types on optional fields rejected
- *   - Invalid callbackConfig.type rejected
- */
+/** CallerContextV1 schema tests for the Core-to-Flow context-file boundary. */
 
 import { describe, expect, it } from "vitest";
 
-import { validateCallerContext } from "../../src/caller-context.js";
+import {
+  CALLER_CONTEXT_CONTRACT_VERSION,
+  validateCallerContext,
+} from "../../src/caller-context.js";
 
-const VALID_MINIMAL = {
-  user: { id: "u1", name: "Alice", email: "alice@example.com" },
-  actor: { type: "user" as const, id: "u1" },
-  source: { system: "zigma-host", version: "1.0.0" },
-  permissions: ["read", "write"],
-  project: { id: "proj-1", scope: "default" },
-};
-
-const VALID_FULL = {
-  ...VALID_MINIMAL,
-  coreTaskId: "task-42",
+const VALID_CONTEXT_V1 = {
+  contractVersion: CALLER_CONTEXT_CONTRACT_VERSION,
+  actor: { type: "service", id: "zigma-core", displayName: "Zigma Core" },
+  capabilities: ["task:start", "workflow:invoke"],
+  constraints: {
+    repositoryIds: ["repo-1"],
+    workflowRefs: ["code-change"],
+    toolNames: ["git", "npm"],
+    branchPatterns: ["zigma/*"],
+    maxRunDurationMs: 3_600_000,
+  },
+  source: { kind: "api", metadata: { requestId: "request-1" } },
+  taskId: "task-1",
   flowRunId: "flow-run-1",
-  permissionSnapshotId: "snap-1",
-  permissionSnapshotHash: "abcdef1234567890",
-  repository: "owner/repo",
-  branch: "main",
-  workflow: "ci-build",
-  tool: "lint",
-  callbackConfig: { type: "webhook" as const, uri: "https://example.com/hooks" },
+  projectId: "project-1",
+  permissionSnapshotId: "snapshot-1",
+  integrityHash: "sha256:abc123",
 };
 
-describe("validateCallerContext", () => {
-  // ── Valid inputs ───────────────────────────────────────────────────────
+describe("validateCallerContext (CallerContextV1)", () => {
+  it("accepts and preserves the canonical Core-to-Flow v1 envelope", () => {
+    const result = validateCallerContext(VALID_CONTEXT_V1);
 
-  it("accepts a valid minimal payload", () => {
-    const result = validateCallerContext(VALID_MINIMAL);
-    expect(result.user.id).toBe("u1");
-    expect(result.user.name).toBe("Alice");
-    expect(result.user.email).toBe("alice@example.com");
-    expect(result.actor.type).toBe("user");
-    expect(result.actor.id).toBe("u1");
-    expect(result.source.system).toBe("zigma-host");
-    expect(result.source.version).toBe("1.0.0");
-    expect(result.permissions).toEqual(["read", "write"]);
-    expect(result.project.id).toBe("proj-1");
-    expect(result.project.scope).toBe("default");
+    expect(result).toEqual(VALID_CONTEXT_V1);
   });
 
-  it("accepts a full payload with all optional fields", () => {
-    const result = validateCallerContext(VALID_FULL);
-    expect(result.coreTaskId).toBe("task-42");
-    expect(result.flowRunId).toBe("flow-run-1");
-    expect(result.permissionSnapshotId).toBe("snap-1");
-    expect(result.permissionSnapshotHash).toBe("abcdef1234567890");
-    expect(result.repository).toBe("owner/repo");
-    expect(result.branch).toBe("main");
-    expect(result.workflow).toBe("ci-build");
-    expect(result.tool).toBe("lint");
-    expect(result.callbackConfig).toEqual({ type: "webhook", uri: "https://example.com/hooks" });
+  it("accepts all documented optional correlation and workspace fields", () => {
+    const result = validateCallerContext({
+      ...VALID_CONTEXT_V1,
+      operationId: "flow:start:1",
+      callbackCorrelationId: "command-1",
+      coreCallbackUrl: "http://127.0.0.1:4736/v1",
+      baseRef: "main",
+      repository: {
+        id: "repo-1",
+        provider: "github",
+        url: "https://example.test/owner/repo.git",
+        defaultRef: "main",
+        writable: true,
+        metadata: {},
+      },
+      workspacePolicy: {
+        provider: "zigma-workspace-cli",
+        mode: "writable",
+        branchTemplate: "zigma/{taskId}",
+        cleanup: "manual",
+        snapshotOnTerminal: true,
+      },
+    });
+
+    expect(result.operationId).toBe("flow:start:1");
+    expect(result.repository?.provider).toBe("github");
+    expect(result.workspacePolicy?.mode).toBe("writable");
   });
 
-  it("defaults source.version to '0.0.0' when missing", () => {
-    const withoutVersion = { ...VALID_MINIMAL, source: { system: "test" } };
-    const result = validateCallerContext(withoutVersion);
-    expect(result.source.version).toBe("0.0.0");
+  it("rejects unversioned legacy user/project context files", () => {
+    expect(() => validateCallerContext({
+      user: { id: "u1", name: "Alice", email: "alice@example.test" },
+      actor: { type: "user", id: "u1" },
+      source: { system: "zigma-host", version: "1.0.0" },
+      permissions: ["workflow:invoke"],
+      project: { id: "project-1", scope: "local" },
+    })).toThrow("contractVersion must be 1");
   });
 
-  it("defaults project.scope to 'default' when missing", () => {
-    const withoutScope = { ...VALID_MINIMAL, project: { id: "p1" } };
-    const result = validateCallerContext(withoutScope);
-    expect(result.project.scope).toBe("default");
+  it("rejects an unsupported future contract version", () => {
+    expect(() => validateCallerContext({ ...VALID_CONTEXT_V1, contractVersion: 2 }))
+      .toThrow("contractVersion must be 1");
   });
 
-  it("filters non-string permissions", () => {
-    const mixed = { ...VALID_MINIMAL, permissions: ["read", 42, "write", null] };
-    const result = validateCallerContext(mixed);
-    expect(result.permissions).toEqual(["read", "write"]);
+  it.each([
+    "actor",
+    "capabilities",
+    "constraints",
+    "source",
+    "taskId",
+    "flowRunId",
+    "projectId",
+    "permissionSnapshotId",
+    "integrityHash",
+  ])("fails closed when required field %s is missing", (field) => {
+    const withoutField: Record<string, unknown> = { ...VALID_CONTEXT_V1 };
+    delete withoutField[field];
+    expect(() => validateCallerContext(withoutField)).toThrow("required");
   });
 
-  it("accepts actor type 'system'", () => {
-    const systemActor = { ...VALID_MINIMAL, actor: { type: "system" as const, id: "sys-1" } };
-    const result = validateCallerContext(systemActor);
-    expect(result.actor.type).toBe("system");
+  it("rejects malformed constraints instead of filtering or defaulting them", () => {
+    expect(() => validateCallerContext({
+      ...VALID_CONTEXT_V1,
+      constraints: { ...VALID_CONTEXT_V1.constraints, toolNames: ["git", 42] },
+    })).toThrow("toolNames");
   });
 
-  it("accepts actor type 'service'", () => {
-    const serviceActor = { ...VALID_MINIMAL, actor: { type: "service" as const, id: "svc-1" } };
-    const result = validateCallerContext(serviceActor);
-    expect(result.actor.type).toBe("service");
-  });
-
-  it("accepts callbackConfig type 'none' without uri", () => {
-    const withNone = { ...VALID_MINIMAL, callbackConfig: { type: "none" as const } };
-    const result = validateCallerContext(withNone);
-    expect(result.callbackConfig).toEqual({ type: "none" });
-  });
-
-  // ── Rejections — top-level ─────────────────────────────────────────────
-
-  it("rejects null", () => {
-    expect(() => validateCallerContext(null)).toThrow("must be a JSON object");
-  });
-
-  it("rejects a string primitive", () => {
-    expect(() => validateCallerContext("not an object")).toThrow("must be a JSON object");
-  });
-
-  it("rejects an array", () => {
-    expect(() => validateCallerContext([1, 2, 3])).toThrow("must be a JSON object");
-  });
-
-  // ── Rejections — missing required fields ───────────────────────────────
-
-  it("rejects missing user", () => {
-    const { user: _, ...rest } = VALID_MINIMAL;
-    expect(() => validateCallerContext(rest)).toThrow("must have a 'user' object");
-  });
-
-  it("rejects user that is not an object", () => {
-    expect(() => validateCallerContext({ ...VALID_MINIMAL, user: "alice" }))
-      .toThrow("must have a 'user' object");
-  });
-
-  it("rejects missing user.id", () => {
-    expect(() => validateCallerContext({ ...VALID_MINIMAL, user: { name: "x", email: "x@y.com" } }))
-      .toThrow("'user.id' is required");
-  });
-
-  it("rejects missing user.name", () => {
-    expect(() => validateCallerContext({ ...VALID_MINIMAL, user: { id: "u1", email: "x@y.com" } }))
-      .toThrow("'user.name' is required");
-  });
-
-  it("rejects missing user.email", () => {
-    expect(() => validateCallerContext({ ...VALID_MINIMAL, user: { id: "u1", name: "x" } }))
-      .toThrow("'user.email' is required");
-  });
-
-  it("rejects missing actor", () => {
-    const { actor: _, ...rest } = VALID_MINIMAL;
-    expect(() => validateCallerContext(rest)).toThrow("must have an 'actor' object");
-  });
-
-  it("rejects invalid actor.type", () => {
-    expect(() =>
-      validateCallerContext({ ...VALID_MINIMAL, actor: { type: "bot", id: "b1" } }),
-    ).toThrow("'actor.type' must be");
-  });
-
-  it("rejects missing actor.id", () => {
-    expect(() =>
-      validateCallerContext({ ...VALID_MINIMAL, actor: { type: "user" } }),
-    ).toThrow("'actor.id' is required");
-  });
-
-  it("rejects missing source", () => {
-    const { source: _, ...rest } = VALID_MINIMAL;
-    expect(() => validateCallerContext(rest)).toThrow("must have a 'source' object");
-  });
-
-  it("rejects missing source.system", () => {
-    expect(() =>
-      validateCallerContext({ ...VALID_MINIMAL, source: { version: "1.0" } }),
-    ).toThrow("'source.system' is required");
-  });
-
-  it("rejects missing project", () => {
-    const { project: _, ...rest } = VALID_MINIMAL;
-    expect(() => validateCallerContext(rest)).toThrow("must have a 'project' object");
-  });
-
-  // ── Rejections — optional field type validation ────────────────────────
-
-  it("rejects coreTaskId that is not a string", () => {
-    expect(() => validateCallerContext({ ...VALID_MINIMAL, coreTaskId: 123 }))
-      .toThrow("'coreTaskId' must be a string");
-  });
-
-  it("rejects flowRunId that is not a string", () => {
-    expect(() => validateCallerContext({ ...VALID_MINIMAL, flowRunId: true }))
-      .toThrow("'flowRunId' must be a string");
-  });
-
-  it("rejects permissionSnapshotHash that is not a string", () => {
-    expect(() => validateCallerContext({ ...VALID_MINIMAL, permissionSnapshotHash: 555 }))
-      .toThrow("'permissionSnapshotHash' must be a string");
-  });
-
-  it("rejects repository that is not a string", () => {
-    expect(() => validateCallerContext({ ...VALID_MINIMAL, repository: 42 }))
-      .toThrow("'repository' must be a string");
-  });
-
-  it("rejects branch that is not a string", () => {
-    expect(() => validateCallerContext({ ...VALID_MINIMAL, branch: [] }))
-      .toThrow("'branch' must be a string");
-  });
-
-  it("rejects callbackConfig that is not an object", () => {
-    expect(() => validateCallerContext({ ...VALID_MINIMAL, callbackConfig: "webhook" }))
-      .toThrow("'callbackConfig' must be an object");
-  });
-
-  it("rejects invalid callbackConfig.type", () => {
-    expect(() =>
-      validateCallerContext({ ...VALID_MINIMAL, callbackConfig: { type: "slack" } }),
-    ).toThrow("callbackConfig.type must be");
+  it("rejects null snapshot evidence", () => {
+    expect(() => validateCallerContext({ ...VALID_CONTEXT_V1, permissionSnapshotId: null }))
+      .toThrow("permissionSnapshotId");
+    expect(() => validateCallerContext({ ...VALID_CONTEXT_V1, integrityHash: null }))
+      .toThrow("integrityHash");
   });
 });

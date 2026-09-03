@@ -504,6 +504,22 @@ implements the same engine entry points that a Host would call remotely. When a
 Host integration exists, the Host calls the Typed API directly; the CLI remains
 available for local development and debugging.
 
+### 7.0 Provider capability handshake
+
+An external host can discover the Flow provider contract without opening a
+project or creating runtime state:
+
+```bash
+zigma-flow contract-info --json
+```
+
+The command is read-only and emits one JSON line containing `contractVersion`,
+`provider`, `packageVersion`, and `capabilities`. The v1 capabilities are
+`caller-context-v1`, `invoke-json-v1`, and `context-freeze-v1`. A host should
+reject an unsupported version or missing capability before calling `invoke`.
+Unknown options are errors; no `.zigma-flow` directory, run, database, or
+Workspace is created by this command.
+
 ### 7.2 Command-to-API Mapping
 
 | CLI Command | Host API Equivalent | Notes |

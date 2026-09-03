@@ -47,6 +47,7 @@ jobs:
       - name: Smoke check dist
         run: |
           node dist/cli.js --help
+          node dist/cli.js contract-info --json
           test -f dist/templates/step-prompt.md
           test -f dist/templates/system-prompt.md
 

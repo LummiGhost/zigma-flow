@@ -17,4 +17,9 @@ describe("package info", () => {
       version: pkg.version,
     });
   });
+
+  it("prefers current package metadata over a stale build-time value", () => {
+    process.env.ZIGMA_FLOW_VERSION = "0.0.0-stale-build-value";
+    expect(getPackageInfo().version).toBe(pkg.version);
+  });
 });

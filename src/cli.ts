@@ -39,6 +39,7 @@ import { artifactsAction } from "./commands/artifacts.js";
 import { resetRunAction } from "./commands/reset-run.js";
 import { skillAddAction } from "./commands/skill-add.js";
 import { logsAction } from "./commands/logs.js";
+import { contractInfoAction } from "./commands/contract-info.js";
 import { SystemClock } from "./run/index.js";
 
 function collectInputs(value: string, previous: string[]): string[] {
@@ -201,6 +202,20 @@ async function runProgram(
     })
     // Let us handle exit ourselves.
     .exitOverride();
+
+  program
+    .command("contract-info")
+    .description("Print the read-only provider contract handshake as JSON.")
+    .option("--json", "Machine-readable JSON output (required).")
+    .exitOverride()
+    .action((options: { json?: boolean }) => {
+      if (options.json !== true) {
+        throw new UserInputError("contract-info requires --json", {
+          suggestion: "Use: zigma-flow contract-info --json",
+        });
+      }
+      contractInfoAction();
+    });
 
   program
     .command("init")

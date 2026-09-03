@@ -311,6 +311,39 @@ operation and documented code, not from localized stderr text.
 
 ## 8. Compatibility and negotiation
 
+### 8.1 Provider handshake
+
+Before admitting a cross-process Flow invocation, Core or an execution host may
+run the read-only provider handshake:
+
+```text
+zigma-flow contract-info --json
+```
+
+The command does not read project configuration, initialize `.zigma-flow`,
+create a run/state database, or allocate a Workspace. It writes exactly one
+JSON document to stdout and sends diagnostics to stderr. The v1 response is:
+
+```json
+{
+  "contractVersion": 1,
+  "provider": "zigma-flow",
+  "packageVersion": "0.8.12",
+  "capabilities": [
+    "caller-context-v1",
+    "invoke-json-v1",
+    "context-freeze-v1"
+  ]
+}
+```
+
+`packageVersion` is read from the package metadata shipped with the running
+CLI, not only from a build-time constant. This prevents a stale build-time
+version from being reported when `dist/cli.js` is reused with updated package
+metadata. Hosts must require `contractVersion: 1` and the capabilities needed
+for their operation before invoking any side-effecting command. Unknown
+options fail with a non-zero exit and do not create files.
+
 The minimum v1 feature set is:
 
 - `invoke --json`, `--context-file`, and `--event-file`;

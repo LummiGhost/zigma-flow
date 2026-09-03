@@ -18,6 +18,7 @@
     "test:unit": "vitest run tests/artifact tests/check tests/context tests/dag tests/events tests/expression tests/git tests/prompt tests/router tests/run tests/script tests/workflow",
     "test:integration": "vitest run tests/commands tests/engine tests/init",
     "test:e2e": "vitest run tests/dogfood tests/cli",
+    "test:contract-info": "pnpm run build && node tools/contract-info-smoke.mjs",
     "test:lifecycle": "vitest run tests/process/lifecycle.test.ts tests/script/runner.test.ts tests/logs/processRunner-streaming.test.ts tests/agent/claude-code-backend.test.ts tests/agent/codex-cli-backend.test.ts tests/engine/runAll-cancel.test.ts tests/engine/runAll-concurrent.test.ts tests/dogfood/run-all-parallel.test.ts",
     "test:ci": "vitest run",
     "smoke": "node dist/cli.js --help",

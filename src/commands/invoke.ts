@@ -108,6 +108,39 @@ export async function invokeAction(
 
   const isJson = options.json === true;
 
+  // ── Parse caller context before any run or workspace side effect ───────
+
+  let callerContext: CallerContext | undefined;
+  if (options.contextFile !== undefined) {
+    try {
+      const raw = await readFile(options.contextFile, "utf-8");
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        throw new UserInputError(
+          `--context-file contains invalid JSON: ${options.contextFile}`,
+          { suggestion: "Provide a valid JSON file with CallerContextV1." },
+        );
+      }
+      callerContext = validateCallerContext(parsed);
+    } catch (err: unknown) {
+      if (isJson) {
+        print(JSON.stringify({
+          contractVersion: INVOKE_CONTRACT_VERSION,
+          runId: "(error)",
+          status: "failed" as InvokeJsonStatus,
+          exitCode: 1,
+          pausedGate: null,
+          artifacts: [],
+          eventLogUri: "",
+        }));
+        return { runId: "(error)", status: "failed", jobs: [], iterations: 0, dryRun: false };
+      }
+      throw err;
+    }
+  }
+
   // ── Dry-run: validate and plan without executing ──────────────────────
 
   if (options.dryRun) {
@@ -192,39 +225,6 @@ export async function invokeAction(
         `--stop-after must be in "job.step" format, got: "${options.stopAfter}"`,
         { suggestion: "Example: --stop-after implement.implement" },
       );
-    }
-  }
-
-  // ── Parse caller context file (ISSUE #254) ────────────────────────────
-
-  let callerContext: CallerContext | undefined;
-  if (options.contextFile !== undefined) {
-    try {
-      const raw = await readFile(options.contextFile, "utf-8");
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        throw new UserInputError(
-          `--context-file contains invalid JSON: ${options.contextFile}`,
-          { suggestion: "Provide a valid JSON file with caller context." },
-        );
-      }
-      callerContext = validateCallerContext(parsed);
-    } catch (err: unknown) {
-      if (isJson) {
-        print(JSON.stringify({
-          contractVersion: INVOKE_CONTRACT_VERSION,
-          runId: "(error)",
-          status: "failed" as InvokeJsonStatus,
-          exitCode: 1,
-          pausedGate: null,
-          artifacts: [],
-          eventLogUri: "",
-        }));
-        return { runId: "(error)", status: "failed", jobs: [], iterations: 0, dryRun: false };
-      }
-      throw err;
     }
   }
 

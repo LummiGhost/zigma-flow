@@ -599,39 +599,14 @@ fire-and-forget (no backpressure from sink to engine).
 
 ### 9.7 Caller Context Transport (`--context-file`)
 
-The `--context-file <path>` flag loads a JSON file that identifies the calling
-platform. The file is parsed, validated, and passed through to the engine as a
-`CallerContext` object. Validation rejects:
-
-- Non-object or null top-level values
-- Missing required fields (`user.id`, `user.name`, `user.email`, `actor.type`,
-  `actor.id`, `source.system`, `project.id`)
-- Wrong types on optional platform fields (`coreTaskId`, `flowRunId`, `repository`,
-  `branch`, etc.)
-- Invalid `callbackConfig.type` (must be `webhook`, `file`, or `none`)
-
-**Context file schema:**
-
-```json
-{
-  "user": { "id": "...", "name": "...", "email": "..." },
-  "actor": { "type": "user", "id": "..." },
-  "source": { "system": "zigma-host", "version": "1.0.0" },
-  "permissions": ["..."],
-  "project": { "id": "...", "scope": "..." },
-  "coreTaskId": "...",
-  "flowRunId": "...",
-  "repository": "owner/repo",
-  "branch": "main",
-  "workflow": "...",
-  "tool": "...",
-  "callbackConfig": { "type": "webhook", "uri": "https://..." }
-}
-```
-
-All fields except the `coreTaskId` / `flowRunId` / `permissionSnapshot*` /
-`repository` / `branch` / `workflow` / `tool` / `callbackConfig` block are
-required.
+The `--context-file <path>` flag accepts only the versioned `CallerContextV1`
+published in `docs/platform-integration-contract.md §2.3`. It requires
+`contractVersion: 1`, Core actor/capability/constraint/source records,
+`taskId`, `flowRunId`, `projectId`, `permissionSnapshotId`, and
+`integrityHash`. Validation occurs before run creation or backend dispatch and
+rejects unknown versions, unversioned legacy files, missing required fields,
+and malformed nested values. Invocations without `--context-file` retain the
+interactive CLI compatibility path and create no caller-context snapshot.
 
 ### 9.8 Human Gate Structured Data
 

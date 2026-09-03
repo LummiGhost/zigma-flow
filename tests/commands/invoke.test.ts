@@ -22,6 +22,24 @@ jobs:
           goal: "\${{ inputs.task }}"
 `;
 
+const CALLER_CONTEXT_V1 = {
+  contractVersion: 1,
+  actor: { type: "service", id: "zigma-core" },
+  capabilities: ["task:start", "workflow:invoke"],
+  constraints: {
+    repositoryIds: ["repo-1"],
+    workflowRefs: ["invoke-smoke"],
+    toolNames: ["git"],
+    branchPatterns: ["zigma/*"],
+  },
+  source: { kind: "api", metadata: {} },
+  taskId: "task-1",
+  flowRunId: "flow-run-1",
+  projectId: "project-1",
+  permissionSnapshotId: "snapshot-1",
+  integrityHash: "sha256:test",
+};
+
 const TWO_AGENT_WORKFLOW = `\
 name: invoke-multi
 version: "0.1.0"
@@ -172,6 +190,49 @@ describe("invokeAction", () => {
     const intakeJob = result.jobs.find((j) => j.id === "intake");
     expect(intakeJob).toBeDefined();
     expect(intakeJob!.status).toBe("completed");
+  });
+
+  it("accepts a real v1 context file before creating a run and freezes it", async () => {
+    const contextPath = join(sandbox.projectRoot, "caller-context.json");
+    await writeFile(contextPath, JSON.stringify(CALLER_CONTEXT_V1), "utf-8");
+
+    const result = await invokeAction(sandbox.workflowPath, {
+      task: "context snapshot",
+      contextFile: contextPath,
+    });
+
+    expect(result.status).toBe("completed");
+    expect(TestInvokeBackend.calls).toHaveLength(1);
+    const snapshot = JSON.parse(
+      await readFile(join(sandbox.runsDir, result.runId, "caller-context.json"), "utf-8"),
+    ) as { callerContext: Record<string, unknown> };
+    expect(snapshot.callerContext).toEqual(CALLER_CONTEXT_V1);
+    await expect(readFile(join(sandbox.runsDir, result.runId, "run.yml"), "utf-8"))
+      .resolves.toContain("caller_context_snapshot: caller-context.json");
+  });
+
+  it.each([
+    ["unknown version", { ...CALLER_CONTEXT_V1, contractVersion: 2 }],
+    ["missing project id", (() => { const { projectId: _projectId, ...rest } = CALLER_CONTEXT_V1; return rest; })()],
+  ])("fails closed before a run or backend call for %s", async (_case, context) => {
+    const contextPath = join(sandbox.projectRoot, "invalid-caller-context.json");
+    await writeFile(contextPath, JSON.stringify(context), "utf-8");
+    const stdout = vi.fn();
+
+    const result = await invokeAction(sandbox.workflowPath, {
+      task: "must not start",
+      contextFile: contextPath,
+      json: true,
+      stdout,
+    });
+
+    expect(result).toMatchObject({ runId: "(error)", status: "failed" });
+    expect(TestInvokeBackend.calls).toHaveLength(0);
+    expect(await readdir(sandbox.runsDir)).toEqual([]);
+    expect(JSON.parse(String(stdout.mock.calls[0]?.[0]))).toMatchObject({
+      runId: "(error)",
+      status: "failed",
+    });
   });
 
   // ── Dry-run ─────────────────────────────────────────────────────────────

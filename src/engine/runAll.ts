@@ -1674,6 +1674,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       clock,
       triggerSource: "manual",
       ...(opts.inputs !== undefined ? { inputs: opts.inputs } : {}),
+      ...(callerContext !== undefined ? { callerContext } : {}),
     });
     runId = result.runId;
   } else {

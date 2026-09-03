@@ -66,30 +66,55 @@ platform Workspace.
 
 ### 2.3 Caller Context v1
 
-The context file is a JSON object validated by `src/caller-context.ts`. Required
-sections are:
+`--context-file` is the canonical Core-to-Flow `CallerContextV1` envelope.
+It is parsed and validated before Flow creates a run, invokes a backend, or
+touches a managed workspace. It is not Flow's legacy Host API identity shape.
 
 ```json
 {
-  "user": { "id": "user-1", "name": "User", "email": "user@example.test" },
+  "contractVersion": 1,
   "actor": { "type": "service", "id": "zigma-core" },
-  "source": { "system": "zigma-core", "version": "0.1.0" },
-  "permissions": ["workflow:invoke"],
-  "project": { "id": "project_...", "scope": "local" },
-  "coreTaskId": "task_...",
+  "capabilities": ["task:start", "workflow:invoke"],
+  "constraints": {
+    "repositoryIds": ["repo_..."],
+    "workflowRefs": ["code-change"],
+    "toolNames": ["git", "npm"],
+    "branchPatterns": ["zigma/*"],
+    "maxRunDurationMs": 3600000
+  },
+  "source": { "kind": "api", "metadata": {} },
+  "taskId": "task_...",
   "flowRunId": "flowrun_...",
+  "projectId": "project_...",
   "permissionSnapshotId": "permission_...",
-  "permissionSnapshotHash": "sha256-hex",
-  "repository": "owner/repository",
-  "branch": "zigma/task_...",
-  "callbackConfig": { "type": "file", "uri": "D:/events/run.ndjson" }
+  "integrityHash": "sha256:...",
+  "operationId": "flow:start:...",
+  "callbackCorrelationId": "command_..."
 }
 ```
 
-The entire context is optional for interactive CLI compatibility. A platform
-profile that requires permission evidence must fail closed when the file is
-missing or invalid. Flow freezes a deep copy into the run directory; later
-caller permission changes do not mutate an active run.
+Required fields are `contractVersion` (exactly `1`), `actor`, a non-empty
+`capabilities` array, all four `constraints` arrays, `source.kind`,
+`source.metadata`, `taskId`, `flowRunId`, `projectId`,
+`permissionSnapshotId`, and `integrityHash`. `permissionSnapshotId` and
+`integrityHash` are required non-empty strings: a platform invocation without
+frozen Core permission evidence is rejected rather than silently downgraded.
+
+`actor.type` is one of `user`, `agent`, `service`, or `system`. `source.kind`
+is one of `api`, `web`, `mail`, `code-platform`, `schedule`, `cli`, or
+`system`. Optional `operationId` and `callbackCorrelationId` preserve the
+caller's durable correlation IDs. Optional `repository`, `baseRef`,
+`workspacePolicy`, and `coreCallbackUrl` carry the corresponding Core records;
+when present their nested fields are validated. Unknown contract versions,
+unversioned legacy files, null evidence fields, and malformed required values
+fail closed.
+
+Interactive `zigma-flow invoke` without `--context-file` remains supported and
+does not create a caller-context snapshot. A caller that supplies a context
+file is opting into this v1 contract and must not use the prior
+`user/project/source.system` shape. Once accepted, Flow freezes a deep copy in
+the run directory; later caller permission changes do not mutate an active
+run.
 
 ### 2.4 Idempotency
 

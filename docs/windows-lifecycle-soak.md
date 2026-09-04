@@ -11,12 +11,14 @@ directory. It now owns and drains its state, event, platform-event, and run-log
 writers, and it terminates and reaps Agent and Script process trees before
 acknowledging cancellation.
 
-Flow does **not** yet provision managed workspaces. The confirmed future model
-in `docs/zigma-workspace-integration.md` uses one managed Run workspace plus a
-separate workspace for each writable Job attempt. Different Job workspaces may
-execute in parallel, while integration into the Run workspace remains
-serialized. Workspace snapshot, reconcile, and cleanup must wait for the
-quiescence boundary tested here.
+Flow accepts the confirmed top-level managed-workspace language and dispatches
+through an injected `WorkspaceProvider`, but does not ship a
+`zigma-workspace` resource adapter or integration/cleanup lifecycle yet. The
+confirmed model in `docs/zigma-workspace-integration.md` uses one managed Run
+workspace plus a separate workspace for each writable Job attempt. Different
+Job workspaces may execute in parallel, while integration into the Run
+workspace remains serialized. Workspace snapshot, reconcile, and cleanup must
+wait for the quiescence boundary tested here.
 
 ## Bounded CI gate
 
@@ -27,6 +29,7 @@ quiescence boundary tested here.
 - timeout and external cancellation through the same idempotent termination;
 - a real Windows parent/grandchild tree killed with `taskkill /T /F`;
 - deterministic cancellation acknowledgement and fail-fast settlement;
+- a real two-CLI `invoke`/`abort` cancellation acknowledgement;
 - parallel scheduler and full dogfood DAG completion;
 - writer drain and temporary-directory teardown through the covered run paths.
 

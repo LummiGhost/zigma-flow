@@ -24,6 +24,13 @@ import { createRequire } from "node:module";
 import type { GitInspector } from "../git/index.js";
 import { SimpleGitInspector } from "../git/index.js";
 
+export type {
+  PrepareJobWorkspaceInput,
+  PrepareRunWorkspaceInput,
+  WorkspaceHandle,
+  WorkspaceProvider,
+} from "./provider.js";
+
 // micromatch ships as a CommonJS module; @types/micromatch uses `export =`
 // which conflicts with ESM `import default` under NodeNext. Use createRequire
 // to avoid the TypeScript type conflict — mirrors the pattern in

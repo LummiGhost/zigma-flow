@@ -269,15 +269,21 @@ itself is not sufficient evidence that OS children have been reaped.
 zigma-flow --cwd <workspace> abort --run <run-id> --reason <text> --json
 ```
 
-In v1, `abort` records cancellation in the run state but does not provide an
-out-of-process control channel to prove that a separately running `invoke`
-process has stopped. Therefore:
+An active `invoke` publishes a loopback-only, token-authenticated control
+record beneath its run directory. `abort` uses that record to request
+cancellation from the owning invocation and blocks until the owner has settled
+its current job batch, reaped Flow-owned children, drained state/event/log
+writers, and persisted a quiescent acknowledgement. In that case a successful
+`abort --json` result includes `data.quiescent: true`; it is a termination
+acknowledgement for that Flow invocation.
 
-- Core records cancellation as requested before invoking `abort`.
-- An `abort` success is not a child-process termination acknowledgement.
-- The Execution Host must signal and await the actual invoke process it owns.
-- Core releases capacity and Workspace cleanup only after host/provider
-  termination acknowledgement or explicit reconciliation.
+Runs with no active invoke owner (for example paused or offline runs) retain
+the durable Engine-only abort path. A stale/missing owner is not evidence that
+an external host process has stopped, and an unreachable active owner or a
+negative quiescence acknowledgement is an abort error rather than success.
+Core must still own capacity release and Workspace cleanup for process trees it
+created outside Flow, and must reconcile when it cannot obtain Flow's positive
+acknowledgement.
 
 ### 6.3 Timeout ownership
 
@@ -364,7 +370,7 @@ contract version and capability set must both match.
 | Context validation/freeze | `tests/commands/context-file.test.ts` | Cross-repository Core adapter fixture: M0.5/M2 |
 | Event ID/type/envelope | `tests/events/platformEvent.test.ts` | Durable projection flush and at-least-once delivery: M1/M2 |
 | Resume command envelope | `tests/commands/resume-json.test.ts` | Host retry/duplicate integration: M2 |
-| Abort command envelope | `tests/commands/abort-json.test.ts` | Out-of-process termination acknowledgement: M1/M2 |
+| Abort command envelope and live acknowledgement | `tests/commands/abort-json.test.ts`, `tests/process/two-cli-cancel.lifecycle.ts` | Host-owned process trees and durable callback delivery: M2 |
 | In-process cancellation | `tests/engine/runAll-cancel.test.ts`, `tests/engine/runAll-events.test.ts`, `tests/process/lifecycle.test.ts` | Deterministic cancellation and process-tree reaping are gated by Windows CI; see `docs/windows-lifecycle-soak.md` |
 | Parallel scheduling | `tests/engine/runAll-concurrent.test.ts`, `tests/dogfood/run-all-parallel.test.ts` | Repeated mixed-load coverage is gated by Windows CI; see `docs/windows-lifecycle-soak.md` |
 

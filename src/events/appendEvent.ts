@@ -63,9 +63,12 @@ export async function drainEventWrites(runDir: string): Promise<void> {
 export async function disposeEventWriter(runDir: string): Promise<void> {
   const queue = appendQueues.get(runDir);
   if (queue === undefined) return;
-  await queue.drain();
-  if (appendQueues.get(runDir) === queue) {
-    appendQueues.delete(runDir);
+  try {
+    await queue.drain();
+  } finally {
+    if (appendQueues.get(runDir) === queue) {
+      appendQueues.delete(runDir);
+    }
   }
 }
 

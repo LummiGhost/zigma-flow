@@ -5,7 +5,7 @@
  * WF-P4-EVENT Step 2.
  */
 
-export { nextSequentialEventId } from "./sequence.js";
+export { disposeEventSequence, nextSequentialEventId } from "./sequence.js";
 
 export {
   EVENT_TYPES,

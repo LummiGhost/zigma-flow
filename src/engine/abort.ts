@@ -18,8 +18,12 @@
  *   - docs/mvp-contracts.md §2.3, §2.4
  */
 
-import { nextEventId as formatEventId } from "../events/index.js";
-import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
+import {
+  disposeEventSequence,
+  disposeEventWriter,
+  nextSequentialEventId,
+} from "../events/index.js";
+import { disposeStateStore, JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import { StateError } from "../utils/index.js";
 
@@ -48,6 +52,9 @@ export async function abortRun(opts: AbortRunOpts): Promise<void> {
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
 
+  let primaryError: unknown;
+  let hasPrimaryError = false;
+  try {
   // ── 1. Read state snapshot ─────────────────────────────────────────────────
 
   const state = await stateStore.readSnapshot(runDir);
@@ -70,9 +77,7 @@ export async function abortRun(opts: AbortRunOpts): Promise<void> {
 
   // ── 3. Emit run_cancelled event ────────────────────────────────────────────
 
-  const lastId = await eventWriter.readLastEventId(runDir);
-  const counter = lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
-  const cancelledEventId = formatEventId(counter + 1);
+  const cancelledEventId = await nextSequentialEventId(runDir, eventWriter);
 
   await eventWriter.appendEvent(runDir, {
     id: cancelledEventId,
@@ -95,4 +100,32 @@ export async function abortRun(opts: AbortRunOpts): Promise<void> {
     last_event_id: cancelledEventId,
   };
   await stateStore.writeSnapshot(runDir, updatedState);
+  } catch (error: unknown) {
+    primaryError = error;
+    hasPrimaryError = true;
+  }
+
+  const cleanupErrors: unknown[] = [];
+  const cleanup = await Promise.allSettled([
+    disposeEventWriter(runDir),
+    disposeEventSequence(runDir),
+    disposeStateStore(runDir),
+  ]);
+  for (const result of cleanup) {
+    if (result.status === "rejected") cleanupErrors.push(result.reason);
+  }
+
+  if (hasPrimaryError) {
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [primaryError, ...cleanupErrors],
+        "Abort failed and teardown reported additional errors",
+        { cause: primaryError },
+      );
+    }
+    throw primaryError;
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, "Abort teardown failed");
+  }
 }

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
@@ -39,6 +39,34 @@ describe("RunLogWriter", () => {
     expect(record.step_id).toBeNull();
     expect(record.attempt).toBeNull();
     expect(typeof record.occurred_at).toBe("string");
+  });
+
+  test("continues the sequence from disk after a per-run writer is disposed", async () => {
+    const first = RunLogWriter.forRun(runDir, runId);
+    await first.writeSystem("first invocation");
+    await RunLogWriter.dispose(runDir);
+
+    const resumed = RunLogWriter.forRun(runDir, runId);
+    await expect(resumed.writeSystem("resumed invocation")).resolves.toBe(2);
+    await RunLogWriter.dispose(runDir);
+
+    const records = (await readFile(join(runDir, "run.log.jsonl"), "utf-8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { id: number; text: string });
+    expect(records.map((record) => record.id)).toEqual([1, 2]);
+    expect(records[1]?.text).toBe("resumed invocation");
+  });
+
+  test("supervises detached write failures at drain without an unhandled rejection", async () => {
+    // A file cannot be used as the run directory, so mkdir in write() fails.
+    // writeDetached owns that rejection and drain() reports it deterministically.
+    await writeFile(runDir, "not a directory", "utf-8");
+    const writer = RunLogWriter.forRun(runDir, runId);
+    writer.writeSystemDetached("will fail");
+
+    await expect(writer.drain()).rejects.toBeInstanceOf(AggregateError);
+    await RunLogWriter.dispose(runDir);
   });
 
   test("writes stdout/stderr records with attribution", async () => {

@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { abortRun } from "../engine/abort.js";
 import { resolveRunId } from "../run/index.js";
 import type { Clock } from "../run/index.js";
+import { requestInvocationCancellation } from "../run/invocationControl.js";
 import {
   ConfigError,
   StateError,
@@ -52,6 +53,8 @@ export interface AbortActionOpts {
   json?: boolean;
   /** Injectable stdout function for testing. */
   stdout?: (line: string) => void;
+  /** Maximum time to wait for a live invoke owner's quiescence acknowledgement. */
+  acknowledgementTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,16 +83,30 @@ export async function abortAction(opts: AbortActionOpts): Promise<CommandJsonRes
     const runsDir = join(zigmaflowDir, ".zigma-flow", "runs");
     const runDir = join(runsDir, activeRunId);
 
-    // 2. Abort the run (Engine owns all state transitions)
-    await abortRun({
+    // 2. Reach the live invoke owner when present. Its acknowledgement is sent
+    // only after children and writers quiesce. Paused/offline runs have no
+    // owner, so the Engine applies the durable state transition directly.
+    const cancellation = await requestInvocationCancellation(
       runDir,
-      runId: activeRunId,
-      clock,
-      ...(reason !== undefined ? { reason } : {}),
-    });
+      activeRunId,
+      reason ?? "Run cancelled by abort command",
+      opts.acknowledgementTimeoutMs,
+    );
+    if (cancellation.kind === "no-owner") {
+      await abortRun({
+        runDir,
+        runId: activeRunId,
+        clock,
+        ...(reason !== undefined ? { reason } : {}),
+      });
+    }
 
     const result = successResult("abort", activeRunId, {
       ...(reason !== undefined ? { reason } : {}),
+      quiescent: true,
+      ...(cancellation.acknowledgement !== undefined
+        ? { ownerStatus: cancellation.acknowledgement.status }
+        : {}),
     });
 
     if (isJson) {

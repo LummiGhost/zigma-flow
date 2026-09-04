@@ -419,9 +419,8 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       // but accepting the parameter keeps the executor interface uniform.
       ...(jobCwd !== undefined ? { jobCwd } : {}),
     });
-    // NOTE: Agent steps are intentionally excluded from jobCwd forwarding.
-    // They run in their own subprocess with a backend-managed working directory,
-    // and their projectRoot is set to the zigmaflowDir (project root).
+    // Agent steps are dispatched by runAll directly so their backend receives
+    // the same Engine-resolved jobCwd through AgentExecuteOptions.projectRoot.
   } else {
     throw new WorkflowError(
       `Step "${stepId}" in job "${jobId}" is type "${stepDef.type}", not a script, check, or router step (P8 scope)`,

@@ -19,7 +19,7 @@
     "test:integration": "vitest run tests/commands tests/engine tests/init",
     "test:e2e": "vitest run tests/dogfood tests/cli",
     "test:contract-info": "pnpm run build && node tools/contract-info-smoke.mjs",
-    "test:lifecycle": "vitest run tests/process/lifecycle.test.ts tests/script/runner.test.ts tests/logs/processRunner-streaming.test.ts tests/agent/claude-code-backend.test.ts tests/agent/codex-cli-backend.test.ts tests/engine/runAll-cancel.test.ts tests/engine/runAll-concurrent.test.ts tests/dogfood/run-all-parallel.test.ts",
+    "test:lifecycle": "pnpm run build && vitest run tests/process/lifecycle.test.ts tests/process/two-cli-cancel.lifecycle.ts tests/script/runner.test.ts tests/logs/processRunner-streaming.test.ts tests/agent/claude-code-backend.test.ts tests/agent/codex-cli-backend.test.ts tests/engine/runAll-cancel.test.ts tests/engine/runAll-concurrent.test.ts tests/engine/runAll-m1-lifecycle.test.ts tests/dogfood/run-all-parallel.test.ts",
     "test:ci": "vitest run",
     "smoke": "node dist/cli.js --help",
     "typecheck": "tsc --noEmit",

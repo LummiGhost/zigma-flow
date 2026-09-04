@@ -410,9 +410,12 @@ export async function drainStateWrites(runDir: string): Promise<void> {
 export async function disposeStateStore(runDir: string): Promise<void> {
   const queue = writeQueues.get(runDir);
   if (queue === undefined) return;
-  await queue.drain();
-  if (writeQueues.get(runDir) === queue) {
-    writeQueues.delete(runDir);
+  try {
+    await queue.drain();
+  } finally {
+    if (writeQueues.get(runDir) === queue) {
+      writeQueues.delete(runDir);
+    }
   }
 }
 

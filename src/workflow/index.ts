@@ -459,15 +459,98 @@ export interface ConcurrencyGroupConfig {
  * @stability experimental — `directory` and string-form workspace may change
  *   in any minor version release without deprecation.
  */
+const WorkspaceRetentionValueSchema = z.enum(["cleanup", "retain"]);
+const WorkspaceRetentionSchema = z.object({
+  success: WorkspaceRetentionValueSchema.optional(),
+  failure: WorkspaceRetentionValueSchema.optional(),
+  blocked: WorkspaceRetentionValueSchema.optional(),
+});
+
+const JobWorkspaceObjectSchema = z.object({
+  /** @stability stable */
+  mode: z.enum(["read-only", "writable"]).optional(),
+  /** @stability experimental */
+  directory: z.string().optional(),
+  /** Managed workspace scope from docs/zigma-workspace-integration.md. */
+  scope: z.enum(["external", "run", "job"]).optional(),
+  merge: z.object({
+    strategy: z.enum(["none", "commit"]),
+    target: z.literal("run").optional(),
+    conflict: z.enum(["block", "fail"]).optional(),
+  }).optional(),
+  retention: WorkspaceRetentionSchema.optional(),
+}).catchall(z.unknown());
+
 const JobWorkspaceSchema = z.union([
   z.string(),
+  JobWorkspaceObjectSchema,
+]);
+
+const ManagedWorkflowWorkspaceSchema = z.object({
+  provider: z.literal("zigma-workspace"),
+  repository: z.string().min(1),
+  base: z.string().min(1),
+  publish: z.object({
+    strategy: z.enum(["none", "branch", "merge", "fast-forward"]).default("branch"),
+    target: z.string().optional(),
+    conflict: z.enum(["block", "fail"]).optional(),
+  }).optional(),
+  retention: WorkspaceRetentionSchema.optional(),
+});
+
+const ExternalWorkflowWorkspaceSchema = z.union([
+  z.string(),
   z.object({
-    /** @stability stable */
-    mode: z.enum(["read-only", "writable"]).optional(),
-    /** @stability experimental */
-    directory: z.string().optional(),
+    provider: z.literal("external").optional(),
+    directory: z.string().min(1),
   }).catchall(z.unknown()),
 ]);
+
+const WorkflowWorkspaceSchema = z.union([
+  ManagedWorkflowWorkspaceSchema,
+  ExternalWorkflowWorkspaceSchema,
+]);
+
+export interface WorkspaceRetentionDefinition {
+  success?: "cleanup" | "retain";
+  failure?: "cleanup" | "retain";
+  blocked?: "cleanup" | "retain";
+}
+
+export interface JobWorkspaceDefinition {
+  /**
+   * Kept as a string at the public TypeScript boundary for compatibility with
+   * programmatic WorkflowDefinition fixtures. YAML input is still restricted
+   * to read-only/writable by JobWorkspaceObjectSchema above.
+   */
+  mode?: string;
+  directory?: string;
+  scope?: "external" | "run" | "job";
+  merge?: {
+    strategy: "none" | "commit";
+    target?: "run";
+    conflict?: "block" | "fail";
+  };
+  retention?: WorkspaceRetentionDefinition;
+  [key: string]: unknown;
+}
+
+export interface ManagedWorkflowWorkspaceDefinition {
+  provider: "zigma-workspace";
+  repository: string;
+  base: string;
+  publish?: {
+    strategy: "none" | "branch" | "merge" | "fast-forward";
+    target?: string;
+    conflict?: "block" | "fail";
+  };
+  retention?: WorkspaceRetentionDefinition;
+}
+
+export type WorkflowWorkspaceDefinition =
+  | string
+  | { provider?: "external"; directory: string; [key: string]: unknown }
+  | ManagedWorkflowWorkspaceDefinition;
 
 /**
  * Zod schema for RetryPolicy (matches the interface in run/index.ts).
@@ -516,7 +599,7 @@ const JobSchema = z.object({
 export interface JobDefinition {
   steps: StepDefinition[];
   /** Working directory path (string, may contain expressions) or config object with optional directory + mode. */
-  workspace?: string | { mode?: string; directory?: string; [key: string]: unknown };
+  workspace?: string | JobWorkspaceDefinition;
   needs?: string[];
   optional_needs?: string[];
   activation?: string;
@@ -653,6 +736,8 @@ const WorkflowSchema = z.object({
   skills: z.record(z.string(), z.unknown()).optional(),
   /** @stability stable */
   permissions: z.record(z.string(), z.unknown()).optional(),
+  /** Managed Run workspace or external compatibility directory. */
+  workspace: WorkflowWorkspaceSchema.optional(),
   /** @stability stable */
   signals: z.record(z.string(), SignalDeclarationSchema).optional(),
   /** @stability experimental — may change in any minor version release without deprecation */
@@ -702,6 +787,7 @@ export interface WorkflowDefinition {
   inputs?: Record<string, InputDefinition>;
   skills?: Record<string, unknown>;
   permissions?: Record<string, unknown>;
+  workspace?: WorkflowWorkspaceDefinition;
   signals?: Record<string, SignalDeclaration>;
   variables?: Record<string, {
     type: "string" | "number" | "boolean" | "array" | "object";

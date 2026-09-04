@@ -27,6 +27,19 @@ function getSequenceQueue(runDir: string): AsyncQueue {
   return queue;
 }
 
+/** Drain and release the per-run sequence allocator and its cached counter. */
+export async function disposeEventSequence(runDir: string): Promise<void> {
+  const queue = sequenceQueues.get(runDir);
+  try {
+    await queue?.drain();
+  } finally {
+    if (queue !== undefined && sequenceQueues.get(runDir) === queue) {
+      sequenceQueues.delete(runDir);
+    }
+    lastAllocatedCounters.delete(runDir);
+  }
+}
+
 /**
  * Read the last event from events.jsonl in `runDir` and return the next
  * sequential event id.

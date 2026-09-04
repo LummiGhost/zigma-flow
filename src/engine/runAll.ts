@@ -17,13 +17,18 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, stat, appendFile } from "node:fs/promises";
-import { basename, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
 
 import type { AgentBackend } from "../agent/index.js";
 import { compileAgentOutputSchema, outputSchemaHash } from "../agent/outputSchema.js";
 import type { StepBackendOverride } from "../agent/config.js";
 import { buildContext } from "../context/index.js";
-import { drainEventWrites, type ZigmaFlowEvent } from "../events/index.js";
+import {
+  disposeEventSequence,
+  disposeEventWriter,
+  drainEventWrites,
+  type ZigmaFlowEvent,
+} from "../events/index.js";
 import { nextSequentialEventId } from "../events/sequence.js";
 import { mapZigmaFlowEventToPlatformEvent } from "../events/platformEvent.js";
 import type { FlowPlatformEvent } from "../events/platformEvent.js";
@@ -36,11 +41,13 @@ import {
 import type { Clock, RunState } from "../run/index.js";
 import {
   AsyncQueue,
+  disposeStateStore,
   drainStateWrites,
   JsonlEventWriter,
   LocalStateStore,
   SystemClock,
 } from "../run/index.js";
+import { InvocationControlOwner } from "../run/invocationControl.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import {
   ConfigError,
@@ -61,9 +68,16 @@ import { selectExecutable } from "./scheduler.js";
 import type { ExecutableBatch } from "./scheduler.js";
 import { checkAndExecuteTraverses, parseVirtualJobId } from "./traverse.js";
 import type { CallerContext } from "../caller-context.js";
+import type { WorkspaceHandle, WorkspaceProvider } from "../workspace/index.js";
 
 /** Fallback timeout when backend does not expose a timeout value. */
 const DEFAULT_BACKEND_TIMEOUT = 600_000;
+
+function cancellationReason(signal: AbortSignal | undefined): string {
+  return typeof signal?.reason === "string" && signal.reason.length > 0
+    ? signal.reason
+    : "Run cancelled by caller";
+}
 
 /**
  * Register a single step artifact in the artifact index.
@@ -281,6 +295,10 @@ export interface RunAllOpts {
    * written (but artifacts are still persisted).
    */
   logWriter?: RunLogWriter;
+  /** Enable the portable cross-process control endpoint used by `invoke`. */
+  enableInvocationControl?: boolean;
+  /** Managed workspace resource adapter, injected by the composition root. */
+  workspaceProvider?: WorkspaceProvider;
 }
 
 export interface RunAllSummary {
@@ -355,6 +373,13 @@ interface ExecuteJobOnceCtx {
   onEvent: ((e: ZigmaFlowEvent) => void) | undefined;
   /** RunLog writer for real-time log forwarding (Issue #280). */
   logWriter: RunLogWriter | undefined;
+  /**
+   * Engine-resolved execution directory. When a managed workspace is active,
+   * every executable step in this job receives this exact absolute path.
+   */
+  jobCwd?: string;
+  /** A provider resolution failure, converted into an Engine-owned transition. */
+  workspaceError?: string;
   // Debugging flags (from RunAllOpts)
   pauseBefore: string | undefined; // "job.step" format
   stopAfter: string | undefined; // "job.step" format
@@ -389,6 +414,8 @@ async function executeJobOnce(
     batchId,
     onEvent,
     logWriter,
+    jobCwd,
+    workspaceError,
     pauseBefore,
     stopAfter,
     saveAllPrompts,
@@ -482,12 +509,34 @@ async function executeJobOnce(
     return { jobId, success: false, action: "blocked", detail: `Step "${stepId}" not found` };
   }
 
+  if (workspaceError !== undefined) {
+    const failure = await recordAgentFailure({
+      runDir,
+      runId,
+      jobId,
+      stepId,
+      attempt: jobState.attempt ?? 1,
+      reason: `Workspace provider failed: ${workspaceError}`,
+      errorType: "config",
+      clock,
+      stateStore,
+      eventWriter,
+    });
+    const action = failure.action === "run_failed"
+      ? "failed"
+      : failure.action === "continue"
+      ? "completed"
+      : failure.action;
+    return { jobId, success: false, action, detail: `Workspace provider failed: ${workspaceError}` };
+  }
+
   if (stepDef.type === "agent") {
     return executeAgentStep({
       runDir, runId, zigmaflowDir, jobId, wf, state,
       backendResolver, stateStore, eventWriter, clock,
       signal, batchId, onEvent, logWriter, stepDef, stepId,
       pauseBefore, stopAfter, saveAllPrompts,
+      ...(jobCwd !== undefined ? { jobCwd } : {}),
     });
   }
 
@@ -502,6 +551,7 @@ async function executeJobOnce(
       signal, batchId, onEvent, logWriter,
       stepDef, stepId,
       pauseBefore, stopAfter, saveAllPrompts,
+      ...(jobCwd !== undefined ? { jobCwd } : {}),
     });
   }
 
@@ -532,8 +582,37 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     runDir, runId, zigmaflowDir, jobId, wf, state,
     backendResolver, stateStore, eventWriter, clock,
     signal, batchId, onEvent, logWriter, stepDef, stepId,
-    pauseBefore, stopAfter, saveAllPrompts,
+    pauseBefore, stopAfter, saveAllPrompts, jobCwd,
   } = ctx;
+
+  // Legacy external directories and managed-provider handles meet at the
+  // same execution-context boundary. Resolve external job directories here
+  // as well so Agent backends receive exactly the cwd used by script/check/
+  // router steps; the provider path is already supplied as jobCwd.
+  let executionCwd = jobCwd;
+  if (executionCwd === undefined) {
+    const jobDef = wf.jobs[jobId];
+    if (jobDef !== undefined) {
+      try {
+        executionCwd = await resolveJobWorkingDirectory(jobDef, state, runDir);
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        await recordAgentFailure({
+          runDir,
+          runId,
+          jobId,
+          stepId,
+          attempt: state.jobs[jobId]?.attempt ?? 1,
+          reason: `Workspace resolution failed: ${errorMsg}`,
+          errorType: "config",
+          clock,
+          stateStore,
+          eventWriter,
+        });
+        return { jobId, success: false, action: "failed", detail: `Workspace resolution failed: ${errorMsg}` };
+      }
+    }
+  }
 
   // Build context (read-only — no disk writes)
   let bundle: Awaited<ReturnType<typeof buildContext>>;
@@ -752,7 +831,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       `prior schema hash ${priorSchemaHash} != newly compiled schema hash ${newSchemaHash}; ` +
       `continuing under the current contract`;
     if (logWriter) {
-      void logWriter.writeSystem(driftMsg, {
+      logWriter.writeSystemDetached(driftMsg, {
         job_id: jobId,
         step_id: bundle.stepId,
         attempt,
@@ -851,7 +930,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   // System log: agent step started (Issue #280)
   if (logWriter) {
     const agentLabel = stepDef.label ?? stepDef.id;
-    void logWriter.writeSystem(`Agent step ${jobId}/${agentLabel} started`, {
+    logWriter.writeSystemDetached(`Agent step ${jobId}/${agentLabel} started`, {
       job_id: jobId,
       step_id: bundle.stepId,
       attempt,
@@ -863,13 +942,13 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     reportPath,
     outputSchema,
     stepDir,
-    projectRoot: zigmaflowDir,
+    projectRoot: executionCwd ?? zigmaflowDir,
     ...(signal !== undefined ? { signal } : {}),
     // Real-time stdout/stderr forwarding (Issue #280)
     ...(logWriter
       ? {
           onStdout: (chunk: string) => {
-            void logWriter.write({
+            logWriter.writeDetached({
               job_id: jobId,
               step_id: bundle.stepId,
               attempt,
@@ -878,7 +957,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
             });
           },
           onStderr: (chunk: string) => {
-            void logWriter.write({
+            logWriter.writeDetached({
               job_id: jobId,
               step_id: bundle.stepId,
               attempt,
@@ -1166,7 +1245,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   // System log: agent step completed (Issue #280)
   if (logWriter) {
     const agentLabel = stepDef.label ?? stepDef.id;
-    void logWriter.writeSystem(
+    logWriter.writeSystemDetached(
       `Agent step ${jobId}/${agentLabel} completed in ${result.durationMs ?? 0}ms`,
       { job_id: jobId, step_id: bundle.stepId, attempt },
     );
@@ -1343,7 +1422,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
 async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   const {
     runDir, runId, zigmaflowDir, jobId, wf, state,
-    stateStore, eventWriter, clock, batchId, onEvent, logWriter,
+    stateStore, eventWriter, clock, batchId, onEvent, logWriter, jobCwd,
     stepDef, stepId,
   } = ctx;
 
@@ -1362,10 +1441,10 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   // exists, guarding against directory deletion mid-job. The overhead of
   // a single stat() call per step is negligible compared to step execution time.
   const jobDef = wf.jobs[jobId];
-  let jobCwd: string | undefined;
-  if (jobDef !== undefined) {
+  let resolvedJobCwd = jobCwd;
+  if (resolvedJobCwd === undefined && jobDef !== undefined) {
     try {
-      jobCwd = await resolveJobWorkingDirectory(jobDef, state, runDir);
+      resolvedJobCwd = await resolveJobWorkingDirectory(jobDef, state, runDir);
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       await recordAgentFailure({
@@ -1388,7 +1467,7 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   const attempt = currentJobState.attempt ?? 1;
   if (logWriter) {
     const label = stepDef.label ?? stepId;
-    void logWriter.writeSystem(`Step ${jobId}/${label} (${stepDef.type}) started`, {
+    logWriter.writeSystemDetached(`Step ${jobId}/${label} (${stepDef.type}) started`, {
       job_id: jobId,
       step_id: stepId,
       attempt,
@@ -1401,13 +1480,13 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     runId,
     jobId,
     clock,
-    ...(jobCwd !== undefined ? { jobCwd } : {}),
+    ...(resolvedJobCwd !== undefined ? { jobCwd: resolvedJobCwd } : {}),
     ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     // Real-time stdout/stderr forwarding (Issue #280)
     ...(logWriter
       ? {
           onStdout: (chunk: string) => {
-            void logWriter.write({
+            logWriter.writeDetached({
               job_id: jobId,
               step_id: stepId,
               attempt,
@@ -1416,7 +1495,7 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
             });
           },
           onStderr: (chunk: string) => {
-            void logWriter.write({
+            logWriter.writeDetached({
               job_id: jobId,
               step_id: stepId,
               attempt,
@@ -1483,7 +1562,7 @@ async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
   // System log: human gate waiting (Issue #280)
   if (logWriter) {
     const label = stepDef.label ?? stepId;
-    void logWriter.writeSystem(`Human gate ${jobId}/${label} awaiting input`, {
+    logWriter.writeSystemDetached(`Human gate ${jobId}/${label} awaiting input`, {
       job_id: jobId,
       step_id: stepId,
       attempt: jobState.attempt ?? 1,
@@ -1597,7 +1676,19 @@ function reconcileTerminalState(
  * provided the function resumes an existing run by reading its state. Exactly
  * one of `task` or `runId` must be set.
  */
-export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
+interface RunAllLifecycleResources {
+  runDir?: string;
+  logWriter?: RunLogWriter;
+  ownsLogWriter?: boolean;
+  eventSinkQueue?: AsyncQueue;
+  invocationControl?: InvocationControlOwner;
+  abort(reason: string): void;
+}
+
+async function runAllExecution(
+  opts: RunAllOpts,
+  lifecycle: RunAllLifecycleResources,
+): Promise<RunAllSummary> {
   const {
     task,
     runId: existingRunId,
@@ -1628,6 +1719,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
   // ── Event sink: ordered writes drained before runAll returns ───────────
 
   const eventSinkQueue = new AsyncQueue();
+  lifecycle.eventSinkQueue = eventSinkQueue;
 
   function writeToEventSink(e: ZigmaFlowEvent): void {
     if (eventSinkPath === undefined) return;
@@ -1682,13 +1774,24 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
   }
 
   const runDir = join(runsDir, runId);
+  lifecycle.runDir = runDir;
 
   // ── Create or reuse RunLogWriter for real-time log forwarding (Issue #280) ──
 
   const logWriter = providedLogWriter ?? RunLogWriter.forRun(runDir, runId);
+  lifecycle.logWriter = logWriter;
+  lifecycle.ownsLogWriter = providedLogWriter === undefined;
+
+  if (opts.enableInvocationControl === true) {
+    lifecycle.invocationControl = await InvocationControlOwner.start({
+      runDir,
+      runId,
+      onCancellation: (reason) => lifecycle.abort(reason),
+    });
+  }
 
   // System log: run started
-  void logWriter.writeSystem(
+  logWriter.writeSystemDetached(
     task !== undefined
       ? `Run ${runId} created for workflow ${basename(workflowPath)}`
       : `Run ${runId} resumed`,
@@ -1697,6 +1800,88 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
   // ── 2. Load workflow definition (needed for step type resolution) ──────
 
   const wf = await loadWorkflowFile(workflowPath);
+
+  // ── Managed Run workspace (docs/zigma-workspace-integration.md) ────────
+
+  const managedDefinition =
+    typeof wf.workspace === "object" && wf.workspace !== null &&
+    wf.workspace.provider === "zigma-workspace"
+      ? wf.workspace
+      : undefined;
+  let managedRunWorkspace: WorkspaceHandle | undefined;
+  const managedJobWorkspaces = new Map<string, Promise<WorkspaceHandle>>();
+
+  const validateHandle = async (handle: WorkspaceHandle, label: string): Promise<WorkspaceHandle> => {
+    if (!isAbsolute(handle.path)) {
+      throw new ValidationError(`${label} returned a non-absolute workspace path: ${handle.path}`);
+    }
+    let workspaceStat;
+    try {
+      workspaceStat = await stat(handle.path);
+    } catch (error: unknown) {
+      throw new ValidationError(`${label} returned a missing workspace path: ${handle.path}`, {
+        cause: error,
+      });
+    }
+    if (!workspaceStat.isDirectory()) {
+      throw new ValidationError(`${label} returned a path that is not a directory: ${handle.path}`);
+    }
+    return handle;
+  };
+
+  if (managedDefinition !== undefined) {
+    if (opts.workspaceProvider === undefined) {
+      throw new ValidationError(
+        'Workflow requests provider "zigma-workspace" but no WorkspaceProvider was injected',
+        { suggestion: "Configure the zigma-workspace adapter before invoking this workflow." },
+      );
+    }
+    managedRunWorkspace = await validateHandle(
+      await opts.workspaceProvider.prepareRun({
+        operationId: `run:${runId}:create`,
+        runId,
+        projectRoot: zigmaflowDir,
+        definition: managedDefinition,
+        ...(signal !== undefined ? { signal } : {}),
+      }),
+      "WorkspaceProvider.prepareRun",
+    );
+  }
+
+  const resolveManagedJobWorkspace = async (
+    jobId: string,
+    state: RunState,
+    jobSignal: AbortSignal | undefined,
+  ): Promise<string | undefined> => {
+    if (managedRunWorkspace === undefined || opts.workspaceProvider === undefined) return undefined;
+    const jobDef = wf.jobs[jobId];
+    if (jobDef === undefined) return managedRunWorkspace.path;
+    const definition = jobDef.workspace;
+    if (typeof definition === "string") return undefined;
+    if (definition?.directory !== undefined || definition?.scope === "external") return undefined;
+
+    const mode = getJobMode(jobId, wf);
+    const scope = definition?.scope ?? (mode === "read-only" ? "run" : "job");
+    if (scope === "run") return managedRunWorkspace.path;
+
+    const attempt = state.jobs[jobId]?.attempt ?? 1;
+    const key = `${jobId}:${attempt}`;
+    let pending = managedJobWorkspaces.get(key);
+    if (pending === undefined) {
+      const normalizedDefinition = definition ?? { mode };
+      pending = opts.workspaceProvider.prepareJob({
+        operationId: `run:${runId}:job:${jobId}:attempt:${attempt}:create`,
+        runId,
+        jobId,
+        attempt,
+        runWorkspace: managedRunWorkspace,
+        definition: normalizedDefinition,
+        ...(jobSignal !== undefined ? { signal: jobSignal } : {}),
+      }).then((handle) => validateHandle(handle, "WorkspaceProvider.prepareJob"));
+      managedJobWorkspaces.set(key, pending);
+    }
+    return (await pending).path;
+  };
 
   // ── 3. Main execution loop (concurrent batch, AD-P14-004) ──────────────
 
@@ -2023,8 +2208,19 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
     // ── Execute batch concurrently via Promise.allSettled ────────────────
 
-    const jobPromises = jobsToRun.map((j) =>
-      executeJobOnce({
+    const jobPromises = jobsToRun.map(async (j) => {
+      let jobCwd: string | undefined;
+      let workspaceError: string | undefined;
+      try {
+        jobCwd = await resolveManagedJobWorkspace(
+          j.jobId,
+          state,
+          jobControllers.get(j.jobId)?.signal,
+        );
+      } catch (error: unknown) {
+        workspaceError = error instanceof Error ? error.message : String(error);
+      }
+      return executeJobOnce({
         runDir,
         runId,
         zigmaflowDir,
@@ -2039,11 +2235,13 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         batchId,
         onEvent,
         logWriter,
+        ...(jobCwd !== undefined ? { jobCwd } : {}),
+        ...(workspaceError !== undefined ? { workspaceError } : {}),
         pauseBefore,
         stopAfter,
         saveAllPrompts,
-      }),
-    );
+      });
+    });
 
     // ── Fail-fast: abort peer jobs on first failure (AD-P14-005) ─────────
 
@@ -2108,7 +2306,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
           job: null,
           step: null,
           attempt: null,
-          payload: { reason: "Run cancelled by caller" },
+          payload: { reason: cancellationReason(signal) },
         };
         await eventWriter.appendEvent(runDir, cancelledEvent);
         onEvent?.(cancelledEvent);
@@ -2237,7 +2435,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       job: null,
       step: null,
       attempt: null,
-      payload: { reason: "Run cancelled by caller" },
+      payload: { reason: cancellationReason(signal) },
     };
     await eventWriter.appendEvent(runDir, cancelledEvent);
     onEvent?.(cancelledEvent);
@@ -2397,22 +2595,12 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
 
   const finalStatus = finalState?.status;
   if (logWriter) {
-    void logWriter.writeSystem(
+    logWriter.writeSystemDetached(
       finalStatus !== undefined
         ? `Run ${runId} finished with status: ${finalStatus}`
         : `Run ${runId} finished (max iterations reached)`,
     );
   }
-
-  // Real-time log/event callbacks enqueue writes synchronously. Their I/O may
-  // still be pending, so make completion a quiescence boundary for consumers
-  // that immediately archive or delete the run directory.
-  await Promise.all([
-    drainEventWrites(runDir),
-    drainStateWrites(runDir),
-    logWriter.drain(),
-    eventSinkQueue.drain(),
-  ]);
 
   const jobs = Object.entries(finalState?.jobs ?? {}).map(([id, js]) => ({
     id,
@@ -2427,4 +2615,100 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
     iterations: iteration,
     ...(pausedGateInfo !== undefined ? { pausedGate: pausedGateInfo } : {}),
   };
+}
+
+/**
+ * Single teardown owner for every normal, cancellation, and exceptional exit.
+ * Cleanup failures never replace the primary execution error: they are kept in
+ * AggregateError order with the primary error first.
+ */
+export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
+  const controller = new AbortController();
+  const lifecycle: RunAllLifecycleResources = {
+    abort: (reason) => {
+      if (!controller.signal.aborted) controller.abort(reason);
+    },
+  };
+
+  const forwardExternalAbort = (): void => {
+    const reason = typeof opts.signal?.reason === "string"
+      ? opts.signal.reason
+      : "Run cancelled by caller";
+    lifecycle.abort(reason);
+  };
+  if (opts.signal?.aborted) {
+    forwardExternalAbort();
+  } else {
+    opts.signal?.addEventListener("abort", forwardExternalAbort, { once: true });
+  }
+
+  let result: RunAllSummary | undefined;
+  let primaryError: unknown;
+  let hasPrimaryError = false;
+  try {
+    result = await runAllExecution({ ...opts, signal: controller.signal }, lifecycle);
+  } catch (error: unknown) {
+    primaryError = error;
+    hasPrimaryError = true;
+  }
+
+  const cleanupErrors: unknown[] = [];
+  const collect = async (operations: Array<Promise<unknown>>): Promise<void> => {
+    const settled = await Promise.allSettled(operations);
+    for (const item of settled) {
+      if (item.status === "rejected") cleanupErrors.push(item.reason);
+    }
+  };
+
+  try {
+    const runDir = lifecycle.runDir;
+    if (runDir !== undefined) {
+      await collect([
+        drainEventWrites(runDir),
+        drainStateWrites(runDir),
+        lifecycle.logWriter?.drain() ?? Promise.resolve(),
+        lifecycle.eventSinkQueue?.drain() ?? Promise.resolve(),
+      ]);
+
+      await collect([
+        disposeEventWriter(runDir),
+        disposeEventSequence(runDir),
+        disposeStateStore(runDir),
+        lifecycle.ownsLogWriter === true
+          ? RunLogWriter.dispose(runDir)
+          : Promise.resolve(),
+      ]);
+    } else {
+      await collect([lifecycle.eventSinkQueue?.drain() ?? Promise.resolve()]);
+    }
+    backendCache = undefined;
+
+    if (lifecycle.invocationControl !== undefined) {
+      try {
+        await lifecycle.invocationControl.acknowledgeQuiescence(
+          result?.status ?? (controller.signal.aborted ? "cancelled" : "failed"),
+          cleanupErrors,
+        );
+      } catch (error: unknown) {
+        cleanupErrors.push(error);
+      }
+    }
+  } finally {
+    opts.signal?.removeEventListener("abort", forwardExternalAbort);
+  }
+
+  if (hasPrimaryError) {
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [primaryError, ...cleanupErrors],
+        "Run execution failed and teardown reported additional errors",
+        { cause: primaryError },
+      );
+    }
+    throw primaryError;
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, "Run teardown failed");
+  }
+  return result!;
 }

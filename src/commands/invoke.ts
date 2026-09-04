@@ -299,6 +299,7 @@ export async function invokeAction(
     ...(options.saveAllPrompts !== undefined ? { saveAllPrompts: options.saveAllPrompts } : {}),
     ...(eventSinkPath !== undefined ? { eventSinkPath } : {}),
     ...(callerContext !== undefined ? { callerContext } : {}),
+    enableInvocationControl: true,
   };
 
   let summary: RunAllSummary;
@@ -319,6 +320,8 @@ export async function invokeAction(
       return { runId: "(error)", status: "failed", jobs: [], iterations: 0, dryRun: false };
     }
     throw err;
+  } finally {
+    process.off("SIGINT", onSigint);
   }
 
   // ── 4. Output mode ────────────────────────────────────────────────────

@@ -20,6 +20,38 @@ const CONTROL_DIRECTORY = ".control";
 const OWNER_FILENAME = "invoke-owner.json";
 const LOOPBACK_HOST = "127.0.0.1";
 
+/**
+ * Sanitized, read-only evidence used by provider reconciliation.
+ *
+ * This deliberately omits the loopback port and bearer token. They are
+ * cancellation-channel credentials, not provider status data.
+ */
+export type InvocationControlEvidenceV1 =
+  | { state: "missing" }
+  | {
+    state: "active";
+    invocationId: string;
+    ownerPid: number;
+    startedAt: string;
+  }
+  | {
+    state: "stale";
+    invocationId: string;
+    ownerPid: number;
+    startedAt: string;
+  }
+  | {
+    state: "quiescent";
+    invocationId: string;
+    ownerPid: number;
+    startedAt: string;
+    finishedAt: string;
+    status: string;
+    quiescent: boolean;
+    cleanupErrors: string[];
+  }
+  | { state: "invalid" };
+
 interface ActiveInvocationRecord {
   version: typeof CONTROL_VERSION;
   phase: "active";
@@ -105,6 +137,38 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function isIsoTimestamp(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !Number.isNaN(Date.parse(value));
+}
+
+function isControlEndpoint(record: Record<string, unknown>): boolean {
+  return record.host === LOOPBACK_HOST &&
+    typeof record.port === "number" && Number.isSafeInteger(record.port) &&
+    record.port >= 1 && record.port <= 65_535 &&
+    typeof record.token === "string" && record.token.length > 0;
+}
+
+function isActiveInvocationRecord(value: unknown): value is ActiveInvocationRecord {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.version === CONTROL_VERSION && record.phase === "active" &&
+    typeof record.runId === "string" && typeof record.invocationId === "string" &&
+    typeof record.pid === "number" && Number.isSafeInteger(record.pid) && record.pid > 0 &&
+    isControlEndpoint(record) && isIsoTimestamp(record.startedAt);
+}
+
+function isQuiescentInvocationRecord(value: unknown): value is QuiescentInvocationRecord {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.version === CONTROL_VERSION && record.phase === "quiescent" &&
+    typeof record.runId === "string" && typeof record.invocationId === "string" &&
+    typeof record.pid === "number" && Number.isSafeInteger(record.pid) && record.pid > 0 &&
+    isControlEndpoint(record) && isIsoTimestamp(record.startedAt) &&
+    isIsoTimestamp(record.finishedAt) && typeof record.status === "string" && record.status.length > 0 &&
+    typeof record.quiescent === "boolean" && Array.isArray(record.cleanupErrors) &&
+    record.cleanupErrors.every((item) => typeof item === "string");
+}
+
 async function readInvocationRecord(runDir: string): Promise<InvocationRecord | null> {
   let text: string;
   try {
@@ -120,14 +184,54 @@ async function readInvocationRecord(runDir: string): Promise<InvocationRecord | 
   } catch (error: unknown) {
     throw new FilesystemError(`Invoke control record is invalid JSON in ${runDir}`, { cause: error });
   }
-  if (
-    typeof parsed !== "object" || parsed === null ||
-    (parsed as { version?: unknown }).version !== CONTROL_VERSION ||
-    typeof (parsed as { phase?: unknown }).phase !== "string"
-  ) {
+  if (!isActiveInvocationRecord(parsed) && !isQuiescentInvocationRecord(parsed)) {
     throw new FilesystemError(`Invoke control record is malformed in ${runDir}`);
   }
   return parsed as InvocationRecord;
+}
+
+/**
+ * Read the provider's invocation-control evidence without changing it.
+ *
+ * A stale record is intentionally distinct from a missing record: neither is
+ * positive proof of a live owner, but a reconciler can retain the stale-owner
+ * evidence instead of replaying an ambiguous invocation. Invalid records are
+ * contained as classified evidence so inspection itself remains read-only.
+ */
+export async function inspectInvocationControl(
+  runDir: string,
+  expectedRunId: string,
+): Promise<InvocationControlEvidenceV1> {
+  let record: InvocationRecord | null;
+  try {
+    record = await readInvocationRecord(runDir);
+  } catch {
+    return { state: "invalid" };
+  }
+  if (record === null) return { state: "missing" };
+  if (record.runId !== expectedRunId) return { state: "invalid" };
+
+  if (record.phase === "active") {
+    const base = {
+      invocationId: record.invocationId,
+      ownerPid: record.pid,
+      startedAt: record.startedAt,
+    };
+    return isProcessAlive(record.pid)
+      ? { state: "active", ...base }
+      : { state: "stale", ...base };
+  }
+
+  return {
+    state: "quiescent",
+    invocationId: record.invocationId,
+    ownerPid: record.pid,
+    startedAt: record.startedAt,
+    finishedAt: record.finishedAt,
+    status: record.status,
+    quiescent: record.quiescent,
+    cleanupErrors: [...record.cleanupErrors],
+  };
 }
 
 async function replaceControlRecord(runDir: string, record: InvocationRecord): Promise<void> {

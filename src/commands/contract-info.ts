@@ -15,6 +15,7 @@ export const FLOW_CONTRACT_CAPABILITIES = [
   "caller-context-v1",
   "invoke-json-v1",
   "context-freeze-v1",
+  "run-inspect-v1",
 ] as const;
 
 export interface FlowContractInfoV1 {

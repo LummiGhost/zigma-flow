@@ -93,7 +93,7 @@ For the language specification, see [docs/workflow-language.md](./docs/workflow-
 | `invoke <workflow> --pause-before <job.step>` | Pause execution before a specific step (debugging) |
 | `invoke <workflow> --stop-after <job.step>` | Stop execution after a specific step (debugging) |
 | `invoke <workflow> --save-all-prompts` | Save every agent prompt to artifacts without pausing |
-| `inspect [run-id]` | Inspect a run: summary (default), `--jobs`, `--events`, `--artifacts`, `--json` |
+| `inspect [run-id]` | Inspect a run: summary (default), `--jobs`, `--events`, `--artifacts`, `--json`; `--run <id> --json` provides provider reconciliation evidence |
 | `inspect --latest` | Inspect the most recent run |
 | `resume [run-id] --job <id> --input key=value` | Submit human input to resume a paused human step |
 | `doctor` | Diagnose common environment and configuration issues |

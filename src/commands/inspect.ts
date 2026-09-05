@@ -22,6 +22,7 @@ import { loadWorkflowFile } from "../workflow/index.js";
 import {
   ConfigError,
   FilesystemError,
+  StateError,
   UserInputError,
   ZigmaFlowError,
 } from "../utils/index.js";
@@ -33,6 +34,7 @@ import {
   type CommandJsonResult,
   type ErrorCode,
 } from "./command-result.js";
+import { inspectProviderReconciliation } from "./provider-reconciliation.js";
 
 // ---------------------------------------------------------------------------
 // InspectOptions
@@ -103,7 +105,7 @@ interface ArtifactEntry {
 // inspectAction
 // ---------------------------------------------------------------------------
 
-export async function inspectAction(
+async function inspectActionUnsafe(
   opts: InspectOptions,
 ): Promise<InspectResult> {
   const print = opts.stdout ?? ((line: string) => { console.log(line); });
@@ -154,7 +156,12 @@ export async function inspectAction(
   const state = await stateStore.readSnapshot(runDir);
 
   if (state === null) {
-    throw new FilesystemError(`state.json not found for run "${runId}" in: ${runDir}`);
+    throw new FilesystemError(`state.json not found for run "${runId}" in: ${runDir}`, {
+      details: { inspectError: "run_not_found" },
+    });
+  }
+  if (state.run_id !== runId) {
+    throw new StateError(`state.json run_id does not match requested run "${runId}"`);
   }
 
   // ── 3. Read events.jsonl ─────────────────────────────────────────────
@@ -199,6 +206,7 @@ export async function inspectAction(
 
   if (renderJson) {
     // JSON output: versioned, machine-readable contract (ISSUE #254)
+    const reconciliation = await inspectProviderReconciliation(runDir, state);
     const result = successResult("inspect", runId, {
       workflow: state.workflow,
       task: state.task,
@@ -209,6 +217,7 @@ export async function inspectAction(
       artifacts: opts.artifactJob
         ? artifacts.filter((a) => a.producer?.job === opts.artifactJob)
         : artifacts,
+      reconciliation,
     });
     print(JSON.stringify(result, null, 2));
     return { runId, runDir, state, events, artifacts, jsonResult: result };
@@ -298,4 +307,39 @@ export async function inspectAction(
   }
 
   return { runId, runDir, state, events, artifacts };
+}
+
+function inspectErrorCode(error: unknown): ErrorCode {
+  if (error instanceof UserInputError) return "INVALID_INPUT";
+  if (error instanceof StateError) return "STATE_CORRUPT";
+  if (error instanceof ConfigError) return "RUN_NOT_FOUND";
+  if (error instanceof FilesystemError && error.details?.["inspectError"] === "run_not_found") {
+    return "RUN_NOT_FOUND";
+  }
+  return "INTERNAL_ERROR";
+}
+
+/**
+ * Inspect a run and, in JSON mode, contain missing/invalid-run failures in the
+ * command envelope. This makes reconciliation safe to retry without parsing
+ * human diagnostics. Text-mode behavior remains unchanged for existing users.
+ */
+export async function inspectAction(
+  opts: InspectOptions,
+): Promise<InspectResult> {
+  try {
+    return await inspectActionUnsafe(opts);
+  } catch (error: unknown) {
+    if (opts.json !== true) throw error;
+    const runId = opts.runId ?? "(unknown)";
+    const result = errorResult(
+      "inspect",
+      runId,
+      inspectErrorCode(error),
+      error instanceof Error ? error.message : String(error),
+    );
+    const print = opts.stdout ?? ((line: string) => { console.log(line); });
+    print(JSON.stringify(result));
+    return { runId, runDir: "", state: null, events: [], artifacts: [], jsonResult: result };
+  }
 }

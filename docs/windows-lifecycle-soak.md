@@ -30,6 +30,8 @@ wait for the quiescence boundary tested here.
 - a real Windows parent/grandchild tree killed with `taskkill /T /F`;
 - deterministic cancellation acknowledgement and fail-fast settlement;
 - a real two-CLI `invoke`/`abort` cancellation acknowledgement;
+- built-CLI provider reconciliation after a quiescent cancellation record,
+  including the read-only control evidence Core uses after restart;
 - parallel scheduler and full dogfood DAG completion;
 - writer drain and temporary-directory teardown through the covered run paths.
 

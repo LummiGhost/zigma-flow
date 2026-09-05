@@ -31,7 +31,7 @@ try {
   if (envelope.packageVersion !== packageJson.version) {
     throw new Error(`packageVersion ${envelope.packageVersion} does not match package.json ${packageJson.version}`);
   }
-  for (const capability of ["caller-context-v1", "invoke-json-v1", "context-freeze-v1"]) {
+  for (const capability of ["caller-context-v1", "invoke-json-v1", "context-freeze-v1", "run-inspect-v1"]) {
     if (!envelope.capabilities.includes(capability)) {
       throw new Error(`Missing advertised capability: ${capability}`);
     }

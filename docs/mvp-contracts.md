@@ -562,7 +562,16 @@ Returns a `CommandJsonResult` with `command: "inspect"`. Success `data` includes
 | `events` | array | Event envelopes (truncated by `--event-limit`) |
 | `artifacts` | array | Artifact entries (filtered by `--artifact-job`) |
 
-**Error codes for inspect:** `RUN_NOT_FOUND`, `STATE_CORRUPT`, `INTERNAL_ERROR`.
+**Error codes for inspect:** `RUN_NOT_FOUND`, `INVALID_INPUT`, `STATE_CORRUPT`, `INTERNAL_ERROR`.
+
+For provider reconciliation, `inspect --run <runtime-run-id> --json` is an
+equivalent explicit-run form. Its success `data` adds a versioned
+`reconciliation` object defined in `docs/platform-integration-contract.md
+§3.1`; it reports only persisted lifecycle, sanitized invocation-control
+evidence, and identifiers revalidated from the frozen CallerContextV1 snapshot.
+It never mutates a run. JSON requests for a missing run return
+`RUN_NOT_FOUND`, invalid run ids return `INVALID_INPUT`, and corrupt run state
+returns `STATE_CORRUPT` in the V1 command envelope.
 
 ### 9.6 Event Sink (`--event-file`)
 

@@ -175,6 +175,59 @@ On some v1 invocation errors, Flow emits a generic failed result with
 are an M1 contract gap; callers must retain stderr as diagnostic evidence
 without mixing it into stdout JSON parsing.
 
+### 3.1 Provider reconciliation inspect
+
+Before retrying an ambiguous start, Core may query the existing provider-owned
+run without creating a run, changing state, allocating a workspace, or sending
+a callback:
+
+```text
+zigma-flow --cwd <workspace> inspect --run <runtime-run-id> --json
+```
+
+The positional `inspect <runtime-run-id> --json` form remains equivalent. The
+existing `CommandJsonResultV1` success payload contains this additive field:
+
+```ts
+interface ProviderReconciliationV1 {
+  contractVersion: 1;
+  externalRunId: string; // Flow runtime run id, not Core flowRunId
+  lifecycle: {
+    status: "running" | "awaiting_human" | "blocked" |
+      "completed" | "failed" | "cancelled" | "unknown";
+    terminal: boolean; // true only for completed, failed, or cancelled
+  };
+  invocation:
+    | { state: "missing" | "invalid" }
+    | { state: "active" | "stale"; invocationId: string; ownerPid: number; startedAt: string }
+    | { state: "quiescent"; invocationId: string; ownerPid: number; startedAt: string;
+        finishedAt: string; status: string; quiescent: boolean; cleanupErrors: string[] };
+  callerContext: {
+    state: "accepted" | "absent" | "invalid";
+    operationId?: string;
+    callbackCorrelationId?: string;
+    taskId?: string;
+    flowRunId?: string;
+    projectId?: string;
+  };
+}
+```
+
+`lifecycle` is Flow's durable state normalization; the unmodified raw status
+remains in `data.status`. `active` means the advertised owner PID was alive at
+inspection time. `stale`, `missing`, and `invalid` are intentionally not proof
+that a formerly launched external process stopped. `quiescent` is positive
+evidence only when its `quiescent` field is true. The projection never exposes
+the control record's loopback port or cancellation token.
+
+Caller correlation fields appear only after Flow rereads and validates the
+frozen `caller-context.json` snapshot bound to that runtime run. `absent` is
+valid for interactive invocations; `invalid` means Core must retain ambiguity,
+not trust identifiers found in a malformed file. A missing run returns the
+same V1 command envelope with `status: "error"`, `error.code:
+"RUN_NOT_FOUND"`; an invalid run identifier returns `"INVALID_INPUT"`; corrupt
+state returns `"STATE_CORRUPT"`. JSON failures also exit non-zero.
+
 ## 4. Platform event contract
 
 Every projected event has this additive version-1 envelope:
@@ -338,7 +391,8 @@ JSON document to stdout and sends diagnostics to stderr. The v1 response is:
   "capabilities": [
     "caller-context-v1",
     "invoke-json-v1",
-    "context-freeze-v1"
+    "context-freeze-v1",
+    "run-inspect-v1"
   ]
 }
 ```
@@ -357,6 +411,8 @@ The minimum v1 feature set is:
 - command result `contractVersion: 1` for `resume` and `abort`;
 - platform event `contractVersion: 1` and `producer: "zigma-flow"`;
 - stable runtime run ID and internal event log URI.
+- `inspect --run <runtime-run-id> --json` with `data.reconciliation` as defined
+  in §3.1 (`run-inspect-v1`).
 
 Core must bind a Flow contract version in its compatibility matrix. A package
 version newer than `0.8.12` is not automatically compatible; the required
@@ -371,6 +427,7 @@ contract version and capability set must both match.
 | Event ID/type/envelope | `tests/events/platformEvent.test.ts` | Durable projection flush and at-least-once delivery: M1/M2 |
 | Resume command envelope | `tests/commands/resume-json.test.ts` | Host retry/duplicate integration: M2 |
 | Abort command envelope and live acknowledgement | `tests/commands/abort-json.test.ts`, `tests/process/two-cli-cancel.lifecycle.ts` | Host-owned process trees and durable callback delivery: M2 |
+| Provider restart reconciliation | `tests/commands/provider-reconciliation.test.ts`, `tools/provider-reconciliation-smoke.mjs` (included in `test:lifecycle`) | Core durable outbox, callback projection, and worker-pool ownership: M2 |
 | In-process cancellation | `tests/engine/runAll-cancel.test.ts`, `tests/engine/runAll-events.test.ts`, `tests/process/lifecycle.test.ts` | Deterministic cancellation and process-tree reaping are gated by Windows CI; see `docs/windows-lifecycle-soak.md` |
 | Parallel scheduling | `tests/engine/runAll-concurrent.test.ts`, `tests/dogfood/run-all-parallel.test.ts` | Repeated mixed-load coverage is gated by Windows CI; see `docs/windows-lifecycle-soak.md` |
 

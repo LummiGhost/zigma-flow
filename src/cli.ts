@@ -286,6 +286,7 @@ async function runProgram(
   program
     .command("inspect [run-id]")
     .description("Inspect a run (summary, jobs, events, artifacts) with selectable output views.")
+    .option("--run <id>", "Explicit run id (provider reconciliation alias for positional run-id).")
     .option("--latest", "Inspect the most recent run.")
     .option("--summary", "Brief status summary (default).")
     .option("--jobs", "Show all jobs with status.")
@@ -295,10 +296,15 @@ async function runProgram(
     .option("--event-limit <N>", "Maximum events to show (default 20).", parseInt)
     .option("--artifact-job <id>", "Filter artifacts to a specific job.")
     .exitOverride()
-    .action(async (runId: string | undefined, options: { latest?: boolean; summary?: boolean; jobs?: boolean; events?: boolean; artifacts?: boolean; json?: boolean; eventLimit?: number; artifactJob?: string }) => {
-      await inspectAction({
+    .action(async (runId: string | undefined, options: { run?: string; latest?: boolean; summary?: boolean; jobs?: boolean; events?: boolean; artifacts?: boolean; json?: boolean; eventLimit?: number; artifactJob?: string }) => {
+      if (runId !== undefined && options.run !== undefined) {
+        throw new UserInputError("inspect accepts either a positional run-id or --run <id>, not both", {
+          suggestion: "Use: zigma-flow inspect --run <id> --json",
+        });
+      }
+      const result = await inspectAction({
         projectRoot: cwd(),
-        ...(runId !== undefined ? { runId } : {}),
+        ...(runId !== undefined || options.run !== undefined ? { runId: runId ?? options.run } : {}),
         ...(options.latest ? { latest: options.latest } : {}),
         ...(options.summary !== undefined ? { summary: options.summary } : {}),
         ...(options.jobs ? { jobs: options.jobs } : {}),
@@ -308,6 +314,9 @@ async function runProgram(
         ...(options.eventLimit !== undefined ? { eventLimit: options.eventLimit } : {}),
         ...(options.artifactJob !== undefined ? { artifactJob: options.artifactJob } : {}),
       });
+      // JSON error envelopes are protocol responses, but preserve the command
+      // failure signal for interactive shells and black-box callers.
+      if (result.jsonResult?.status === "error") process.exitCode = 1;
     });
 
   program

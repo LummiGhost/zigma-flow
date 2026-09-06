@@ -10,8 +10,10 @@
  */
 
 import type { ZigmaFlowEvent } from "./eventTypes.js";
+import type { CallerContextV1 } from "../caller-context-contract.js";
 
 export const FLOW_PLATFORM_EVENT_CONTRACT_VERSION = 1;
+export const FLOW_CORE_CALLBACK_CONTRACT_VERSION = 1 as const;
 
 // ---------------------------------------------------------------------------
 // FlowPlatformEvent
@@ -35,6 +37,20 @@ export interface FlowPlatformEvent {
   status?: string;
   summary?: string;
   payload: Record<string, unknown>;
+}
+
+/**
+ * Core's callback projection adds only identities that Flow reads from the
+ * frozen CallerContextV1 file. `sequence` comes from the persisted engine
+ * event id, so retrying an event cannot mint a new ordering value.
+ */
+export interface FlowCoreCallbackEnvelopeV1 extends FlowPlatformEvent {
+  callbackVersion: typeof FLOW_CORE_CALLBACK_CONTRACT_VERSION;
+  flowRunId: string;
+  externalRunId: string;
+  operationId: string;
+  callbackCorrelationId: string;
+  sequence: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +127,18 @@ export function derivePlatformEventId(runId: string, internalEventId: string): s
   return `${runId}::${internalEventId}`;
 }
 
+export function deriveCallbackSequence(internalEventId: string): number {
+  const matched = /^evt-(\d+)$/.exec(internalEventId);
+  if (!matched) {
+    throw new TypeError(`Cannot derive a stable callback sequence from internal event id: ${internalEventId}`);
+  }
+  const sequence = Number(matched[1]);
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new TypeError(`Internal event id has an invalid callback sequence: ${internalEventId}`);
+  }
+  return sequence;
+}
+
 /**
  * Human-readable one-line summaries per internal event type.
  */
@@ -181,5 +209,30 @@ export function mapZigmaFlowEventToPlatformEvent(
     ...(runStatus !== undefined ? { status: runStatus } : {}),
     summary: summarize(event),
     payload: (event.payload ?? {}) as Record<string, unknown>,
+  };
+}
+
+/**
+ * Build the strict Core callback envelope. Callers must not synthesize Core
+ * correlation: absence in the frozen context means the provider cannot emit a
+ * trustworthy callback and must fail before delivery.
+ */
+export function mapZigmaFlowEventToCoreCallbackEnvelope(
+  event: ZigmaFlowEvent,
+  callerContext: CallerContextV1,
+  runStatus?: string,
+): FlowCoreCallbackEnvelopeV1 {
+  if (!callerContext.operationId || !callerContext.callbackCorrelationId) {
+    throw new TypeError("CallerContextV1 is missing operationId or callbackCorrelationId required for Core callbacks");
+  }
+  const platformEvent = mapZigmaFlowEventToPlatformEvent(event, runStatus);
+  return {
+    ...platformEvent,
+    callbackVersion: FLOW_CORE_CALLBACK_CONTRACT_VERSION,
+    flowRunId: callerContext.flowRunId,
+    externalRunId: event.run_id,
+    operationId: callerContext.operationId,
+    callbackCorrelationId: callerContext.callbackCorrelationId,
+    sequence: deriveCallbackSequence(event.id),
   };
 }

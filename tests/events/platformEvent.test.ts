@@ -13,6 +13,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   derivePlatformEventId,
+  deriveCallbackSequence,
+  mapZigmaFlowEventToCoreCallbackEnvelope,
   mapZigmaFlowEventToPlatformEvent,
   type FlowPlatformEvent,
 } from "../../src/events/platformEvent.js";
@@ -35,6 +37,16 @@ describe("derivePlatformEventId", () => {
     const id1 = derivePlatformEventId("r1", "evt-005");
     const id2 = derivePlatformEventId("r1", "evt-005");
     expect(id1).toBe(id2);
+  });
+});
+
+describe("deriveCallbackSequence", () => {
+  it("derives a positive, stable sequence from a persisted engine event id", () => {
+    expect(deriveCallbackSequence("evt-042")).toBe(42);
+  });
+
+  it("rejects event IDs that cannot provide a stable callback order", () => {
+    expect(() => deriveCallbackSequence("legacy-event")).toThrow("stable callback sequence");
   });
 });
 
@@ -194,5 +206,43 @@ describe("mapZigmaFlowEventToPlatformEvent — output shape", () => {
     (event as unknown as Record<string, unknown>)["payload"] = null;
     const result = mapZigmaFlowEventToPlatformEvent(event);
     expect(result.payload).toEqual({});
+  });
+});
+
+describe("mapZigmaFlowEventToCoreCallbackEnvelope", () => {
+  const callerContext = {
+    contractVersion: 1 as const,
+    actor: { type: "service" as const, id: "core" },
+    capabilities: ["workflow:invoke"],
+    constraints: { repositoryIds: [], workflowRefs: [], toolNames: [], branchPatterns: [] },
+    source: { kind: "api" as const, metadata: {} },
+    taskId: "task-1",
+    flowRunId: "core-flow-run-1",
+    projectId: "project-1",
+    permissionSnapshotId: "permission-1",
+    integrityHash: "sha256:test",
+    operationId: "operation-1",
+    callbackCorrelationId: "callback-1",
+  };
+
+  it("uses only frozen Core identities and the persisted event sequence", () => {
+    const event = makeEvent("evt-007", "run_completed", "runtime-run-1");
+    expect(mapZigmaFlowEventToCoreCallbackEnvelope(event, callerContext)).toMatchObject({
+      callbackVersion: 1,
+      eventId: "runtime-run-1::evt-007",
+      externalRunId: "runtime-run-1",
+      flowRunId: "core-flow-run-1",
+      operationId: "operation-1",
+      callbackCorrelationId: "callback-1",
+      sequence: 7,
+    });
+  });
+
+  it("fails closed when the frozen context lacks a Core correlation identity", () => {
+    const { callbackCorrelationId: _omitted, ...incomplete } = callerContext;
+    expect(() => mapZigmaFlowEventToCoreCallbackEnvelope(
+      makeEvent("evt-1", "run_created", "runtime-run-1"),
+      incomplete as Parameters<typeof mapZigmaFlowEventToCoreCallbackEnvelope>[1],
+    )).toThrow("callbackCorrelationId");
   });
 });

@@ -606,6 +606,31 @@ where `internalEventId` is the engine's sequential ID (e.g. `evt-042`). Consumer
 deduplicate by `eventId`. Delivery is at-least-once. The event sink is written
 fire-and-forget (no backpressure from sink to engine).
 
+#### Core callback envelope V1
+
+When the invocation has a frozen CallerContextV1 containing both
+`operationId` and `callbackCorrelationId`, the event-file projection emits the
+additive Core callback envelope:
+
+```ts
+interface FlowCoreCallbackEnvelopeV1 extends FlowPlatformEvent {
+  callbackVersion: 1;
+  flowRunId: string;             // Core FlowRun identity from frozen context
+  externalRunId: string;         // Flow runtime run identity
+  operationId: string;           // immutable Core operation identity
+  callbackCorrelationId: string; // immutable Core callback identity
+  sequence: number;              // positive sequence parsed from persisted evt-N
+}
+```
+
+`sequence` and `eventId` are derived solely from Flow's persisted internal
+event ID, so replaying the same event cannot generate a new callback identity
+or ordering value. The callback envelope never guesses Core identifiers: if
+either correlation value is absent, Flow retains the ordinary platform-event
+projection instead. Consumers requiring callback-envelope-v1 must negotiate
+the `callback-envelope-v1` handshake capability and reject an uncorrelated
+projection.
+
 ### 9.7 Caller Context Transport (`--context-file`)
 
 The `--context-file <path>` flag accepts only the versioned `CallerContextV1`

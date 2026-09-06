@@ -392,7 +392,8 @@ JSON document to stdout and sends diagnostics to stderr. The v1 response is:
     "caller-context-v1",
     "invoke-json-v1",
     "context-freeze-v1",
-    "run-inspect-v1"
+    "run-inspect-v1",
+    "callback-envelope-v1"
   ]
 }
 ```
@@ -413,6 +414,8 @@ The minimum v1 feature set is:
 - stable runtime run ID and internal event log URI.
 - `inspect --run <runtime-run-id> --json` with `data.reconciliation` as defined
   in §3.1 (`run-inspect-v1`).
+- A Core-originated `--event-file` projection uses the ordered callback envelope
+  below (`callback-envelope-v1`).
 
 Core must bind a Flow contract version in its compatibility matrix. A package
 version newer than `0.8.12` is not automatically compatible; the required

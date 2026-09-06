@@ -34,6 +34,11 @@ import {
   mapZigmaFlowEventToCoreCallbackEnvelope,
   mapZigmaFlowEventToPlatformEvent,
 } from "../events/platformEvent.js";
+import {
+  deliverCoreCallback,
+  readCoreCallbackCursor,
+  writeCoreCallbackCursor,
+} from "../events/coreCallbackDelivery.js";
 import { RunLogWriter } from "../logs/index.js";
 import {
   buildPromptPacket,
@@ -1683,6 +1688,7 @@ interface RunAllLifecycleResources {
   logWriter?: RunLogWriter;
   ownsLogWriter?: boolean;
   eventSinkQueue?: AsyncQueue;
+  eventSinkErrors?: unknown[];
   invocationControl?: InvocationControlOwner;
   abort(reason: string): void;
 }
@@ -1722,8 +1728,36 @@ async function runAllExecution(
 
   const eventSinkQueue = new AsyncQueue();
   lifecycle.eventSinkQueue = eventSinkQueue;
+  const eventSinkErrors: unknown[] = [];
+  lifecycle.eventSinkErrors = eventSinkErrors;
+
+  const hasCoreCallback = callerContext?.coreCallbackUrl !== undefined
+    && callerContext.operationId !== undefined
+    && callerContext.callbackCorrelationId !== undefined;
+  let callbackRunDir: string | undefined;
+  let lastDeliveredCallbackSequence = 0;
+  let callbackDeliveryFailed = false;
+
+  function enqueueCoreCallback(e: ZigmaFlowEvent): void {
+    if (!hasCoreCallback) return;
+    const envelope = mapZigmaFlowEventToCoreCallbackEnvelope(e, callerContext!);
+    if (envelope.sequence <= lastDeliveredCallbackSequence) return;
+    void eventSinkQueue.run(async () => {
+      if (callbackDeliveryFailed) return;
+      if (envelope.sequence <= lastDeliveredCallbackSequence) return;
+      try {
+        await deliverCoreCallback(callerContext!.coreCallbackUrl!, envelope);
+        await writeCoreCallbackCursor(callbackRunDir!, envelope);
+        lastDeliveredCallbackSequence = envelope.sequence;
+      } catch (error: unknown) {
+        callbackDeliveryFailed = true;
+        throw error;
+      }
+    }).catch((error: unknown) => { eventSinkErrors.push(error); });
+  }
 
   function writeToEventSink(e: ZigmaFlowEvent): void {
+    enqueueCoreCallback(e);
     if (eventSinkPath === undefined) return;
     try {
       // A Core-originated invocation emits the stronger callback envelope.
@@ -1743,7 +1777,7 @@ async function runAllExecution(
     }
   }
 
-  const onEvent = eventSinkPath !== undefined || rawOnEvent !== undefined
+  const onEvent = eventSinkPath !== undefined || hasCoreCallback || rawOnEvent !== undefined
     ? (e: ZigmaFlowEvent) => {
         rawOnEvent?.(e);
         writeToEventSink(e);
@@ -1781,6 +1815,16 @@ async function runAllExecution(
 
   const runDir = join(runsDir, runId);
   lifecycle.runDir = runDir;
+
+  if (hasCoreCallback) {
+    callbackRunDir = runDir;
+    lastDeliveredCallbackSequence = await readCoreCallbackCursor(runDir, callerContext!.callbackCorrelationId!);
+    const persistedEvents = (await readFile(join(runDir, "events.jsonl"), "utf-8"))
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as ZigmaFlowEvent);
+    for (const event of persistedEvents) enqueueCoreCallback(event);
+  }
 
   // ── Create or reuse RunLogWriter for real-time log forwarding (Issue #280) ──
 
@@ -2675,6 +2719,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         lifecycle.logWriter?.drain() ?? Promise.resolve(),
         lifecycle.eventSinkQueue?.drain() ?? Promise.resolve(),
       ]);
+      cleanupErrors.push(...(lifecycle.eventSinkErrors ?? []));
 
       await collect([
         disposeEventWriter(runDir),
@@ -2686,6 +2731,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       ]);
     } else {
       await collect([lifecycle.eventSinkQueue?.drain() ?? Promise.resolve()]);
+      cleanupErrors.push(...(lifecycle.eventSinkErrors ?? []));
     }
     backendCache = undefined;
 

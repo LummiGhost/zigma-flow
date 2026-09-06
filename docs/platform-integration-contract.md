@@ -263,6 +263,14 @@ Flow's internal `events.jsonl` is the authoritative append-only log. The v1
 write failures are currently dropped. It must not be described as at-least-once
 delivery or used as the sole terminal acknowledgement.
 
+For a correlated Core invocation with `coreCallbackUrl`, the
+`callback-http-delivery-v1` adapter serially POSTs `callback-envelope-v1` to
+Core. It atomically persists the last acknowledged sequence in the run
+directory, retries transient failures with the same serialized envelope, and
+replays authoritative events after the cursor on invoke/resume. Terminal
+quiescence waits for delivery drain; exhausted delivery is surfaced as teardown
+failure rather than silently acknowledged.
+
 An at-least-once delivery adapter must:
 
 1. read authoritative persisted events;
@@ -393,7 +401,8 @@ JSON document to stdout and sends diagnostics to stderr. The v1 response is:
     "invoke-json-v1",
     "context-freeze-v1",
     "run-inspect-v1",
-    "callback-envelope-v1"
+    "callback-envelope-v1",
+    "callback-http-delivery-v1"
   ]
 }
 ```
@@ -416,6 +425,8 @@ The minimum v1 feature set is:
   in §3.1 (`run-inspect-v1`).
 - A Core-originated `--event-file` projection uses the ordered callback envelope
   below (`callback-envelope-v1`).
+- A correlated `coreCallbackUrl` uses ordered, cursor-backed HTTP delivery and
+  drains before terminal acknowledgement (`callback-http-delivery-v1`).
 
 Core must bind a Flow contract version in its compatibility matrix. A package
 version newer than `0.8.12` is not automatically compatible; the required

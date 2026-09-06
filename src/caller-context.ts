@@ -165,6 +165,19 @@ export function validateCallerContext(raw: unknown): CallerContextV1 {
 
   if (obj["repository"] !== undefined) result.repository = validateRepository(obj["repository"]);
   if (obj["workspacePolicy"] !== undefined) result.workspacePolicy = validateWorkspacePolicy(obj["workspacePolicy"]);
+  if (result.coreCallbackUrl !== undefined) {
+    if (!result.operationId || !result.callbackCorrelationId) {
+      throw new UserInputError("caller context 'coreCallbackUrl' requires operationId and callbackCorrelationId");
+    }
+    try {
+      const callbackUrl = new URL(result.coreCallbackUrl);
+      if ((callbackUrl.protocol !== "http:" && callbackUrl.protocol !== "https:") || callbackUrl.username || callbackUrl.password) {
+        throw new Error("unsupported callback URL");
+      }
+    } catch {
+      throw new UserInputError("caller context 'coreCallbackUrl' must be an http(s) URL without credentials");
+    }
+  }
   return result;
 }
 

@@ -78,3 +78,12 @@ export {
   type EventWriter,
   type WorkflowEvent,
 } from "./appendEvent.js";
+
+export {
+  coreCallbackEndpoint,
+  deliverCoreCallback,
+  readCoreCallbackCursor,
+  writeCoreCallbackCursor,
+  type CallbackFetch,
+  type CoreCallbackDeliveryOptions,
+} from "./coreCallbackDelivery.js";

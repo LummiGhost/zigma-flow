@@ -631,6 +631,15 @@ projection instead. Consumers requiring callback-envelope-v1 must negotiate
 the `callback-envelope-v1` handshake capability and reject an uncorrelated
 projection.
 
+When the frozen context also contains `coreCallbackUrl`, Flow posts these
+envelopes in sequence to
+`<coreCallbackUrl>/flow-runs/<flowRunId>/events`. Successful acknowledgements
+advance an atomic per-run cursor. Transient failures retry the byte-equivalent
+envelope; an unacknowledged callback makes teardown fail, and a later invoke
+or resume replays persisted events after the cursor. This behavior is
+advertised as `callback-http-delivery-v1`; `--event-file` remains an optional
+debug/compatibility projection.
+
 ### 9.7 Caller Context Transport (`--context-file`)
 
 The `--context-file <path>` flag accepts only the versioned `CallerContextV1`

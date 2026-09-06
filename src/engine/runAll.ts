@@ -30,8 +30,10 @@ import {
   type ZigmaFlowEvent,
 } from "../events/index.js";
 import { nextSequentialEventId } from "../events/sequence.js";
-import { mapZigmaFlowEventToPlatformEvent } from "../events/platformEvent.js";
-import type { FlowPlatformEvent } from "../events/platformEvent.js";
+import {
+  mapZigmaFlowEventToCoreCallbackEnvelope,
+  mapZigmaFlowEventToPlatformEvent,
+} from "../events/platformEvent.js";
 import { RunLogWriter } from "../logs/index.js";
 import {
   buildPromptPacket,
@@ -1724,7 +1726,11 @@ async function runAllExecution(
   function writeToEventSink(e: ZigmaFlowEvent): void {
     if (eventSinkPath === undefined) return;
     try {
-      const platformEvent = mapZigmaFlowEventToPlatformEvent(e);
+      // A Core-originated invocation emits the stronger callback envelope.
+      // Interactive event sinks remain on the additive platform-event contract.
+      const platformEvent = callerContext?.operationId && callerContext.callbackCorrelationId
+        ? mapZigmaFlowEventToCoreCallbackEnvelope(e, callerContext)
+        : mapZigmaFlowEventToPlatformEvent(e);
       void eventSinkQueue.run(async () => {
         try {
           await appendFile(eventSinkPath, JSON.stringify(platformEvent) + "\n", "utf-8");

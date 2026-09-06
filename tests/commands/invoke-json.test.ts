@@ -225,6 +225,50 @@ describe("invokeAction --json", () => {
       expect(typeof evt["occurredAt"]).toBe("string");
     }
   });
+
+  it("emits ordered Core callback envelopes when the frozen context has correlation identities", async () => {
+    const eventFilePath = join(sandbox.projectRoot, "core-callbacks.ndjson");
+    const contextFilePath = join(sandbox.projectRoot, "core-context.json");
+    await writeFile(contextFilePath, JSON.stringify({
+      contractVersion: 1,
+      actor: { type: "service", id: "zigma-core" },
+      capabilities: ["workflow:invoke"],
+      constraints: { repositoryIds: [], workflowRefs: [], toolNames: [], branchPatterns: [] },
+      source: { kind: "api", metadata: {} },
+      taskId: "task-callback-1",
+      flowRunId: "core-flow-run-callback-1",
+      projectId: "project-callback-1",
+      permissionSnapshotId: "permission-callback-1",
+      integrityHash: "sha256:callback",
+      operationId: "operation-callback-1",
+      callbackCorrelationId: "correlation-callback-1",
+      coreCallbackUrl: "http://127.0.0.1:4736/v1",
+    }), "utf-8");
+
+    await invokeAction(sandbox.workflowPath, {
+      task: "test Core callback envelope",
+      json: true,
+      contextFile: contextFilePath,
+      eventFile: eventFilePath,
+      stdout: (line) => { stdoutLines.push(line); },
+    });
+
+    const callbacks = (await readFile(eventFilePath, "utf-8")).trim().split("\n")
+      .filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(callbacks.length).toBeGreaterThan(0);
+    for (const callback of callbacks) {
+      expect(callback).toMatchObject({
+        callbackVersion: 1,
+        flowRunId: "core-flow-run-callback-1",
+        operationId: "operation-callback-1",
+        callbackCorrelationId: "correlation-callback-1",
+      });
+      expect(typeof callback["sequence"]).toBe("number");
+    }
+    expect(callbacks.map((callback) => callback["sequence"])).toEqual(
+      [...callbacks.map((callback) => callback["sequence"])].sort((a, b) => Number(a) - Number(b)),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

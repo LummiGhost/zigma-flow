@@ -106,4 +106,17 @@ describe("validateCallerContext (CallerContextV1)", () => {
     expect(() => validateCallerContext({ ...VALID_CONTEXT_V1, integrityHash: null }))
       .toThrow("integrityHash");
   });
+
+  it("fails closed when a callback URL is uncorrelated or unsafe", () => {
+    expect(() => validateCallerContext({
+      ...VALID_CONTEXT_V1,
+      coreCallbackUrl: "http://127.0.0.1:4736/v1",
+    })).toThrow("requires operationId and callbackCorrelationId");
+    expect(() => validateCallerContext({
+      ...VALID_CONTEXT_V1,
+      operationId: "operation-1",
+      callbackCorrelationId: "callback-1",
+      coreCallbackUrl: "file:///tmp/callbacks",
+    })).toThrow("http(s) URL without credentials");
+  });
 });

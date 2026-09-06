@@ -15,6 +15,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
 
 import { agentFactory, type AgentBackend, type AgentBackendConfig, type AgentExecuteOptions, type AgentExecuteResult } from "../../src/agent/index.js";
 import { invokeAction } from "../../src/commands/invoke.js";
@@ -242,7 +243,6 @@ describe("invokeAction --json", () => {
       integrityHash: "sha256:callback",
       operationId: "operation-callback-1",
       callbackCorrelationId: "correlation-callback-1",
-      coreCallbackUrl: "http://127.0.0.1:4736/v1",
     }), "utf-8");
 
     await invokeAction(sandbox.workflowPath, {
@@ -268,6 +268,75 @@ describe("invokeAction --json", () => {
     expect(callbacks.map((callback) => callback["sequence"])).toEqual(
       [...callbacks.map((callback) => callback["sequence"])].sort((a, b) => Number(a) - Number(b)),
     );
+  });
+
+  it("delivers a complete ordered callback stream to Core and retries transient failure", async () => {
+    const received: Array<Record<string, unknown>> = [];
+    let requests = 0;
+    const server = createServer(async (request, response) => {
+      let body = "";
+      for await (const chunk of request) body += String(chunk);
+      requests += 1;
+      if (requests === 1) {
+        response.writeHead(503).end("retry");
+        return;
+      }
+      received.push(JSON.parse(body) as Record<string, unknown>);
+      response.writeHead(200).end("ok");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("callback test server did not bind TCP");
+
+    try {
+      const contextFilePath = join(sandbox.projectRoot, "http-core-context.json");
+      await writeFile(contextFilePath, JSON.stringify({
+        contractVersion: 1,
+        actor: { type: "service", id: "zigma-core" },
+        capabilities: ["workflow:invoke"],
+        constraints: { repositoryIds: [], workflowRefs: [], toolNames: [], branchPatterns: [] },
+        source: { kind: "api", metadata: {} },
+        taskId: "task-http-1",
+        flowRunId: "core-flow-run-http-1",
+        projectId: "project-http-1",
+        permissionSnapshotId: "permission-http-1",
+        integrityHash: "sha256:http-callback",
+        operationId: "operation-http-1",
+        callbackCorrelationId: "correlation-http-1",
+        coreCallbackUrl: `http://127.0.0.1:${address.port}/v1`,
+      }), "utf-8");
+
+      const firstRun = await invokeAction(sandbox.workflowPath, {
+        task: "deliver callbacks to Core",
+        json: true,
+        contextFile: contextFilePath,
+        stdout: (line) => { stdoutLines.push(line); },
+      });
+      const firstDelivery = received.map((event) => String(event["eventId"]));
+      expect(firstDelivery.length).toBeGreaterThan(0);
+
+      // Simulate a crash after Core acknowledged delivery but before the local
+      // cursor rename. The authoritative event log must replay identical IDs.
+      await rm(join(sandbox.projectRoot, ".zigma-flow", "runs", firstRun.runId, "core-callback-delivery.json"));
+      await invokeAction(sandbox.workflowPath, {
+        resume: firstRun.runId,
+        json: true,
+        contextFile: contextFilePath,
+        stdout: (line) => { stdoutLines.push(line); },
+      });
+      expect(received.slice(firstDelivery.length, firstDelivery.length * 2).map((event) => String(event["eventId"])))
+        .toEqual(firstDelivery);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+
+    expect(requests).toBe(received.length + 1);
+    expect(received.length).toBeGreaterThan(0);
+    const firstRunLength = received.findIndex((event, index) => index > 0 && event["sequence"] === 1);
+    expect(firstRunLength).toBeGreaterThan(0);
+    expect(received.slice(0, firstRunLength).map((event) => event["sequence"]))
+      .toEqual(Array.from({ length: firstRunLength }, (_, index) => index + 1));
+    expect(received.every((event) => event["flowRunId"] === "core-flow-run-http-1")).toBe(true);
   });
 });
 

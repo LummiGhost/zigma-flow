@@ -314,6 +314,13 @@ describe("invokeAction --json", () => {
       });
       const firstDelivery = received.map((event) => String(event["eventId"]));
       expect(firstDelivery.length).toBeGreaterThan(0);
+      const authoritativeEvents = (await readFile(
+        join(sandbox.projectRoot, ".zigma-flow", "runs", firstRun.runId, "events.jsonl"),
+        "utf-8",
+      )).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(received.map((event) => event["sequence"]))
+        .toEqual(authoritativeEvents.map((_event, index) => index + 1));
+      expect(received.at(-1)?.["type"]).toBe("run.completed");
 
       // Simulate a crash after Core acknowledged delivery but before the local
       // cursor rename. The authoritative event log must replay identical IDs.

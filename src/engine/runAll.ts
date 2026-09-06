@@ -1689,6 +1689,7 @@ interface RunAllLifecycleResources {
   ownsLogWriter?: boolean;
   eventSinkQueue?: AsyncQueue;
   eventSinkErrors?: unknown[];
+  replayPersistedCallbacks?: () => Promise<void>;
   invocationControl?: InvocationControlOwner;
   abort(reason: string): void;
 }
@@ -1819,11 +1820,14 @@ async function runAllExecution(
   if (hasCoreCallback) {
     callbackRunDir = runDir;
     lastDeliveredCallbackSequence = await readCoreCallbackCursor(runDir, callerContext!.callbackCorrelationId!);
-    const persistedEvents = (await readFile(join(runDir, "events.jsonl"), "utf-8"))
-      .split("\n")
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line) as ZigmaFlowEvent);
-    for (const event of persistedEvents) enqueueCoreCallback(event);
+    lifecycle.replayPersistedCallbacks = async () => {
+      const persistedEvents = (await readFile(join(runDir, "events.jsonl"), "utf-8"))
+        .split("\n")
+        .filter((line) => line.trim().length > 0)
+        .map((line) => JSON.parse(line) as ZigmaFlowEvent);
+      for (const event of persistedEvents) enqueueCoreCallback(event);
+    };
+    await lifecycle.replayPersistedCallbacks();
   }
 
   // ── Create or reuse RunLogWriter for real-time log forwarding (Issue #280) ──
@@ -2717,8 +2721,9 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         drainEventWrites(runDir),
         drainStateWrites(runDir),
         lifecycle.logWriter?.drain() ?? Promise.resolve(),
-        lifecycle.eventSinkQueue?.drain() ?? Promise.resolve(),
       ]);
+      await collect([lifecycle.replayPersistedCallbacks?.() ?? Promise.resolve()]);
+      await collect([lifecycle.eventSinkQueue?.drain() ?? Promise.resolve()]);
       cleanupErrors.push(...(lifecycle.eventSinkErrors ?? []));
 
       await collect([

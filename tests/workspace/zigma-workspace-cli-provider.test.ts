@@ -83,7 +83,13 @@ interface RecordedCall {
   opts?: { cwd?: string; signal?: AbortSignal };
 }
 
-type StubResult = { exitCode?: number; stdout: string; stderr?: string };
+type StubResult = {
+  exitCode?: number;
+  stdout: string;
+  stderr?: string;
+  timedOut?: boolean;
+  isCanceled?: boolean;
+};
 type StubHandler = (call: RecordedCall) => StubResult;
 
 function recordingRunner(script: StubHandler) {
@@ -91,7 +97,13 @@ function recordingRunner(script: StubHandler) {
   const runCli: CliRunner = async (args, opts) => {
     calls.push({ args, ...(opts !== undefined ? { opts } : {}) });
     const result = script(calls[calls.length - 1]!);
-    return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: result.stderr ?? "" };
+    return {
+      exitCode: result.exitCode ?? 0,
+      stdout: result.stdout,
+      stderr: result.stderr ?? "",
+      ...(result.timedOut !== undefined ? { timedOut: result.timedOut } : {}),
+      ...(result.isCanceled !== undefined ? { isCanceled: result.isCanceled } : {}),
+    };
   };
   return { calls, runCli };
 }
@@ -211,6 +223,17 @@ describe("negotiateManagedContract", () => {
     expect(err.message).toContain("not valid JSON");
   });
 
+  it("surfaces provider stderr in the invalid-JSON error details", async () => {
+    const { runCli } = recordingRunner(() => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "TypeError: cannot read properties of undefined\n    at cli (index.js:12:3)",
+    }));
+    const err = await expectValidationError(() => negotiateManagedContract(runCli));
+    expect(err.details).toMatchObject({ exitCode: 1 });
+    expect(err.details?.["stderrTail"]).toContain("TypeError");
+  });
+
   it("rejects an error envelope with the provider code in details", async () => {
     const { runCli } = recordingRunner(() => ({
       exitCode: 1,
@@ -218,6 +241,53 @@ describe("negotiateManagedContract", () => {
     }));
     const err = await expectValidationError(() => negotiateManagedContract(runCli));
     expect(err.details).toMatchObject({ providerCode: "CONTRACT_VERSION_UNSUPPORTED", exitCode: 1 });
+  });
+
+  it("rejects JSON that is not an envelope object", async () => {
+    for (const stdout of ["[]", "\"just-a-string\"", "42"]) {
+      const { runCli } = recordingRunner(() => ({ stdout }));
+      const err = await expectValidationError(() => negotiateManagedContract(runCli));
+      expect(err.message).toContain("envelope object");
+    }
+  });
+
+  it("rejects an envelope with a mismatched contract version", async () => {
+    const { runCli } = recordingRunner(() => ({
+      stdout: JSON.stringify({ contract_version: 2, ok: true, data: VALID_CONTRACT }),
+    }));
+    const err = await expectValidationError(() => negotiateManagedContract(runCli));
+    expect(err.message).toContain("contract version mismatch");
+  });
+
+  it("rejects a success envelope with a non-zero exit code", async () => {
+    const { runCli } = recordingRunner(() => ({
+      exitCode: 1,
+      stdout: okEnvelope(VALID_CONTRACT),
+    }));
+    const err = await expectValidationError(() => negotiateManagedContract(runCli));
+    expect(err.message).toContain("despite a success envelope");
+  });
+
+  it("rejects a success envelope missing data", async () => {
+    const { runCli } = recordingRunner(() => ({
+      stdout: JSON.stringify({ contract_version: 1, ok: true }),
+    }));
+    const err = await expectValidationError(() => negotiateManagedContract(runCli));
+    expect(err.message).toContain("missing data");
+  });
+
+  it("reports an execa timeout as a timeout, not invalid JSON", async () => {
+    const { runCli } = recordingRunner(() => ({ stdout: "", timedOut: true }));
+    const err = await expectValidationError(() => negotiateManagedContract(runCli));
+    expect(err.message).toContain("timed out");
+    expect(err.message).not.toContain("JSON");
+  });
+
+  it("reports a caller cancellation as a cancellation, not invalid JSON", async () => {
+    const { runCli } = recordingRunner(() => ({ stdout: "", isCanceled: true }));
+    const err = await expectValidationError(() => negotiateManagedContract(runCli));
+    expect(err.message).toContain("cancelled");
+    expect(err.message).not.toContain("JSON");
   });
 });
 
@@ -396,6 +466,23 @@ describe("ZigmaWorkspaceCliProvider flag mapping", () => {
       expectedOperationId: "run:r1:job:impl:attempt:1:create",
     });
   });
+
+  it("reports a CLI timeout with the prepare-run operation name", async () => {
+    const { runCli } = routedRunner({
+      "prepare-run": { stdout: "", timedOut: true },
+    });
+    const provider = await makeProvider(runCli);
+    const err = await expectValidationError(() =>
+      provider.prepareRun({
+        operationId: "run:r1:create",
+        runId: "r1",
+        projectRoot: makeTempDir(),
+        definition: { provider: "zigma-workspace", repository: ".", base: "main" },
+      }),
+    );
+    expect(err.message).toContain("prepare-run");
+    expect(err.message).toContain("timed out");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -456,6 +543,26 @@ describe("createWorkspaceProviderFromEnv", () => {
   it("returns undefined when ZIGMA_WORKSPACE_CLI_PATH is unset", async () => {
     vi.stubEnv("ZIGMA_WORKSPACE_CLI_PATH", undefined);
     await expect(createWorkspaceProviderFromEnv()).resolves.toBeUndefined();
+  });
+
+  it("returns undefined for a whitespace-only ZIGMA_WORKSPACE_CLI_PATH", async () => {
+    vi.stubEnv("ZIGMA_WORKSPACE_CLI_PATH", "   ");
+    await expect(createWorkspaceProviderFromEnv()).resolves.toBeUndefined();
+  });
+
+  it("trims surrounding whitespace from the env var paths", async () => {
+    const cliPath = writeFakeCli();
+    const logPath = join(makeTempDir(), "args.log");
+    vi.stubEnv("ZIGMA_WORKSPACE_CLI_PATH", `  ${cliPath}  `);
+    vi.stubEnv("ZIGMA_WORKSPACE_STATE_DIR", "  S:\\state\\dir  ");
+    vi.stubEnv("FAKE_CLI_LOG", logPath);
+
+    const provider = await createWorkspaceProviderFromEnv();
+
+    expect(provider).toBeDefined();
+    const lines = readFileSync(logPath, "utf-8").trim().split("\n");
+    const first = JSON.parse(lines[0]!) as string[];
+    expect(first.slice(0, 2)).toEqual(["--state-dir", "S:\\state\\dir"]);
   });
 
   it("negotiates and constructs a provider when the env var points at a compatible CLI", async () => {

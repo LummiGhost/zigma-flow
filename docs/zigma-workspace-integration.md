@@ -399,9 +399,8 @@ Core 以 CLI 子进程方式启动 Flow，JS 对象 provider 无法跨越进程�
 
 激活时先执行 `contract-info --json`，要求：
 
-- 信封 `contract_version === 1` 且 `ok === true`；
+- 信封 `contract_version === 1`（严格 number 类型，不接受字符串 `"1"`）且 `ok === true`；
 - `provider === "zigma-workspace"`；
-- `contract_version === 1`（严格 number 类型，不接受字符串 `"1"`）；
 - `managed_supported === true`。**缺失该字段 = 旧版 CLI = 失败关闭**；`false` 同样失败关闭。
 
 本文件**不硬编码任何 capability 列表**：以 provider 自报的 `managed_supported` 为唯一闸门，因此 zigma-workspace 的能力演进不会与 Flow 静默分叉。协商失败抛出 `ValidationError`，**绝无静默回退**到 external-directory 执行——降级隔离比失败更危险。

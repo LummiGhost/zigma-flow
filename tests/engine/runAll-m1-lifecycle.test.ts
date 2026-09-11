@@ -280,7 +280,7 @@ jobs:
     expect(backend.projectRoots).toEqual([]);
   });
 
-  it("uses the provider-resolved absolute workspace for agent, script, and check jobs", async () => {
+  it("uses the provider-resolved absolute workspace for agent, script, check, and router jobs", async () => {
     const workspaceRoot = join(sandbox.projectRoot, "managed-workspaces");
     const provider = new TestWorkspaceProvider(workspaceRoot);
     const backend = new CapturingBackend();
@@ -311,6 +311,13 @@ jobs:
         uses: zigma/file-exists
         with:
           file: check-target.txt
+  route:
+    steps:
+      - id: decide
+        type: router
+        switch: approved
+        cases:
+          approved: continue
 `);
 
     const summary = await runAll({
@@ -327,7 +334,7 @@ jobs:
     expect(summary.status).toBe("completed");
     expect(provider.runInputs).toHaveLength(1);
     expect(provider.runInputs[0]?.projectRoot).toBe(sandbox.projectRoot);
-    expect(provider.jobInputs.map((input) => input.jobId).sort()).toEqual(["agent", "check", "script"]);
+    expect(provider.jobInputs.map((input) => input.jobId).sort()).toEqual(["agent", "check", "route", "script"]);
     expect(backend.projectRoots).toEqual([provider.jobPaths.get("agent")]);
     expect(await readFile(join(provider.jobPaths.get("script")!, "script-cwd.txt"), "utf-8"))
       .toBe(provider.jobPaths.get("script"));

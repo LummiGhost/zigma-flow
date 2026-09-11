@@ -30,6 +30,15 @@ export type {
   WorkspaceHandle,
   WorkspaceProvider,
 } from "./provider.js";
+export {
+  createWorkspaceProviderFromEnv,
+  createZigmaWorkspaceCliProvider,
+  negotiateManagedContract,
+} from "./zigma-workspace-cli-provider.js";
+export type {
+  CliRunner,
+  ManagedContract,
+} from "./zigma-workspace-cli-provider.js";
 
 // micromatch ships as a CommonJS module; @types/micromatch uses `export =`
 // which conflicts with ESM `import default` under NodeNext. Use createRequire

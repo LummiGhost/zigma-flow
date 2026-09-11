@@ -15,6 +15,7 @@ import type { AgentBackend } from "../agent/index.js";
 import { loadAgentConfig, resolveBackendForStep, createBackend, type StepBackendOverride } from "../agent/config.js";
 import { runAll, type RunAllOpts, type RunAllSummary } from "../engine/runAll.js";
 import { deprecationWarn } from "../utils/index.js";
+import { createWorkspaceProviderFromEnv } from "../workspace/zigma-workspace-cli-provider.js";
 import { resolveWorkflowPath } from "./run.js";
 
 // ---------------------------------------------------------------------------
@@ -71,6 +72,11 @@ export async function runAllAction(
   };
   process.on("SIGINT", onSigint);
 
+  // ── 2b. Managed workspace provider (M3.5) ──────────────────────────────
+
+  // Same activation gate as `invoke`: env-driven, fail-closed on negotiation.
+  const workspaceProvider = await createWorkspaceProviderFromEnv();
+
   // ── 3. Delegate to the Engine's runAll ──────────────────────────────────
 
   const runAllOpts: RunAllOpts = {
@@ -92,6 +98,7 @@ export async function runAllAction(
     ...(options.parallelism !== undefined ? { parallelism: options.parallelism } : {}),
     ...(options.failFast !== undefined ? { failFast: options.failFast } : {}),
     ...(options.inputs !== undefined ? { inputs: options.inputs } : {}),
+    ...(workspaceProvider !== undefined ? { workspaceProvider } : {}),
   };
 
   const summary: RunAllSummary = await runAll(runAllOpts);

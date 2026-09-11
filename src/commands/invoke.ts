@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 
 import { loadAgentConfig, resolveBackendForStep, createBackend, type StepBackendOverride } from "../agent/config.js";
 import { runAll, type RunAllOpts, type RunAllSummary } from "../engine/runAll.js";
+import { createWorkspaceProviderFromEnv } from "../workspace/zigma-workspace-cli-provider.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import { UserInputError } from "../utils/index.js";
 import { validateCallerContext } from "../caller-context.js";
@@ -256,6 +257,12 @@ export async function invokeAction(
   };
   process.on("SIGINT", onSigint);
 
+  // ── 2b. Managed workspace provider (M3.5) ──────────────────────────────
+
+  // Activated only when the operator points Flow at a built workspace CLI.
+  // Negotiation failure throws here (no silent external-directory fallback).
+  const workspaceProvider = await createWorkspaceProviderFromEnv();
+
   // ── 3. Delegate to the Engine's runAll ────────────────────────────────
 
   const runAllOpts: RunAllOpts = {
@@ -299,6 +306,7 @@ export async function invokeAction(
     ...(options.saveAllPrompts !== undefined ? { saveAllPrompts: options.saveAllPrompts } : {}),
     ...(eventSinkPath !== undefined ? { eventSinkPath } : {}),
     ...(callerContext !== undefined ? { callerContext } : {}),
+    ...(workspaceProvider !== undefined ? { workspaceProvider } : {}),
     enableInvocationControl: true,
   };
 

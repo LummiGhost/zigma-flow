@@ -381,3 +381,47 @@ zigma-flow 开始 managed workspace 集成前，zigma-workspace 需要提供：
 - 并行执行、串行 integration，冲突进入 blocked 而不是自动修复。
 - zigma-flow Engine 拥有业务状态，zigma-workspace 拥有资源操作，两者通过端口和版本化契约集成。
 - 首版 publish 默认 `branch`，不隐式更新 `main`。
+
+## 14. M3.5 实际桥接（已实现）
+
+状态：`src/workspace/zigma-workspace-cli-provider.ts` 已落地并通过 real-CLI 契约测试。
+
+### 14.1 激活方式
+
+Core 以 CLI 子进程方式启动 Flow，JS 对象 provider 无法跨越进程边界，因此适配器在 Flow 进程内构造，通过 execa 派生 workspace CLI（`process.execPath dist/cli/index.js ...`）。
+
+| 环境变量 | 作用 |
+|---|---|
+| `ZIGMA_WORKSPACE_CLI_PATH` | 指向已构建的 workspace CLI（`dist/cli/index.js`）。未设置时不注入 provider，managed workflow 在 Engine 端口按既有 ValidationError 失败关闭。 |
+| `ZIGMA_WORKSPACE_STATE_DIR` | 可选；透传为每次 spawn 的全局 `--state-dir` 选项。 |
+
+### 14.2 协商（fail-closed，anti-fork）
+
+激活时先执行 `contract-info --json`，要求：
+
+- 信封 `contract_version === 1` 且 `ok === true`；
+- `provider === "zigma-workspace"`；
+- `contract_version === 1`（严格 number 类型，不接受字符串 `"1"`）；
+- `managed_supported === true`。**缺失该字段 = 旧版 CLI = 失败关闭**；`false` 同样失败关闭。
+
+本文件**不硬编码任何 capability 列表**：以 provider 自报的 `managed_supported` 为唯一闸门，因此 zigma-workspace 的能力演进不会与 Flow 静默分叉。协商失败抛出 `ValidationError`，**绝无静默回退**到 external-directory 执行——降级隔离比失败更危险。
+
+### 14.3 operation-id 命名空间
+
+桥接层保留 `run:<runId>:` 前缀，并在每次调用时校验调用方 operationId 与构造值完全一致，不一致即失败关闭：
+
+- Run workspace：`run:<runId>:create`
+- Job attempt：`run:<runId>:job:<jobId>:attempt:<n>:create`
+
+该前缀不会与 Core 的 `core:workspace:*` 或 workspace 自身的 gc 命名空间冲突。
+
+### 14.4 参数映射
+
+- `prepare-run`：`--repo` 为 `definition.repository`，`"."` 以 `projectRoot` 解析；`--base` 为 `definition.base`；`--mode writable`。
+- `prepare-job`：先以 `git rev-parse HEAD` 解析 Run workspace 当前 HEAD 作为 `--expected-head`（完整 40 位 SHA），由 provider 的 CAS 拒绝并发集成竞态；重试同一 operation-id 且 HEAD 已前进时，provider 幂等守卫以 `OPERATION_ID_CONFLICT` 失败关闭（崩溃收养路径则是 `WORKSPACE_HEAD_CONFLICT`）。
+- 响应信封（snake_case）映射为 `WorkspaceHandle { id, path, baseCommit, branch }`；Engine 校验 `path` 为绝对且存在的目录后，同一 `jobCwd` 传递给 agent、script、check、router 执行器。
+
+### 14.5 当前边界与证据
+
+- 端口只实现 `prepareRun` / `prepareJob`（§5 中的 snapshot/integrate/publish/cleanup 属后续阶段）。
+- 证据：`tests/workspace/zigma-workspace-cli-provider.test.ts`（stub CLI 的协商/映射/命名空间单测）、`tests/workspace/managed-real-cli.contract.test.ts`（`ZIGMA_WORKSPACE_CLI_PATH` 门控的 real-CLI 往返/重放/竞态）、`tests/engine/runAll-m1-lifecycle.test.ts`（同 cwd 契约）。跨仓库兼容矩阵见 zigma-workspace `docs/compatibility-matrix.md`。

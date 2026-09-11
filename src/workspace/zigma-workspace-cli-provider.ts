@@ -48,6 +48,10 @@ export interface CliRunResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /** execa timeout flag; the child was killed, exitCode is meaningless. */
+  timedOut?: boolean;
+  /** execa cancelSignal flag; the caller aborted the invocation. */
+  isCanceled?: boolean;
 }
 
 /** Spawn seam: stubbed in unit tests, execa-backed in production. */
@@ -73,26 +77,38 @@ function defaultCliRunner(cliPath: string, stateDir?: string): CliRunner {
       exitCode: result.exitCode ?? 1,
       stdout: result.stdout ?? "",
       stderr: result.stderr ?? "",
+      timedOut: result.timedOut,
+      isCanceled: result.isCanceled,
     };
   };
 }
 
 function parseEnvelope<T extends Record<string, unknown>>(
-  stdout: string,
-  exitCode: number,
+  result: CliRunResult,
   operation: string,
 ): T {
+  const { stdout, exitCode } = result;
+  if (result.timedOut === true) {
+    throw new ValidationError(`zigma-workspace ${operation}: CLI invocation timed out`, {
+      details: { operation, stderrTail: result.stderr.slice(-2_000) },
+    });
+  }
+  if (result.isCanceled === true) {
+    throw new ValidationError(`zigma-workspace ${operation}: CLI invocation was cancelled`, {
+      details: { operation, stderrTail: result.stderr.slice(-2_000) },
+    });
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
   } catch {
     throw new ValidationError(`zigma-workspace ${operation}: stdout is not valid JSON`, {
-      details: { operation, exitCode, stdoutTail: stdout.slice(-2_000) },
+      details: { operation, exitCode, stdoutTail: stdout.slice(-2_000), stderrTail: result.stderr.slice(-2_000) },
     });
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new ValidationError(`zigma-workspace ${operation}: stdout must be a V1 envelope object`, {
-      details: { operation, exitCode },
+      details: { operation, exitCode, stderrTail: result.stderr.slice(-2_000) },
     });
   }
   const envelope = parsed as CliEnvelope;
@@ -115,6 +131,7 @@ function parseEnvelope<T extends Record<string, unknown>>(
           operation,
           exitCode,
           providerCode,
+          ...(result.stderr !== "" ? { stderrTail: result.stderr.slice(-2_000) } : {}),
           ...(typeof error?.details === "object" && error.details !== null
             ? { providerDetails: error.details }
             : {}),
@@ -166,11 +183,7 @@ export async function negotiateManagedContract(
   runCli: CliRunner,
 ): Promise<ManagedContract> {
   const result = await runCli(["contract-info", "--json"]);
-  const data = parseEnvelope<Record<string, unknown>>(
-    result.stdout,
-    result.exitCode,
-    "contract-info",
-  );
+  const data = parseEnvelope<Record<string, unknown>>(result, "contract-info");
 
   const provider = data["provider"];
   if (provider !== EXPECTED_PROVIDER) {
@@ -277,7 +290,7 @@ export class ZigmaWorkspaceCliProvider implements WorkspaceProvider {
     signal?: AbortSignal,
   ): Promise<T> {
     const result = await this.runCli([...args, "--json"], { ...(signal !== undefined ? { signal } : {}) });
-    return parseEnvelope<T>(result.stdout, result.exitCode, args[0] ?? "unknown");
+    return parseEnvelope<T>(result, args[0] ?? "unknown");
   }
 
   async prepareRun(input: PrepareRunWorkspaceInput): Promise<WorkspaceHandle> {
@@ -363,11 +376,11 @@ export async function createZigmaWorkspaceCliProvider(
  * the negotiation ValidationError when it is set but the contract fails.
  */
 export async function createWorkspaceProviderFromEnv(): Promise<WorkspaceProvider | undefined> {
-  const cliPath = process.env["ZIGMA_WORKSPACE_CLI_PATH"];
-  if (cliPath === undefined || cliPath.trim() === "") return undefined;
-  const stateDir = process.env["ZIGMA_WORKSPACE_STATE_DIR"];
+  const cliPath = process.env["ZIGMA_WORKSPACE_CLI_PATH"]?.trim() ?? "";
+  if (cliPath === "") return undefined;
+  const stateDir = process.env["ZIGMA_WORKSPACE_STATE_DIR"]?.trim() ?? "";
   return createZigmaWorkspaceCliProvider({
     cliPath,
-    ...(stateDir !== undefined && stateDir !== "" ? { stateDir } : {}),
+    ...(stateDir !== "" ? { stateDir } : {}),
   });
 }

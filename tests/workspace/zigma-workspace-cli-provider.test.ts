@@ -41,6 +41,14 @@ function errEnvelope(code: string, message: string): string {
   return JSON.stringify({ contract_version: 1, ok: false, error: { code, message } });
 }
 
+function errEnvelopeDetails(
+  code: string,
+  message: string,
+  details: Record<string, unknown>,
+): string {
+  return JSON.stringify({ contract_version: 1, ok: false, error: { code, message, details } });
+}
+
 const VALID_CONTRACT = {
   provider: "zigma-workspace",
   package_version: "0.1.5",
@@ -76,6 +84,65 @@ const PREPARE_JOB_DATA = {
   mode: "writable",
   status: "RUNNING",
   created_at: "2026-09-12T00:00:00.000Z",
+};
+
+const COMMIT_DATA = {
+  operation_id: "run:r1:job:impl:attempt:1:commit",
+  workspace_id: "ws-job-1",
+  base_commit: "b".repeat(40),
+  head_commit: "c".repeat(40),
+  changed_files: ["src/a.ts"],
+  evidence_digest: "sha256:abc123",
+  no_op: false,
+};
+
+const INTEGRATE_MERGED_DATA = {
+  operation_id: "run:r1:job:impl:attempt:1:integrate",
+  source_workspace_id: "ws-job-1",
+  target_workspace_id: "ws-run-1",
+  source_commit: "c".repeat(40),
+  previous_target_head: "d".repeat(40),
+  merged: true,
+  resulting_commit: "e".repeat(40),
+  changed_files: ["src/a.ts"],
+};
+
+const INTEGRATE_NOOP_DATA = {
+  operation_id: "run:r1:job:impl:attempt:1:integrate",
+  source_workspace_id: "ws-job-1",
+  target_workspace_id: "ws-run-1",
+  source_commit: "c".repeat(40),
+  previous_target_head: "d".repeat(40),
+  merged: false,
+};
+
+const PUBLISH_DATA = {
+  operation_id: "run:r1:publish",
+  workspace_id: "ws-run-1",
+  resulting_ref: "refs/heads/flow/r1",
+  resulting_commit: "e".repeat(40),
+  previous_ref: null,
+  changed_files: ["src/a.ts"],
+};
+
+const RECONCILE_DATA = {
+  workspace_id: "ws-run-1",
+  registry_status: "RUNNING",
+  directory_exists: true,
+  git_head: "e".repeat(40),
+  manifest_exists: true,
+  reconciled_status: "complete",
+  recommendation: "No divergence",
+};
+
+const CLEANUP_DATA = {
+  operation_id: "run:r1:cleanup",
+  workspace_id: "ws-run-1",
+  path: join(tmpdir(), "ws-run-1"),
+  removed: true,
+  status: "CLEANED",
+  message: "workspace removed",
+  blockers: [],
 };
 
 interface RecordedCall {
@@ -119,6 +186,11 @@ function routedRunner(overrides: Record<string, StubResult> = {}) {
     if (command === "contract-info") return { stdout: okEnvelope(VALID_CONTRACT) };
     if (command === "prepare-run") return { stdout: okEnvelope(PREPARE_RUN_DATA) };
     if (command === "prepare-job") return { stdout: okEnvelope(PREPARE_JOB_DATA) };
+    if (command === "commit") return { stdout: okEnvelope(COMMIT_DATA) };
+    if (command === "integrate") return { stdout: okEnvelope(INTEGRATE_MERGED_DATA) };
+    if (command === "publish") return { stdout: okEnvelope(PUBLISH_DATA) };
+    if (command === "reconcile") return { stdout: okEnvelope(RECONCILE_DATA) };
+    if (command === "cleanup") return { stdout: okEnvelope(CLEANUP_DATA) };
     throw new Error(`unexpected CLI subcommand in stub: ${command}`);
   });
 }
@@ -482,6 +554,447 @@ describe("ZigmaWorkspaceCliProvider flag mapping", () => {
     );
     expect(err.message).toContain("prepare-run");
     expect(err.message).toContain("timed out");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M4 lifecycle mapping — commit / integrate / publish / reconcile / cleanup
+// ---------------------------------------------------------------------------
+
+describe("ZigmaWorkspaceCliProvider lifecycle mapping", () => {
+  it("maps commit flags, resolves the attempt HEAD for CAS, and converts the envelope", async () => {
+    const jobPath = join(tmpdir(), "ws-job-1");
+    const heads: string[] = [];
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli, async (path) => {
+      heads.push(path);
+      return "c".repeat(40);
+    });
+
+    const result = await provider.commitJob({
+      operationId: "run:r1:job:impl:attempt:1:commit",
+      runId: "r1",
+      jobId: "impl",
+      attempt: 1,
+      jobWorkspace: { id: "ws-job-1", path: jobPath },
+      message: "feat: implement",
+      expectedState: "RUNNING",
+    });
+
+    expect(heads).toEqual([jobPath]);
+    expect(calls[1]?.args).toEqual([
+      "commit",
+      "--operation-id", "run:r1:job:impl:attempt:1:commit",
+      "--workspace", "ws-job-1",
+      "--expected-head", "c".repeat(40),
+      "--message", "feat: implement",
+      "--expected-state", "RUNNING",
+      "--json",
+    ]);
+    expect(result).toEqual({
+      operationId: "run:r1:job:impl:attempt:1:commit",
+      workspaceId: "ws-job-1",
+      baseCommit: "b".repeat(40),
+      headCommit: "c".repeat(40),
+      changedFiles: ["src/a.ts"],
+      evidenceDigest: "sha256:abc123",
+      noOp: false,
+    });
+  });
+
+  it("fails closed when the commit operationId diverges from the reserved namespace", async () => {
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli);
+
+    const err = await expectValidationError(() =>
+      provider.commitJob({
+        operationId: "run:r1:job:impl:attempt:2:commit",
+        runId: "r1",
+        jobId: "impl",
+        attempt: 1,
+        jobWorkspace: { id: "ws-job-1", path: makeTempDir() },
+      }),
+    );
+    expect(err.details).toMatchObject({
+      expectedOperationId: "run:r1:job:impl:attempt:1:commit",
+    });
+    expect(calls).toHaveLength(1); // negotiation only — no commit spawn
+  });
+
+  it("maps integrate flags, resolves the Run HEAD for CAS, and converts a merged result", async () => {
+    const runPath = join(tmpdir(), "ws-run-1");
+    const heads: string[] = [];
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli, async (path) => {
+      heads.push(path);
+      return "c".repeat(40);
+    });
+
+    const result = await provider.integrateJob({
+      operationId: "run:r1:job:impl:attempt:1:integrate",
+      runId: "r1",
+      jobId: "impl",
+      attempt: 1,
+      jobWorkspace: { id: "ws-job-1", path: makeTempDir() },
+      runWorkspace: { id: "ws-run-1", path: runPath },
+    });
+
+    expect(heads).toEqual([runPath]);
+    expect(calls[1]?.args).toEqual([
+      "integrate",
+      "--operation-id", "run:r1:job:impl:attempt:1:integrate",
+      "--source", "ws-job-1",
+      "--target", "ws-run-1",
+      "--lock-owner", "flow-run:r1",
+      "--expected-head", "c".repeat(40),
+      "--json",
+    ]);
+    expect(result).toEqual({
+      status: "merged",
+      operationId: "run:r1:job:impl:attempt:1:integrate",
+      sourceWorkspaceId: "ws-job-1",
+      targetWorkspaceId: "ws-run-1",
+      sourceCommit: "c".repeat(40),
+      previousTargetHead: "d".repeat(40),
+      resultingCommit: "e".repeat(40),
+      changedFiles: ["src/a.ts"],
+    });
+  });
+
+  it("uses the caller-supplied expectedHead without resolving the Run workspace", async () => {
+    const resolved: string[] = [];
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli, async (path) => {
+      resolved.push(path);
+      return "x".repeat(40);
+    });
+
+    await provider.integrateJob({
+      operationId: "run:r1:job:impl:attempt:1:integrate",
+      runId: "r1",
+      jobId: "impl",
+      attempt: 1,
+      jobWorkspace: { id: "ws-job-1", path: makeTempDir() },
+      runWorkspace: { id: "ws-run-1", path: makeTempDir() },
+      expectedHead: "e".repeat(40),
+    });
+
+    expect(resolved).toEqual([]);
+    expect(calls[1]?.args).toContain("e".repeat(40));
+  });
+
+  it("maps a non-merged integrate envelope to the no-op union", async () => {
+    const { runCli } = routedRunner({
+      integrate: { stdout: okEnvelope(INTEGRATE_NOOP_DATA) },
+    });
+    const provider = await makeProvider(runCli);
+
+    const result = await provider.integrateJob({
+      operationId: "run:r1:job:impl:attempt:1:integrate",
+      runId: "r1",
+      jobId: "impl",
+      attempt: 1,
+      jobWorkspace: { id: "ws-job-1", path: makeTempDir() },
+      runWorkspace: { id: "ws-run-1", path: makeTempDir() },
+    });
+
+    expect(result).toEqual({
+      status: "no-op",
+      operationId: "run:r1:job:impl:attempt:1:integrate",
+      sourceWorkspaceId: "ws-job-1",
+      targetWorkspaceId: "ws-run-1",
+      sourceCommit: "c".repeat(40),
+      previousTargetHead: "d".repeat(40),
+    });
+  });
+
+  it("maps a WORKSPACE_INTEGRATION_CONFLICT envelope to the typed conflicted result", async () => {
+    const { runCli } = routedRunner({
+      integrate: {
+        exitCode: 1,
+        stdout: errEnvelopeDetails(
+          "WORKSPACE_INTEGRATION_CONFLICT",
+          "conflict in src/a.ts",
+          {
+            conflict_files: ["src/a.ts", "src/b.ts"],
+            source_commit: "c".repeat(40),
+            previous_target_head: "d".repeat(40),
+          },
+        ),
+      },
+    });
+    const provider = await makeProvider(runCli);
+
+    const result = await provider.integrateJob({
+      operationId: "run:r1:job:impl:attempt:1:integrate",
+      runId: "r1",
+      jobId: "impl",
+      attempt: 1,
+      jobWorkspace: { id: "ws-job-1", path: makeTempDir() },
+      runWorkspace: { id: "ws-run-1", path: makeTempDir() },
+    });
+
+    expect(result).toEqual({
+      status: "conflicted",
+      operationId: "run:r1:job:impl:attempt:1:integrate",
+      sourceWorkspaceId: "ws-job-1",
+      targetWorkspaceId: "ws-run-1",
+      conflictFiles: ["src/a.ts", "src/b.ts"],
+      jobCommit: "c".repeat(40),
+      runHead: "d".repeat(40),
+      message: "conflict in src/a.ts",
+    });
+  });
+
+  it("fails closed when the integrate operationId diverges from the reserved namespace", async () => {
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli);
+
+    const err = await expectValidationError(() =>
+      provider.integrateJob({
+        operationId: "run:r1:job:impl:attempt:1:create",
+        runId: "r1",
+        jobId: "impl",
+        attempt: 1,
+        jobWorkspace: { id: "ws-job-1", path: makeTempDir() },
+        runWorkspace: { id: "ws-run-1", path: makeTempDir() },
+      }),
+    );
+    expect(err.details).toMatchObject({
+      expectedOperationId: "run:r1:job:impl:attempt:1:integrate",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("maps publish flags and converts the envelope", async () => {
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli);
+
+    const result = await provider.publishRun({
+      operationId: "run:r1:publish",
+      runId: "r1",
+      workspace: { id: "ws-run-1", path: join(tmpdir(), "ws-run-1") },
+      strategy: "branch",
+      targetRef: "flow/r1",
+    });
+
+    expect(calls[1]?.args).toEqual([
+      "publish",
+      "--operation-id", "run:r1:publish",
+      "--workspace", "ws-run-1",
+      "--strategy", "branch",
+      "--target-ref", "flow/r1",
+      "--expected-head", "c".repeat(40),
+      "--json",
+    ]);
+    expect(result).toEqual({
+      operationId: "run:r1:publish",
+      workspaceId: "ws-run-1",
+      strategy: "branch",
+      resultingRef: "refs/heads/flow/r1",
+      resultingCommit: "e".repeat(40),
+      previousRef: null,
+      changedFiles: ["src/a.ts"],
+    });
+  });
+
+  it("rejects an unsupported publish strategy before spawning", async () => {
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli);
+
+    const err = await expectValidationError(() =>
+      provider.publishRun({
+        operationId: "run:r1:publish",
+        runId: "r1",
+        workspace: { id: "ws-run-1", path: makeTempDir() },
+        strategy: "merge" as unknown as "branch",
+        targetRef: "flow/r1",
+      }),
+    );
+    expect(err.message).toContain("unsupported publish strategy");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("fails closed when the publish operationId diverges from the reserved namespace", async () => {
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli);
+
+    const err = await expectValidationError(() =>
+      provider.publishRun({
+        operationId: "run:r1:publish-v2",
+        runId: "r1",
+        workspace: { id: "ws-run-1", path: makeTempDir() },
+        strategy: "branch",
+        targetRef: "flow/r1",
+      }),
+    );
+    expect(err.details).toMatchObject({ expectedOperationId: "run:r1:publish" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("maps reconcile flags and converts the envelope", async () => {
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli);
+
+    const result = await provider.reconcileRun({
+      workspace: { id: "ws-run-1", path: join(tmpdir(), "ws-run-1") },
+    });
+
+    expect(calls[1]?.args).toEqual(["reconcile", "--workspace", "ws-run-1", "--json"]);
+    expect(result).toEqual({
+      workspaceId: "ws-run-1",
+      registryStatus: "RUNNING",
+      directoryExists: true,
+      gitHead: "e".repeat(40),
+      manifestExists: true,
+      reconciledStatus: "complete",
+      recommendation: "No divergence",
+    });
+  });
+
+  it("rejects an unexpected reconciled_status", async () => {
+    const { runCli } = routedRunner({
+      reconcile: {
+        stdout: okEnvelope({ ...RECONCILE_DATA, reconciled_status: "haunted" }),
+      },
+    });
+    const provider = await makeProvider(runCli);
+
+    const err = await expectValidationError(() =>
+      provider.reconcileRun({
+        workspace: { id: "ws-run-1", path: makeTempDir() },
+      }),
+    );
+    expect(err.message).toContain("unexpected reconciled_status");
+  });
+
+  it("maps cleanup flags and converts a CLEANED envelope", async () => {
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli);
+
+    const result = await provider.cleanupRun({
+      operationId: "run:r1:cleanup",
+      workspace: { id: "ws-run-1", path: join(tmpdir(), "ws-run-1") },
+    });
+
+    expect(calls[1]?.args).toEqual([
+      "cleanup",
+      "--operation-id", "run:r1:cleanup",
+      "--workspace", "ws-run-1",
+      "--strict",
+      "--json",
+    ]);
+    expect(result).toEqual({
+      operationId: "run:r1:cleanup",
+      workspaceId: "ws-run-1",
+      path: join(tmpdir(), "ws-run-1"),
+      removed: true,
+      status: "CLEANED",
+      message: "workspace removed",
+      blockers: [],
+    });
+  });
+
+  it("fails closed when the cleanup operationId diverges from the reserved namespace", async () => {
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli);
+
+    const err = await expectValidationError(() =>
+      provider.cleanupRun({
+        operationId: "core:workspace:gc:r1",
+        workspace: { id: "ws-run-1", path: makeTempDir() },
+      }),
+    );
+    expect(err.message).toContain("must match");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("maps a WORKSPACE_CLEANUP_FAILED envelope to the CLEANUP_FAILED result instead of throwing", async () => {
+    const { runCli } = routedRunner({
+      cleanup: {
+        exitCode: 1,
+        stdout: errEnvelopeDetails(
+          "WORKSPACE_CLEANUP_FAILED",
+          "lock held by flow-run:r9",
+          {
+            path: join(tmpdir(), "ws-run-1"),
+            removed: false,
+            blockers: ["lock-holder flow-run:r9"],
+          },
+        ),
+      },
+    });
+    const provider = await makeProvider(runCli);
+
+    const result = await provider.cleanupRun({
+      operationId: "run:r1:cleanup",
+      workspace: { id: "ws-run-1", path: join(tmpdir(), "ws-run-1") },
+    });
+
+    expect(result).toEqual({
+      operationId: "run:r1:cleanup",
+      workspaceId: "ws-run-1",
+      path: join(tmpdir(), "ws-run-1"),
+      removed: false,
+      status: "CLEANUP_FAILED",
+      message: "lock held by flow-run:r9",
+      blockers: ["lock-holder flow-run:r9"],
+    });
+  });
+
+  it("passes retention flags to prepare-run and echoes the row retention on the handle", async () => {
+    const root = makeTempDir();
+    const { calls, runCli } = routedRunner({
+      "prepare-run": {
+        stdout: okEnvelope({
+          ...PREPARE_RUN_DATA,
+          retention: { success: "cleanup", failure: "retain", blocked: "retain" },
+        }),
+      },
+    });
+    const provider = await makeProvider(runCli);
+
+    const handle = await provider.prepareRun({
+      operationId: "run:r1:create",
+      runId: "r1",
+      projectRoot: root,
+      definition: {
+        provider: "zigma-workspace",
+        repository: ".",
+        base: "main",
+        retention: { success: "cleanup", failure: "retain", blocked: "retain" },
+      },
+    });
+
+    expect(calls[1]?.args).toEqual([
+      "prepare-run",
+      "--operation-id", "run:r1:create",
+      "--run", "r1",
+      "--repo", root,
+      "--base", "main",
+      "--mode", "writable",
+      "--retention-success", "cleanup",
+      "--retention-failure", "retain",
+      "--retention-blocked", "retain",
+      "--json",
+    ]);
+    expect(handle.retention).toEqual({ success: "cleanup", failure: "retain", blocked: "retain" });
+  });
+
+  it("omits retention flags when the definition has none", async () => {
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli);
+
+    const handle = await provider.prepareRun({
+      operationId: "run:r1:create",
+      runId: "r1",
+      projectRoot: makeTempDir(),
+      definition: { provider: "zigma-workspace", repository: ".", base: "main" },
+    });
+
+    const args = calls[1]?.args ?? [];
+    expect(args.some((a) => a.startsWith("--retention-"))).toBe(false);
+    expect(handle.retention).toBeUndefined();
   });
 });
 

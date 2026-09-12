@@ -31,6 +31,8 @@ import type { RouterAction } from "../workflow/index.js";
 import { WorkflowError, StateError, SkillPackError } from "../utils/index.js";
 import { artifactStepDir, artifactId, appendArtifactIndex, artifactFileRelativePath } from "../artifact/index.js";
 import { applyRoutingAction } from "../engine/routing.js";
+import { finalizeJobCompletion } from "../engine/jobCompletionFinalize.js";
+import type { BeforeJobCompleted } from "../engine/jobCompletionFinalize.js";
 import { computeReadyJobs } from "../dag/index.js";
 import { resolveExpression } from "../expression/index.js";
 import type { ExpressionContext } from "../expression/index.js";
@@ -70,6 +72,8 @@ export interface ExecuteScriptStepOpts {
   onStderr?: (chunk: string) => void;
   /** Cancellation propagated by the run scheduler. */
   signal?: AbortSignal;
+  /** Managed-workspace finalize gate, invoked before job completion (M4). */
+  beforeJobCompleted?: BeforeJobCompleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +226,10 @@ async function resolveSkillPackCommand(runDir: string, uses: string): Promise<st
 // ---------------------------------------------------------------------------
 
 export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<void> {
-  const { runDir, zigmaflowDir: _zigmaflowDir, runId, jobId, clock, runner } = opts;
+  const {
+    runDir, zigmaflowDir: _zigmaflowDir, runId, jobId, clock, runner,
+    beforeJobCompleted,
+  } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -488,6 +495,21 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         last_event_id: stepCompletedId,
       });
     } else {
+      // Last step — run the managed finalize gate BEFORE sealing completion
+      // (M4). On failure the job is transitioned to "failed" in place.
+      const proceed = await finalizeJobCompletion({
+        runDir,
+        runId,
+        jobId,
+        attempt,
+        clock,
+        stateStore,
+        eventWriter,
+        allocateEventId: () => getNextEventId(),
+        ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+      });
+      if (!proceed) return;
+
       // Last step — emit job_completed and handle run completion
       const jobCompletedId = getNextEventId();
       await eventWriter.appendEvent(runDir, {
@@ -627,6 +649,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         action: onFailure as RouterAction,
         reason,
         clock,
+        ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
       });
 
       // activate_job and retry_job delegate to other jobs without finalizing

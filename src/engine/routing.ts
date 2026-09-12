@@ -26,6 +26,8 @@ import type { Clock, RunState } from "../run/index.js";
 import { StateError, WorkflowError } from "../utils/index.js";
 import { createOpenAttempt } from "./attemptModel.js";
 import { createImplicitGroup, startNextIteration } from "./jobGroupModel.js";
+import { finalizeJobCompletion } from "./jobCompletionFinalize.js";
+import type { BeforeJobCompleted } from "./jobCompletionFinalize.js";
 
 // ---------------------------------------------------------------------------
 // ApplyRoutingActionOpts
@@ -46,6 +48,13 @@ export interface ApplyRoutingActionOpts {
    * instead of the action discriminator. (WF-P9-ACCEPT)
    */
   signalName?: string;
+  /**
+   * Managed-workspace finalize gate, invoked before goto_job seals the source
+   * job "completed" (M4). Callers in the managed engine path supply it so the
+   * crash invariant "completed ⇒ finalize succeeded" holds for every way a job
+   * can reach completed.
+   */
+  beforeJobCompleted?: BeforeJobCompleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +94,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<void> {
-  const { runDir, runId, sourceJobId, sourceStepId, attempt, action, reason, clock, signalName } = opts;
+  const { runDir, runId, sourceJobId, sourceStepId, attempt, action, reason, clock, signalName, beforeJobCompleted } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -552,6 +561,23 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         { details: { sourceJobId, targetJobId, targetStatus: targetJobState.status } }
       );
     }
+
+    // M4 finalize gate: goto_job seals the source job "completed", so the
+    // managed attempt workspace must be committed and integrated first.
+    // On failure the source is already transitioned to "failed" and the
+    // redirect is abandoned (no job_skipped, target untouched).
+    const proceed = await finalizeJobCompletion({
+      runDir,
+      runId,
+      jobId: sourceJobId,
+      attempt,
+      clock,
+      stateStore,
+      eventWriter,
+      allocateEventId: () => getNextEventId(),
+      ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+    });
+    if (!proceed) return;
 
     // Append job_skipped
     const jobSkippedId = getNextEventId();

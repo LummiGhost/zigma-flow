@@ -56,6 +56,7 @@ import {
 } from "../run/index.js";
 import { InvocationControlOwner } from "../run/invocationControl.js";
 import { loadWorkflowFile } from "../workflow/index.js";
+import type { WorkspaceRetentionDefinition } from "../workflow/index.js";
 import {
   ConfigError,
   PermissionError,
@@ -63,7 +64,13 @@ import {
   ValidationError,
   WorkflowError,
 } from "../utils/index.js";
-import { advanceJob, createRun, executeCurrentStep, resolveJobWorkingDirectory } from "./index.js";
+import {
+  advanceJob,
+  createRun,
+  executeCurrentStep,
+  resolveJobWorkingDirectory,
+  type AdvanceJobOpts,
+} from "./index.js";
 import { computeReadyJobs } from "../dag/index.js";
 import { validateReportShape, validateReportAgainstStep } from "./accept.js";
 import { enterHumanGate } from "./humanGate.js";
@@ -387,6 +394,11 @@ interface ExecuteJobOnceCtx {
   jobCwd?: string;
   /** A provider resolution failure, converted into an Engine-owned transition. */
   workspaceError?: string;
+  /**
+   * Managed finalize hook (M4): commit + integrate the attempt workspace
+   * before the job is sealed as completed.
+   */
+  beforeJobCompleted?: AdvanceJobOpts["beforeJobCompleted"];
   // Debugging flags (from RunAllOpts)
   pauseBefore: string | undefined; // "job.step" format
   stopAfter: string | undefined; // "job.step" format
@@ -426,6 +438,7 @@ async function executeJobOnce(
     pauseBefore,
     stopAfter,
     saveAllPrompts,
+    beforeJobCompleted,
   } = ctx;
 
   // Handle virtual traverse jobs: redirect to the target job definition (Issue #179)
@@ -544,6 +557,7 @@ async function executeJobOnce(
       signal, batchId, onEvent, logWriter, stepDef, stepId,
       pauseBefore, stopAfter, saveAllPrompts,
       ...(jobCwd !== undefined ? { jobCwd } : {}),
+      ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
     });
   }
 
@@ -559,6 +573,7 @@ async function executeJobOnce(
       stepDef, stepId,
       pauseBefore, stopAfter, saveAllPrompts,
       ...(jobCwd !== undefined ? { jobCwd } : {}),
+      ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
     });
   }
 
@@ -590,6 +605,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     backendResolver, stateStore, eventWriter, clock,
     signal, batchId, onEvent, logWriter, stepDef, stepId,
     pauseBefore, stopAfter, saveAllPrompts, jobCwd,
+    beforeJobCompleted,
   } = ctx;
 
   // Legacy external directories and managed-provider handles meet at the
@@ -1315,6 +1331,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
           action,
           reason: `on_output routing: ${outputKey} = ${outputValue}`,
           clock,
+          ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
         });
 
         // Advance the source job after object routing actions (retry_job /
@@ -1329,7 +1346,10 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
           action !== null &&
           ("retry_job" in action || "activate_job" in action);
         if (isObjectRoutingAction) {
-          await advanceJob({ runDir, runId, jobId, clock });
+          await advanceJob({
+            runDir, runId, jobId, clock,
+            ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+          });
         }
 
         return { jobId, success: true, action: "completed" };
@@ -1352,6 +1372,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       attempt,
       status: report.status,
       clock,
+      ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
     });
 
     return { jobId, success: true, action: "completed" };
@@ -1382,7 +1403,10 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
 
   // Advance unconditionally after a valid report is accepted — matches accept.ts behavior.
   // Single-turn agent steps should not require outputs.completed to progress.
-  await advanceJob({ runDir, runId, jobId, clock });
+  await advanceJob({
+    runDir, runId, jobId, clock,
+    ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+  });
 
   // ── Stop checkpoint (debugging): after step completion ──────────────────
   // If stopAfter matches current job.step, mark run as blocked to stop execution
@@ -1430,7 +1454,7 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   const {
     runDir, runId, zigmaflowDir, jobId, wf, state,
     stateStore, eventWriter, clock, batchId, onEvent, logWriter, jobCwd,
-    stepDef, stepId,
+    stepDef, stepId, beforeJobCompleted,
   } = ctx;
 
   // Ensure job is ready or running before execution
@@ -1489,6 +1513,7 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     clock,
     ...(resolvedJobCwd !== undefined ? { jobCwd: resolvedJobCwd } : {}),
     ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+    ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
     // Real-time stdout/stderr forwarding (Issue #280)
     ...(logWriter
       ? {
@@ -1519,7 +1544,10 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   if (postState !== null) {
     const postJobState = postState.jobs[jobId];
     if (postJobState?.status === "running") {
-      await advanceJob({ runDir, runId, jobId, clock });
+      await advanceJob({
+        runDir, runId, jobId, clock,
+        ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+      });
     }
   }
 
@@ -1691,6 +1719,8 @@ interface RunAllLifecycleResources {
   eventSinkErrors?: unknown[];
   replayPersistedCallbacks?: () => Promise<void>;
   invocationControl?: InvocationControlOwner;
+  /** Managed run-workspace reconcile + retention-honoring release (M4). */
+  managedWorkspaceTeardown?: () => Promise<void>;
   abort(reason: string): void;
 }
 
@@ -1864,6 +1894,8 @@ async function runAllExecution(
       : undefined;
   let managedRunWorkspace: WorkspaceHandle | undefined;
   const managedJobWorkspaces = new Map<string, Promise<WorkspaceHandle>>();
+  /** Resolved attempt handles, keyed `${jobId}:${attempt}` — consumed by finalize. */
+  const managedJobWorkspaceHandles = new Map<string, WorkspaceHandle>();
 
   const validateHandle = async (handle: WorkspaceHandle, label: string): Promise<WorkspaceHandle> => {
     if (!isAbsolute(handle.path)) {
@@ -1931,11 +1963,144 @@ async function runAllExecution(
         runWorkspace: managedRunWorkspace,
         definition: normalizedDefinition,
         ...(jobSignal !== undefined ? { signal: jobSignal } : {}),
-      }).then((handle) => validateHandle(handle, "WorkspaceProvider.prepareJob"));
+      }).then((handle) => {
+        const validated = validateHandle(handle, "WorkspaceProvider.prepareJob");
+        managedJobWorkspaceHandles.set(key, handle);
+        return validated;
+      });
       managedJobWorkspaces.set(key, pending);
     }
     return (await pending).path;
   };
+
+  /**
+   * M4 finalize: commit the attempt workspace and integrate it into the Run
+   * workspace before the job is sealed as completed. Runs inside the
+   * appendJobCompleted hook, so a job observed as "completed" in state always
+   * implies its integration succeeded.
+   */
+  const finalizeManagedJob: AdvanceJobOpts["beforeJobCompleted"] = async ({
+    jobId,
+    attempt,
+  }) => {
+    if (managedRunWorkspace === undefined || opts.workspaceProvider === undefined) {
+      return { ok: true };
+    }
+    const handle = managedJobWorkspaceHandles.get(`${jobId}:${attempt}`);
+    if (handle === undefined) return { ok: true }; // run-scope job: no attempt workspace
+
+    const jobDef = wf.jobs[jobId];
+    const workspaceDef = typeof jobDef?.workspace === "object" ? jobDef.workspace : undefined;
+    if (workspaceDef?.merge?.strategy === "none") return { ok: true };
+
+    try {
+      await opts.workspaceProvider.commitJob({
+        operationId: `run:${runId}:job:${jobId}:attempt:${attempt}:commit`,
+        runId,
+        jobId,
+        attempt,
+        jobWorkspace: handle,
+      });
+      const integration = await opts.workspaceProvider.integrateJob({
+        operationId: `run:${runId}:job:${jobId}:attempt:${attempt}:integrate`,
+        runId,
+        jobId,
+        attempt,
+        jobWorkspace: handle,
+        runWorkspace: managedRunWorkspace,
+      });
+      if (integration.status === "conflicted") {
+        const files = integration.conflictFiles.length > 0
+          ? ` (files: ${integration.conflictFiles.join(", ")})`
+          : "";
+        return {
+          ok: false,
+          reason: `workspace_merge_conflict: ${integration.message}${files}`,
+          failureKind: "workspace_merge_conflict",
+        };
+      }
+      return { ok: true };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        reason: `workspace finalize failed: ${message}`,
+        failureKind: "workspace_integration_failed",
+      };
+    }
+  };
+
+  /**
+   * M4 retention policy for a managed workspace. Per-workspace retention
+   * (definition, or the row echoed back by prepare-run) wins; otherwise
+   * completed results are cleaned immediately and failed/blocked results are
+   * retained for the workspace GC (docs/zigma-workspace-integration.md §14).
+   */
+  const retentionFor = (
+    retention: WorkspaceRetentionDefinition | undefined,
+    resultClass: "success" | "failure" | "blocked",
+  ): "cleanup" | "retain" => {
+    const explicit = retention?.[resultClass];
+    if (explicit !== undefined) return explicit;
+    return resultClass === "success" ? "cleanup" : "retain";
+  };
+
+  /** Attempt workspaces already released post-batch (cleanup is idempotent). */
+  const cleanedAttemptWorkspaces = new Set<string>();
+
+  /**
+   * M4 run-workspace teardown: reconcile, then release or retain the Run
+   * workspace per its retention policy. Registered on the lifecycle so the
+   * runAll wrapper owns it as part of teardown, after every other resource
+   * has been drained and quiescence acknowledged.
+   */
+  if (managedRunWorkspace !== undefined && opts.workspaceProvider !== undefined) {
+    lifecycle.managedWorkspaceTeardown = async () => {
+      const provider = opts.workspaceProvider!;
+      try {
+        const reconcile = await provider.reconcileRun({
+          workspace: managedRunWorkspace!,
+        });
+        logWriter.writeSystemDetached(
+          `Run ${runId} workspace reconcile: ${reconcile.reconciledStatus} — ${reconcile.recommendation}`,
+        );
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        logWriter.writeSystemDetached(
+          `Run ${runId} workspace reconcile failed: ${message}`,
+        );
+      }
+
+      const status = finalState?.status;
+      const resultClass = status === "completed"
+        ? "success"
+        : status === "blocked"
+        ? "blocked"
+        : "failure";
+      const policy = retentionFor(
+        managedRunWorkspace!.retention ?? managedDefinition?.retention,
+        resultClass,
+      );
+      if (policy === "retain") {
+        logWriter.writeSystemDetached(
+          `Run ${runId} workspace retained (retention ${resultClass}: retain)`,
+        );
+        return;
+      }
+      const cleanup = await provider.cleanupRun({
+        operationId: `run:${runId}:cleanup`,
+        workspace: managedRunWorkspace!,
+      });
+      if (cleanup.status === "CLEANUP_FAILED") {
+        logWriter.writeSystemDetached(
+          `Run ${runId} workspace cleanup failed: ${cleanup.message}` +
+            (cleanup.blockers.length > 0
+              ? ` (blockers: ${cleanup.blockers.join(", ")})`
+              : ""),
+        );
+      }
+    };
+  }
 
   // ── 3. Main execution loop (concurrent batch, AD-P14-004) ──────────────
 
@@ -2291,6 +2456,9 @@ async function runAllExecution(
         logWriter,
         ...(jobCwd !== undefined ? { jobCwd } : {}),
         ...(workspaceError !== undefined ? { workspaceError } : {}),
+        ...(managedRunWorkspace !== undefined
+          ? { beforeJobCompleted: finalizeManagedJob }
+          : {}),
         pauseBefore,
         stopAfter,
         saveAllPrompts,
@@ -2462,6 +2630,53 @@ async function runAllExecution(
 
     // State is re-read at the top of the next iteration via stateStore.readSnapshot.
     // No additional work needed here since executeJobOnce handles all state writes.
+
+    // ── Post-batch: release completed attempt workspaces (M4) ─────────────
+    //
+    // Runs only after the completed-state write above, so a crash before this
+    // point can never leave a re-executing job without its worktree. Cleanup
+    // is operation-id idempotent on the provider side; failures are non-fatal
+    // (the workspace is retained and collected by workspace GC).
+
+    if (managedRunWorkspace !== undefined && opts.workspaceProvider !== undefined) {
+      const postBatchState3 = await stateStore.readSnapshot(runDir);
+      if (postBatchState3 !== null) {
+        for (const [key, handle] of managedJobWorkspaceHandles) {
+          if (cleanedAttemptWorkspaces.has(key)) continue;
+          const sep = key.lastIndexOf(":");
+          const jobId = key.slice(0, sep);
+          const attempt = Number(key.slice(sep + 1));
+          const js = postBatchState3.jobs[jobId];
+          if (js === undefined || js.status !== "completed") continue;
+
+          const jobDef = wf.jobs[jobId];
+          const workspaceDef = typeof jobDef?.workspace === "object"
+            ? jobDef.workspace
+            : undefined;
+          const policy = retentionFor(workspaceDef?.retention, "success");
+          if (policy === "retain") continue;
+
+          try {
+            const cleanupResult = await opts.workspaceProvider.cleanupRun({
+              operationId: `run:${runId}:job:${jobId}:attempt:${attempt}:cleanup`,
+              workspace: handle,
+            });
+            if (cleanupResult.status === "CLEANUP_FAILED") {
+              logWriter.writeSystemDetached(
+                `Job ${jobId} attempt ${attempt} workspace cleanup blocked: ${cleanupResult.message} (blockers: ${cleanupResult.blockers.join(", ") || "none"}) — retained for workspace GC`,
+              );
+              continue;
+            }
+            cleanedAttemptWorkspaces.add(key);
+          } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            logWriter.writeSystemDetached(
+              `Job ${jobId} attempt ${attempt} workspace cleanup failed: ${message}`,
+            );
+          }
+        }
+      }
+    }
 
     iteration++;
   }
@@ -2645,6 +2860,52 @@ async function runAllExecution(
     }
   }
 
+  // ── 3.7. Post-loop: managed publish (docs/zigma-workspace-integration.md §14) ──
+  //
+  // Only a completed Run publishes. The provider pushes the Run workspace
+  // branch `flow/<runId>`; a publish failure downgrades the Run to "failed"
+  // with evidence so callers see the terminal outcome in state and events.
+
+  if (
+    managedRunWorkspace !== undefined &&
+    opts.workspaceProvider !== undefined &&
+    managedDefinition?.publish !== undefined &&
+    managedDefinition.publish.strategy !== "none" &&
+    finalState?.status === "completed"
+  ) {
+    try {
+      await opts.workspaceProvider.publishRun({
+        operationId: `run:${runId}:publish`,
+        runId,
+        workspace: managedRunWorkspace,
+        strategy: "branch",
+        targetRef: `flow/${runId}`,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      const publishFailedId = await nextSequentialEventId(runDir, eventWriter);
+      const publishFailedEvt: ZigmaFlowEvent = {
+        id: publishFailedId,
+        type: "run_failed",
+        run_id: runId,
+        timestamp: clock.now(),
+        producer: "engine",
+        job: null,
+        step: null,
+        attempt: null,
+        payload: { reason: `workspace publish failed: ${message}` },
+      };
+      await eventWriter.appendEvent(runDir, publishFailedEvt);
+      onEvent?.(publishFailedEvt);
+      await stateStore.updateState(runDir, (current) => ({
+        ...current,
+        status: "failed" as const,
+        last_event_id: publishFailedId,
+      }));
+      finalState = await stateStore.readSnapshot(runDir);
+    }
+  }
+
   // ── 4. Build summary from final state ──────────────────────────────────
 
   const finalStatus = finalState?.status;
@@ -2750,6 +3011,11 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         cleanupErrors.push(error);
       }
     }
+
+    // Managed run-workspace reconcile/release runs last, after quiescence is
+    // acknowledged and every engine resource is drained. Transport failures
+    // surface through cleanupErrors like any other teardown failure.
+    await collect([lifecycle.managedWorkspaceTeardown?.() ?? Promise.resolve()]);
   } finally {
     opts.signal?.removeEventListener("abort", forwardExternalAbort);
   }

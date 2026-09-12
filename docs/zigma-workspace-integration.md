@@ -409,18 +409,35 @@ Core 以 CLI 子进程方式启动 Flow，JS 对象 provider 无法跨越进程�
 
 桥接层保留 `run:<runId>:` 前缀，并在每次调用时校验调用方 operationId 与构造值完全一致，不一致即失败关闭：
 
-- Run workspace：`run:<runId>:create`
-- Job attempt：`run:<runId>:job:<jobId>:attempt:<n>:create`
+- Run workspace 创建：`run:<runId>:create`
+- Job attempt 创建：`run:<runId>:job:<jobId>:attempt:<n>:create`
+- Job commit：`run:<runId>:job:<jobId>:attempt:<n>:commit`
+- 集成：`run:<runId>:job:<jobId>:attempt:<n>:integrate`
+- Publish：`run:<runId>:publish`
+- 清理（Run workspace）：`run:<runId>:cleanup`；清理（attempt workspace）：`run:<runId>:job:<jobId>:attempt:<n>:cleanup`
 
-该前缀不会与 Core 的 `core:workspace:*` 或 workspace 自身的 gc 命名空间冲突。
+该前缀不会与 Core 的 `core:workspace:*` 或 workspace 自身的 gc 命名空间冲突。cleanup 的 operationId 由调用方提供，但桥接层校验其形状必须为 `run:<runId>:cleanup` 或 `run:<runId>:job:<jobId>:attempt:<n>:cleanup`（Engine 按结果类别选择保留或清理时保持幂等键稳定，同时不允许任意 operation-id 泄漏进 Core/GC 命名空间）。
 
 ### 14.4 参数映射
 
-- `prepare-run`：`--repo` 为 `definition.repository`，`"."` 以 `projectRoot` 解析；`--base` 为 `definition.base`；`--mode writable`。
+- `prepare-run`：`--repo` 为 `definition.repository`，`"."` 以 `projectRoot` 解析；`--base` 为 `definition.base`；`--mode writable`；`definition.retention` 透传为 `--retention-success/--retention-failure/--retention-blocked`（行级保留，默认 `retain`），响应中的 `retention` 回显到 handle。
 - `prepare-job`：先以 `git rev-parse HEAD` 解析 Run workspace 当前 HEAD 作为 `--expected-head`（完整 40 位 SHA），由 provider 的 CAS 拒绝并发集成竞态；重试同一 operation-id 且 HEAD 已前进时，provider 幂等守卫以 `OPERATION_ID_CONFLICT` 失败关闭（崩溃收养路径则是 `WORKSPACE_HEAD_CONFLICT`）。
-- 响应信封（snake_case）映射为 `WorkspaceHandle { id, path, baseCommit, branch }`；Engine 校验 `path` 为绝对且存在的目录后，同一 `jobCwd` 传递给 agent、script、check、router 执行器。
+- `commit`：CAS `--expected-head` 为调用时解析的 attempt workspace HEAD；可选 `--message`、`--expected-state`；响应映射为 `CommitJobResult`（含 `noOp`、`changedFiles`、`evidenceDigest`）。
+- `integrate`：`--source`/`--target` 为 job/run workspace id，`--lock-owner flow-run:<runId>`；`input.expectedHead` 未提供时解析 Run workspace HEAD。`WORKSPACE_INTEGRATION_CONFLICT` 错误信封映射为**类型化 `conflicted` 结果**（`conflictFiles`/`jobCommit`/`runHead`），不抛异常；`merged: false` 映射为 `no-op`。
+- `publish`：`--strategy none|branch`（其他值在桥接层直接 ValidationError，不 spawn），`--target-ref` 为 `flow/<runId>`；任何非 `none` 策略都映射为 workspace CLI 的 `branch` push。
+- `reconcile`：`--workspace <id>`；校验 `reconciled_status` 属于 `complete|incomplete|orphaned|inconsistent`，否则失败关闭。
+- `cleanup`：`--strict`；`WORKSPACE_CLEANUP_FAILED` 错误信封映射为**类型化 `CLEANUP_FAILED` 结果**（`removed`/`blockers`/`path`），不抛异常——严格清理被阻止是业务结果（workspace 保留给 GC/retention 路径），不是传输失败。
+- 响应信封（snake_case）映射为 `WorkspaceHandle { id, path, baseCommit, branch, retention? }`；Engine 校验 `path` 为绝对且存在的目录后，同一 `jobCwd` 传递给 agent、script、check、router 执行器。
 
-### 14.5 当前边界与证据
+### 14.5 Engine 生命周期接入（M4）
 
-- 端口只实现 `prepareRun` / `prepareJob`（§5 中的 snapshot/integrate/publish/cleanup 属后续阶段）。
-- 证据：`tests/workspace/zigma-workspace-cli-provider.test.ts`（stub CLI 的协商/映射/命名空间单测）、`tests/workspace/managed-real-cli.contract.test.ts`（`ZIGMA_WORKSPACE_CLI_PATH` 门控的 real-CLI 往返/重放/竞态）、`tests/engine/runAll-m1-lifecycle.test.ts`（同 cwd 契约）。跨仓库兼容矩阵见 zigma-workspace `docs/compatibility-matrix.md`。
+- **Finalize 先于 completed 落盘**：job 成功路径在写入 `completed` 状态**之前**依次执行 commitJob → integrateJob。任何执行器类型（agent 经 `appendJobCompleted`，script/check/router 在各自最后一步的完成块）都经过同一个 finalize 闸门（`src/engine/jobCompletionFinalize.ts`），保证「观察到 completed ⇒ finalize 已成功」的崩溃不变量；finalize 失败（含集成冲突）时 job 转 `failed`（failure_kind 如 `workspace_merge_conflict`），Run 继续，attempt workspace 保留。路由路径同样覆盖：`goto_job` 在把 source job 封存为 `completed` 之前先过闸门（失败则放弃跳转、job 转 failed、target 不动），闸门从 engine/执行器/applyStatusReturn/accept 各调用点透传。不变量覆盖引擎完成路径；操作员 `forceSet` 覆盖是显式人工裁决，不受其约束。
+- **冲突语义**：集成冲突 → 该 job 失败、Run 完好、Run workspace 无合并残留（workspace CLI 已回滚）；后续尝试按既有 attempt 逻辑调度。由于调度器单 writable 串行集成，引擎内冲突结构性不可能，冲突仅来自外部写入（测试经外部 commit 注入）。
+- **Publish**：全部 job 终态协调后、`workflow.workspace.publish.strategy !== "none"` 且 Run 终态为 `completed` 时执行 publishRun（branch → `flow/<runId>`）；失败则 Run 转 `failed` 并记 `run_failed`（reason `workspace publish failed: …`）。
+- **Teardown**：quiescence 确认后依次 reconcileRun → cleanupRun；保留策略按结果类别取 `handle.retention`（prepare-run 回显的行级值）→ `definition.retention` → 默认（success→cleanup，failure/blocked→retain）。attempt workspace 在 batch 结束、job 状态落盘后按同一策略清理（幂等 operation-id，失败仅记日志不致命）。
+- **事件计数器**：finalize 闸门注入各路径的 event-id 分配器（engine 顺序计数 / 执行器本地计数器），保证 `step_completed`/`job_completed` 与 finalize 失败事件序列单调。
+
+### 14.6 当前边界与证据
+
+- 端口完整实现 `prepareRun` / `prepareJob` / `commitJob` / `integrateJob` / `publishRun` / `reconcileRun` / `cleanupRun`。workspace CLI 的 `prepare-job` 不支持行级保留（仅 `prepare-run`），attempt workspace 行始终为 null → GC 全局回退。
+- 证据：`tests/workspace/zigma-workspace-cli-provider.test.ts`（stub CLI 的协商/映射/命名空间/冲突与清理结果映射单测）、`tests/workspace/managed-real-cli.contract.test.ts`（`ZIGMA_WORKSPACE_CLI_PATH` 门控的 real-CLI 往返/重放/竞态/完整 M4 生命周期/外部冲突/保留透传）、`tests/engine/runAll-m1-lifecycle.test.ts`（fake provider 的引擎钩子：冲突→job 失败 Run 完好、publish 失败→Run 失败、teardown 顺序与保留策略）。跨仓库兼容矩阵见 zigma-workspace `docs/compatibility-matrix.md`。

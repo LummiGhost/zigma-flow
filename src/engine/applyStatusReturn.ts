@@ -24,6 +24,7 @@ import type { Clock, RunState } from "../run/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import { StateError, ValidationError } from "../utils/index.js";
 import { applyRoutingAction, actionDiscriminator } from "./routing.js";
+import type { BeforeJobCompleted } from "./jobCompletionFinalize.js";
 
 // ---------------------------------------------------------------------------
 // ApplyStatusReturnOpts
@@ -44,6 +45,8 @@ export interface ApplyStatusReturnOpts {
   status: string;
   /** Clock for event timestamps. */
   clock: Clock;
+  /** Managed-workspace finalize gate, forwarded to applyRoutingAction (M4). */
+  beforeJobCompleted?: BeforeJobCompleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +86,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function applyStatusReturn(opts: ApplyStatusReturnOpts): Promise<void> {
-  const { runDir, runId, sourceJobId, sourceStepId, attempt, status, clock } = opts;
+  const { runDir, runId, sourceJobId, sourceStepId, attempt, status, clock, beforeJobCompleted } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -182,5 +185,6 @@ export async function applyStatusReturn(opts: ApplyStatusReturnOpts): Promise<vo
     action,
     reason,
     clock,
+    ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
   });
 }

@@ -227,8 +227,8 @@ export function mapZigmaFlowEventToCoreCallbackEnvelope(
   callerContext: CallerContextV1,
   runStatus?: string,
 ): FlowCoreCallbackEnvelopeV1 {
-  if (!callerContext.operationId || !callerContext.callbackCorrelationId) {
-    throw new TypeError("CallerContextV1 is missing operationId or callbackCorrelationId required for Core callbacks");
+  if (!callerContext.operationId || !callerContext.callbackCorrelationId || !callerContext.flowRunId) {
+    throw new TypeError("CallerContextV1 is missing operationId, callbackCorrelationId, or flowRunId required for Core callbacks");
   }
   const platformEvent = mapZigmaFlowEventToPlatformEvent(event, runStatus);
   return {

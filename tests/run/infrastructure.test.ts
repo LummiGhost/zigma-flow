@@ -293,8 +293,9 @@ describe("reserveRunDirectory", () => {
 
   it("never hands the same id to two concurrent reservers (parallel dispatch race)", async () => {
     const clock = new FakeClock(FIXED_ISO);
-    // All 8 share one LocalRunIdGenerator like parallel invokes sharing a
-    // runsDir; the readdir-count TOCTOU would otherwise mint duplicate ids.
+    // Eight independent reservers model eight parallel invoke processes
+    // sharing one runsDir; without the atomic claim the readdir-count
+    // TOCTOU would mint duplicate ids.
     const results = await Promise.all(
       Array.from({ length: 8 }, () => reserveRunDirectory(new LocalRunIdGenerator(clock), runsDir)),
     );

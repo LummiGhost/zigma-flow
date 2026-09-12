@@ -553,6 +553,8 @@ export async function reserveRunDirectory(
   runsDir: string,
 ): Promise<{ runId: string; runDir: string }> {
   await mkdir(runsDir, { recursive: true });
+  let lastContendedId: string | undefined;
+  let consecutiveContention = 0;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const runId = await idGenerator.nextRunId(runsDir);
     const runDir = join(runsDir, runId);
@@ -562,6 +564,16 @@ export async function reserveRunDirectory(
     } catch (error: unknown) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "EEXIST" && code !== "EPERM") throw error;
+      if (code === "EPERM" && runId === lastContendedId) {
+        // Windows pending-delete clears within a retry or two; persistent
+        // denial on the same candidate means a real permission failure.
+        consecutiveContention += 1;
+        if (consecutiveContention >= 5) throw error;
+        await new Promise<void>((resolve) => setTimeout(resolve, 25 * consecutiveContention));
+      } else {
+        consecutiveContention = code === "EPERM" ? 1 : 0;
+      }
+      lastContendedId = runId;
     }
   }
   throw new FilesystemError(

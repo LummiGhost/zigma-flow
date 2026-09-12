@@ -629,6 +629,129 @@ jobs:
     expect(provider.reconcileCalls).toHaveLength(1);
   }, 15_000);
 
+  it("M4: runs the finalize gate before goto_job seals the source job completed", async () => {
+    const workspaceRoot = join(sandbox.projectRoot, "m4-goto");
+    const provider = new TestWorkspaceProvider(workspaceRoot);
+    const workflowPath = await writeWorkflow(sandbox, "m4-goto", `\
+name: m4-goto
+version: "1"
+workspace:
+  provider: zigma-workspace
+  repository: .
+  base: main
+jobs:
+  route:
+    steps:
+      - id: decide
+        type: router
+        switch: approved
+        cases:
+          approved:
+            goto_job: target
+  target:
+    needs: [route]
+    steps:
+      - id: ok
+        type: script
+        run: echo done
+`);
+
+    const summary = await runAll({
+      task: "managed goto finalize",
+      workflowPath,
+      runsDir: sandbox.runsDir,
+      zigmaflowDir: sandbox.projectRoot,
+      skillLockPath: sandbox.skillLockPath,
+      backendResolver: () => new CapturingBackend(),
+      clock: new FixedClock(),
+      workspaceProvider: provider,
+    });
+
+    expect(summary.status).toBe("completed");
+    expect(summary.jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "route", status: "completed" }),
+      expect.objectContaining({ id: "target", status: "completed" }),
+    ]));
+
+    // The redirect seals "route" completed — the gate must have committed and
+    // integrated its attempt workspace first (completed ⇒ finalize succeeded).
+    expect(provider.commitCalls.map((c) => c.jobId).sort()).toEqual(["route", "target"]);
+    expect(provider.integrateCalls.map((c) => c.jobId).sort()).toEqual(["route", "target"]);
+
+    const runDir = join(sandbox.runsDir, summary.runId);
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf-8"))
+      .split("\n").filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as { type: string; job?: string | null });
+    expect(events.some((e) => e.type === "job_skipped" && e.job === "route")).toBe(true);
+  }, 15_000);
+
+  it("M4: abandons goto_job when the finalize gate fails and leaves the target untouched", async () => {
+    const workspaceRoot = join(sandbox.projectRoot, "m4-goto-conflict");
+    const provider = new TestWorkspaceProvider(workspaceRoot, {
+      conflictForJobIds: ["route"],
+    });
+    const workflowPath = await writeWorkflow(sandbox, "m4-goto-conflict", `\
+name: m4-goto-conflict
+version: "1"
+workspace:
+  provider: zigma-workspace
+  repository: .
+  base: main
+jobs:
+  route:
+    steps:
+      - id: decide
+        type: router
+        switch: approved
+        cases:
+          approved:
+            goto_job: target
+  target:
+    needs: [route]
+    steps:
+      - id: ok
+        type: script
+        run: echo done
+`);
+
+    const summary = await runAll({
+      task: "managed goto conflict",
+      workflowPath,
+      runsDir: sandbox.runsDir,
+      zigmaflowDir: sandbox.projectRoot,
+      skillLockPath: sandbox.skillLockPath,
+      backendResolver: () => new CapturingBackend(),
+      clock: new FixedClock(),
+      workspaceProvider: provider,
+    });
+
+    expect(summary.status).toBe("failed");
+    expect(summary.jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "route", status: "failed" }),
+      expect.objectContaining({ id: "target", status: "blocked" }),
+    ]));
+
+    const runDir = join(sandbox.runsDir, summary.runId);
+    const state = JSON.parse(await readFile(join(runDir, "state.json"), "utf-8")) as {
+      jobs: Record<string, {
+        status: string;
+        attempts?: Array<{ status: string; failure_kind?: string }>;
+      }>;
+    };
+    const routeAttempt = state.jobs["route"]?.attempts?.[0];
+    expect(routeAttempt?.status).toBe("failure");
+    expect(routeAttempt?.failure_kind).toBe("workspace_merge_conflict");
+
+    // The gate failed, so the redirect never happened: no job_skipped, no
+    // commit/integrate for "target" (it never ran), nothing released.
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf-8"))
+      .split("\n").filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as { type: string; job?: string | null });
+    expect(events.some((e) => e.type === "job_skipped" && e.job === "route")).toBe(false);
+    expect(provider.commitCalls.map((c) => c.jobId)).toEqual(["route"]);
+    expect(provider.cleanupCalls).toEqual([]);
+  }, 15_000);
+
   it("M4: reconciles then releases the run workspace in teardown, honoring retention", async () => {
     const workspaceRoot = join(sandbox.projectRoot, "m4-retention-cleanup");
     const provider = new TestWorkspaceProvider(workspaceRoot, {

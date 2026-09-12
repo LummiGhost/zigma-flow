@@ -1331,6 +1331,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
           action,
           reason: `on_output routing: ${outputKey} = ${outputValue}`,
           clock,
+          ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
         });
 
         // Advance the source job after object routing actions (retry_job /
@@ -1371,6 +1372,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       attempt,
       status: report.status,
       clock,
+      ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
     });
 
     return { jobId, success: true, action: "completed" };
@@ -2655,10 +2657,16 @@ async function runAllExecution(
           if (policy === "retain") continue;
 
           try {
-            await opts.workspaceProvider.cleanupRun({
+            const cleanupResult = await opts.workspaceProvider.cleanupRun({
               operationId: `run:${runId}:job:${jobId}:attempt:${attempt}:cleanup`,
               workspace: handle,
             });
+            if (cleanupResult.status === "CLEANUP_FAILED") {
+              logWriter.writeSystemDetached(
+                `Job ${jobId} attempt ${attempt} workspace cleanup blocked: ${cleanupResult.message} (blockers: ${cleanupResult.blockers.join(", ") || "none"}) — retained for workspace GC`,
+              );
+              continue;
+            }
             cleanedAttemptWorkspaces.add(key);
           } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);

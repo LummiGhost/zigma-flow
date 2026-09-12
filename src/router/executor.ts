@@ -439,6 +439,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
       action: matchedAction,
       reason: `router decided: ${actionStr} (case: ${switchValue})`,
       clock,
+      ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
     });
   }
 }

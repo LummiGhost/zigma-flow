@@ -416,7 +416,7 @@ Core 以 CLI 子进程方式启动 Flow，JS 对象 provider 无法跨越进程�
 - Publish：`run:<runId>:publish`
 - 清理（Run workspace）：`run:<runId>:cleanup`；清理（attempt workspace）：`run:<runId>:job:<jobId>:attempt:<n>:cleanup`
 
-该前缀不会与 Core 的 `core:workspace:*` 或 workspace 自身的 gc 命名空间冲突。cleanup 的 operationId 由调用方直接提供（透传，不校验前缀），以便 Engine 按结果类别选择保留或清理时保持幂等键稳定。
+该前缀不会与 Core 的 `core:workspace:*` 或 workspace 自身的 gc 命名空间冲突。cleanup 的 operationId 由调用方提供，但桥接层校验其形状必须为 `run:<runId>:cleanup` 或 `run:<runId>:job:<jobId>:attempt:<n>:cleanup`（Engine 按结果类别选择保留或清理时保持幂等键稳定，同时不允许任意 operation-id 泄漏进 Core/GC 命名空间）。
 
 ### 14.4 参数映射
 
@@ -431,7 +431,7 @@ Core 以 CLI 子进程方式启动 Flow，JS 对象 provider 无法跨越进程�
 
 ### 14.5 Engine 生命周期接入（M4）
 
-- **Finalize 先于 completed 落盘**：job 成功路径在写入 `completed` 状态**之前**依次执行 commitJob → integrateJob。任何执行器类型（agent 经 `appendJobCompleted`，script/check/router 在各自最后一步的完成块）都经过同一个 finalize 闸门（`src/engine/jobCompletionFinalize.ts`），保证「观察到 completed ⇒ finalize 已成功」的崩溃不变量；finalize 失败（含集成冲突）时 job 转 `failed`（failure_kind 如 `workspace_merge_conflict`），Run 继续，attempt workspace 保留。
+- **Finalize 先于 completed 落盘**：job 成功路径在写入 `completed` 状态**之前**依次执行 commitJob → integrateJob。任何执行器类型（agent 经 `appendJobCompleted`，script/check/router 在各自最后一步的完成块）都经过同一个 finalize 闸门（`src/engine/jobCompletionFinalize.ts`），保证「观察到 completed ⇒ finalize 已成功」的崩溃不变量；finalize 失败（含集成冲突）时 job 转 `failed`（failure_kind 如 `workspace_merge_conflict`），Run 继续，attempt workspace 保留。路由路径同样覆盖：`goto_job` 在把 source job 封存为 `completed` 之前先过闸门（失败则放弃跳转、job 转 failed、target 不动），闸门从 engine/执行器/applyStatusReturn/accept 各调用点透传。不变量覆盖引擎完成路径；操作员 `forceSet` 覆盖是显式人工裁决，不受其约束。
 - **冲突语义**：集成冲突 → 该 job 失败、Run 完好、Run workspace 无合并残留（workspace CLI 已回滚）；后续尝试按既有 attempt 逻辑调度。由于调度器单 writable 串行集成，引擎内冲突结构性不可能，冲突仅来自外部写入（测试经外部 commit 注入）。
 - **Publish**：全部 job 终态协调后、`workflow.workspace.publish.strategy !== "none"` 且 Run 终态为 `completed` 时执行 publishRun（branch → `flow/<runId>`）；失败则 Run 转 `failed` 并记 `run_failed`（reason `workspace publish failed: …`）。
 - **Teardown**：quiescence 确认后依次 reconcileRun → cleanupRun；保留策略按结果类别取 `handle.retention`（prepare-run 回显的行级值）→ `definition.retention` → 默认（success→cleanup，failure/blocked→retain）。attempt workspace 在 batch 结束、job 状态落盘后按同一策略清理（幂等 operation-id，失败仅记日志不致命）。

@@ -742,7 +742,7 @@ describe("ZigmaWorkspaceCliProvider lifecycle mapping", () => {
       conflictFiles: ["src/a.ts", "src/b.ts"],
       jobCommit: "c".repeat(40),
       runHead: "d".repeat(40),
-      message: "zigma-workspace integrate failed (WORKSPACE_INTEGRATION_CONFLICT): conflict in src/a.ts",
+      message: "conflict in src/a.ts",
     });
   });
 
@@ -895,6 +895,20 @@ describe("ZigmaWorkspaceCliProvider lifecycle mapping", () => {
     });
   });
 
+  it("fails closed when the cleanup operationId diverges from the reserved namespace", async () => {
+    const { calls, runCli } = routedRunner();
+    const provider = await makeProvider(runCli);
+
+    const err = await expectValidationError(() =>
+      provider.cleanupRun({
+        operationId: "core:workspace:gc:r1",
+        workspace: { id: "ws-run-1", path: makeTempDir() },
+      }),
+    );
+    expect(err.message).toContain("must match");
+    expect(calls).toHaveLength(1);
+  });
+
   it("maps a WORKSPACE_CLEANUP_FAILED envelope to the CLEANUP_FAILED result instead of throwing", async () => {
     const { runCli } = routedRunner({
       cleanup: {
@@ -923,7 +937,7 @@ describe("ZigmaWorkspaceCliProvider lifecycle mapping", () => {
       path: join(tmpdir(), "ws-run-1"),
       removed: false,
       status: "CLEANUP_FAILED",
-      message: "zigma-workspace cleanup failed (WORKSPACE_CLEANUP_FAILED): lock held by flow-run:r9",
+      message: "lock held by flow-run:r9",
       blockers: ["lock-holder flow-run:r9"],
     });
   });

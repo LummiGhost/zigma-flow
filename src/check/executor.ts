@@ -508,6 +508,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
         action: onPass as RouterAction,
         reason: `check passed: on_pass routing action`,
         clock,
+        ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
       });
       return;
     }
@@ -705,6 +706,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
         action: onFail as RouterAction,
         reason,
         clock,
+        ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
       });
       return;
     }

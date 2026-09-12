@@ -39,6 +39,7 @@ import { FilesystemError, StateError, ValidationError, WorkflowError } from "../
 import { mergeOutputDeclarations } from "../agent/outputSchema.js";
 import { applyRoutingAction } from "./routing.js";
 import type { ContextPatch } from "./applyContextPatch.js";
+import type { BeforeJobCompleted } from "./jobCompletionFinalize.js";
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -53,6 +54,8 @@ export interface AcceptAgentReportOpts {
   jobId: string;
   /** Clock for timestamping the agent_report_accepted event. */
   clock: Clock;
+  /** Managed-workspace finalize gate, forwarded to applyRoutingAction (M4). */
+  beforeJobCompleted?: BeforeJobCompleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +425,7 @@ export function validateReportAgainstStep(
 // ---------------------------------------------------------------------------
 
 export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<void> {
-  const { runDir, runId, jobId, clock } = opts;
+  const { runDir, runId, jobId, clock, beforeJobCompleted } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -601,6 +604,7 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
           action,
           reason: `on_output routing: ${outputKey} = ${outputValue}`,
           clock,
+          ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
         });
 
         // Advance the source job after routing dispatch (same as signal path)
@@ -704,6 +708,7 @@ export async function acceptAgentReport(opts: AcceptAgentReportOpts): Promise<vo
       reason,
       clock,
       signalName: selectedSignal.type,
+      ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
     });
 
     // Advance the source job after signal dispatch — lazy import avoids circular dependency.

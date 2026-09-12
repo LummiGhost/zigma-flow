@@ -649,6 +649,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         action: onFailure as RouterAction,
         reason,
         clock,
+        ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
       });
 
       // activate_job and retry_job delegate to other jobs without finalizing

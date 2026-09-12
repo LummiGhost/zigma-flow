@@ -47,6 +47,8 @@ const CONTRACT_VERSION = 1;
 const EXPECTED_PROVIDER = "zigma-workspace";
 const CLI_TIMEOUT_MS = 900_000;
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
+const CLEANUP_RUN_ID_PATTERN = /^run:[^:]+:cleanup$/;
+const CLEANUP_JOB_ID_PATTERN = /^run:[^:]+:job:[^:]+:attempt:\d+:cleanup$/;
 
 interface CliEnvelope {
   contract_version?: unknown;
@@ -142,6 +144,7 @@ function parseEnvelope<T extends Record<string, unknown>>(
           operation,
           exitCode,
           providerCode,
+          providerMessage: message,
           ...(result.stderr !== "" ? { stderrTail: result.stderr.slice(-2_000) } : {}),
           ...(typeof error?.details === "object" && error.details !== null
             ? { providerDetails: error.details }
@@ -254,6 +257,7 @@ export async function negotiateManagedContract(
 export async function resolveWorkspaceHead(path: string, signal?: AbortSignal): Promise<string> {
   const result = await execa("git", ["rev-parse", "HEAD"], {
     cwd: path,
+    timeout: 30_000,
     ...(signal !== undefined ? { cancelSignal: signal } : {}),
     reject: false,
   });
@@ -497,7 +501,7 @@ export class ZigmaWorkspaceCliProvider implements WorkspaceProvider {
           conflictFiles,
           jobCommit,
           runHead,
-          message: providerDetails.message ?? "integration conflict",
+          message: providerDetails.providerMessage ?? providerDetails.message ?? "integration conflict",
         };
       }
       throw error;
@@ -580,6 +584,17 @@ export class ZigmaWorkspaceCliProvider implements WorkspaceProvider {
 
   async cleanupRun(input: CleanupRunInput): Promise<CleanupRunResult> {
     const operationId = input.operationId;
+    // Shape guard on the reserved namespace: the bridge's callers must not
+    // leak arbitrary operation-ids into Core's create/apply or GC namespaces.
+    if (
+      !CLEANUP_RUN_ID_PATTERN.test(operationId)
+      && !CLEANUP_JOB_ID_PATTERN.test(operationId)
+    ) {
+      throw new ValidationError(
+        `zigma-workspace bridge: cleanup operationId "${operationId}" must match run:<runId>:cleanup or run:<runId>:job:<jobId>:attempt:<n>:cleanup`,
+        { details: { operationId } },
+      );
+    }
     let data: CleanupData;
     try {
       data = await this.invoke<CleanupData>([
@@ -600,7 +615,7 @@ export class ZigmaWorkspaceCliProvider implements WorkspaceProvider {
           path: typeof details?.["path"] === "string" ? details["path"] : input.workspace.path,
           removed: details?.["removed"] === true,
           status: "CLEANUP_FAILED",
-          message: providerDetails.message ?? "cleanup failed",
+          message: providerDetails.providerMessage ?? providerDetails.message ?? "cleanup failed",
           blockers: Array.isArray(details?.["blockers"])
             ? (details["blockers"] as string[])
             : [],
@@ -623,15 +638,17 @@ export class ZigmaWorkspaceCliProvider implements WorkspaceProvider {
   private providerErrorDetails(
     error: unknown,
     operation: string,
-  ): { code: string; message: string; details?: unknown } | undefined {
+  ): { code: string; message: string; providerMessage?: string; details?: unknown } | undefined {
     if (!(error instanceof ValidationError)) return undefined;
     const details = error.details as Record<string, unknown> | undefined;
     if (details?.["operation"] !== operation) return undefined;
     const code = details?.["providerCode"];
     if (typeof code !== "string") return undefined;
+    const providerMessage = details?.["providerMessage"];
     return {
       code,
       message: error.message,
+      ...(typeof providerMessage === "string" ? { providerMessage } : {}),
       details: details?.["providerDetails"],
     };
   }

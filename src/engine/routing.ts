@@ -21,6 +21,7 @@ import { computeReadyJobs } from "../dag/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { RouterAction } from "../workflow/index.js";
 import { nextEventId as formatEventId } from "../events/index.js";
+import type { ZigmaFlowEvent } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import { StateError, WorkflowError } from "../utils/index.js";
@@ -55,6 +56,11 @@ export interface ApplyRoutingActionOpts {
    * can reach completed.
    */
   beforeJobCompleted?: BeforeJobCompleted;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +100,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<void> {
-  const { runDir, runId, sourceJobId, sourceStepId, attempt, action, reason, clock, signalName, beforeJobCompleted } = opts;
+  const { runDir, runId, sourceJobId, sourceStepId, attempt, action, reason, clock, signalName, beforeJobCompleted, onEvent } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -190,7 +196,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
   function getNextEventId(): string { return formatEventId(++eventCounter); }
 
   const signalReceivedId = getNextEventId();
-  await eventWriter.appendEvent(runDir, {
+  const signalReceivedEvent: ZigmaFlowEvent = {
     id: signalReceivedId,
     run_id: runId,
     type: "signal_received",
@@ -204,7 +210,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       from_job: sourceJobId,
       from_step: sourceStepId,
     },
-  });
+  };
+  await eventWriter.appendEvent(runDir, signalReceivedEvent);
+  onEvent?.(signalReceivedEvent);
 
   // ── 7. Apply the action ───────────────────────────────────────────────────
 
@@ -221,7 +229,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     // Delegate to advanceJob — it writes its own snapshot
     // Import advanceJob lazily to avoid circular import issues at module load time
     const { advanceJob } = await import("./index.js");
-    await advanceJob({ runDir, runId, jobId: sourceJobId, clock });
+    await advanceJob({ runDir, runId, jobId: sourceJobId, clock, ...(onEvent !== undefined ? { onEvent } : {}) });
     return;
   }
 
@@ -282,7 +290,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         const la = targetJobState.attempts[li]!;
         if (!la.status) {
           const attemptFailedId = getNextEventId();
-          await eventWriter.appendEvent(runDir, {
+          const attemptFailedEvent: ZigmaFlowEvent = {
             id: attemptFailedId,
             run_id: runId,
             type: "attempt_failed",
@@ -299,7 +307,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
               step_count: la.step_count ?? 0,
               duration_ms: 0,
             },
-          });
+          };
+          await eventWriter.appendEvent(runDir, attemptFailedEvent);
+          onEvent?.(attemptFailedEvent);
         }
       }
 
@@ -315,7 +325,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       // Emit terminal event (job_blocked or job_failed)
       const terminalEventId = getNextEventId();
       if (onExceededStatus === "failed") {
-        await eventWriter.appendEvent(runDir, {
+        const terminalEvent: ZigmaFlowEvent = {
           id: terminalEventId,
           run_id: runId,
           type: "job_failed",
@@ -325,9 +335,11 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
           step: null,
           attempt: currentAttempt,
           payload: { job_id: targetJobId, reason },
-        });
+        };
+        await eventWriter.appendEvent(runDir, terminalEvent);
+        onEvent?.(terminalEvent);
       } else {
-        await eventWriter.appendEvent(runDir, {
+        const terminalEvent: ZigmaFlowEvent = {
           id: terminalEventId,
           run_id: runId,
           type: "job_blocked",
@@ -337,7 +349,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
           step: null,
           attempt: currentAttempt,
           payload: { job_id: targetJobId, reason },
-        });
+        };
+        await eventWriter.appendEvent(runDir, terminalEvent);
+        onEvent?.(terminalEvent);
       }
 
       // Clear retry_inputs and current_step from terminal state (no future retry)
@@ -378,7 +392,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       if (!la.status) {
         sealedAttempts[li] = { ...la, status: "failure" as const, ended_at: clock.now() };
         const attemptFailedId = getNextEventId();
-        await eventWriter.appendEvent(runDir, {
+        const attemptFailedEvent: ZigmaFlowEvent = {
           id: attemptFailedId,
           run_id: runId,
           type: "attempt_failed",
@@ -395,7 +409,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
             step_count: la.step_count ?? 0,
             duration_ms: 0,
           },
-        });
+        };
+        await eventWriter.appendEvent(runDir, attemptFailedEvent);
+        onEvent?.(attemptFailedEvent);
       }
     }
 
@@ -403,7 +419,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     const newAttempt = createOpenAttempt(nextAttempt, clock.now(), reason);
     const newAttempts = [...(sealedAttempts ?? targetJobState.attempts ?? []), newAttempt];
     const attemptStartedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const attemptStartedEvent: ZigmaFlowEvent = {
       id: attemptStartedId,
       run_id: runId,
       type: "attempt_started",
@@ -413,11 +429,13 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       step: null,
       attempt: nextAttempt,
       payload: { job_id: targetJobId, attempt: nextAttempt, reason },
-    });
+    };
+    await eventWriter.appendEvent(runDir, attemptStartedEvent);
+    onEvent?.(attemptStartedEvent);
 
     // Append job_retrying
     const jobRetryingId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const jobRetryingEvent: ZigmaFlowEvent = {
       id: jobRetryingId,
       run_id: runId,
       type: "job_retrying",
@@ -427,7 +445,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       step: null,
       attempt: nextAttempt,
       payload: { job_id: targetJobId, attempt: nextAttempt, reason },
-    });
+    };
+    await eventWriter.appendEvent(runDir, jobRetryingEvent);
+    onEvent?.(jobRetryingEvent);
 
     // Reset job: status → ready, current_step → undefined, attempt → nextAttempt
     const retryJobState = { ...targetJobState };
@@ -475,7 +495,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
 
     // Append job_activated
     const jobActivatedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const jobActivatedEvent: ZigmaFlowEvent = {
       id: jobActivatedId,
       run_id: runId,
       type: "job_activated",
@@ -485,7 +505,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       step: null,
       attempt: null,
       payload: { job_id: targetJobId, reason },
-    });
+    };
+    await eventWriter.appendEvent(runDir, jobActivatedEvent);
+    onEvent?.(jobActivatedEvent);
 
     // Compute readiness: if all `needs` are completed → ready, else waiting
     const completedJobIds = new Set<string>(
@@ -516,7 +538,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       activatedJobState.attempts = [openAttempt];
 
       const attemptStartedId = getNextEventId();
-      await eventWriter.appendEvent(runDir, {
+      const attemptStartedEvent: ZigmaFlowEvent = {
         id: attemptStartedId,
         run_id: runId,
         type: "attempt_started",
@@ -526,7 +548,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         step: null,
         attempt: 1,
         payload: { job_id: targetJobId, attempt: 1, reason },
-      });
+      };
+      await eventWriter.appendEvent(runDir, attemptStartedEvent);
+      onEvent?.(attemptStartedEvent);
       lastEventId = attemptStartedId;
     }
 
@@ -576,12 +600,13 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       eventWriter,
       allocateEventId: () => getNextEventId(),
       ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
     if (!proceed) return;
 
     // Append job_skipped
     const jobSkippedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const jobSkippedEvent: ZigmaFlowEvent = {
       id: jobSkippedId,
       run_id: runId,
       type: "job_skipped",
@@ -591,7 +616,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       step: null,
       attempt,
       payload: { job_id: sourceJobId, target: targetJobId, reason },
-    });
+    };
+    await eventWriter.appendEvent(runDir, jobSkippedEvent);
+    onEvent?.(jobSkippedEvent);
 
     // WF-7.2: Create implicit group for ungrouped source job on goto_job
     // Only when the workflow already has explicit job_groups (backward compat).
@@ -610,7 +637,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         updatedJobGroups[groupId] = started;
 
         const iterStartedId = getNextEventId();
-        await eventWriter.appendEvent(runDir, {
+        const iterStartedEvent: ZigmaFlowEvent = {
           id: iterStartedId,
           run_id: runId,
           type: "iteration_started",
@@ -624,7 +651,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
             iteration: 1,
             job_ids: [sourceJobId],
           },
-        });
+        };
+        await eventWriter.appendEvent(runDir, iterStartedEvent);
+        onEvent?.(iterStartedEvent);
         lastEventId = iterStartedId;
       }
       sourceJobState.group = groupId;
@@ -666,7 +695,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       readyTargetState.attempts = [openAttempt];
 
       const attemptStartedId = getNextEventId();
-      await eventWriter.appendEvent(runDir, {
+      const attemptStartedEvent: ZigmaFlowEvent = {
         id: attemptStartedId,
         run_id: runId,
         type: "attempt_started",
@@ -676,7 +705,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         step: null,
         attempt: 1,
         payload: { job_id: targetJobId, attempt: 1, reason },
-      });
+      };
+      await eventWriter.appendEvent(runDir, attemptStartedEvent);
+      onEvent?.(attemptStartedEvent);
       lastEventId = attemptStartedId;
     }
 
@@ -718,7 +749,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     if (newVisitCount > maxVisits) {
       // Exceeded — block step and job
       const exceededEventId = getNextEventId();
-      await eventWriter.appendEvent(runDir, {
+      const exceededEvent: ZigmaFlowEvent = {
         id: exceededEventId,
         run_id: runId,
         type: "step_visit_exceeded",
@@ -728,7 +759,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         step: sourceStepId,
         attempt,
         payload: { job_id: sourceJobId, step_id: targetStepId, max_visits: maxVisits, visit_count: newVisitCount },
-      });
+      };
+      await eventWriter.appendEvent(runDir, exceededEvent);
+      onEvent?.(exceededEvent);
 
       stepVisits[targetStepId] = newVisitCount;
       const blockedState: RunState = {
@@ -750,7 +783,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
 
     // Within limits — append step_revisited event
     const revisitedEventId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const revisitedEvent: ZigmaFlowEvent = {
       id: revisitedEventId,
       run_id: runId,
       type: "step_revisited",
@@ -760,7 +793,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       step: sourceStepId,
       attempt,
       payload: { job_id: sourceJobId, step_id: sourceStepId, target_step: targetStepId, visit_count: newVisitCount },
-    });
+    };
+    await eventWriter.appendEvent(runDir, revisitedEvent);
+    onEvent?.(revisitedEvent);
 
     // Build updated job state: redirect to target step, increment visit count
     stepVisits[targetStepId] = newVisitCount;
@@ -790,7 +825,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         updatedJobGroups[groupId] = started;
 
         const iterStartedId = getNextEventId();
-        await eventWriter.appendEvent(runDir, {
+        const iterStartedEvent: ZigmaFlowEvent = {
           id: iterStartedId,
           run_id: runId,
           type: "iteration_started",
@@ -804,7 +839,9 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
             iteration: 1,
             job_ids: [sourceJobId],
           },
-        });
+        };
+        await eventWriter.appendEvent(runDir, iterStartedEvent);
+        onEvent?.(iterStartedEvent);
         finalEventId = iterStartedId;
       }
       sourceJobState.group = groupId;

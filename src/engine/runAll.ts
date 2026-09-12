@@ -541,6 +541,7 @@ async function executeJobOnce(
       clock,
       stateStore,
       eventWriter,
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
     const action = failure.action === "run_failed"
       ? "failed"
@@ -581,6 +582,7 @@ async function executeJobOnce(
     return executeHumanStep({
       runDir, runId, jobId, wf, state,
       stateStore, eventWriter, clock, logWriter,
+      ...(onEvent !== undefined ? { onEvent } : {}),
       stepDef, stepId,
     });
   }
@@ -631,6 +633,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
           clock,
           stateStore,
           eventWriter,
+          ...(onEvent !== undefined ? { onEvent } : {}),
         });
         return { jobId, success: false, action: "failed", detail: `Workspace resolution failed: ${errorMsg}` };
       }
@@ -661,6 +664,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       clock,
       stateStore,
       eventWriter,
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
     return { jobId, success: false, action: "failed", detail: `Context build failed: ${errorMsg}` };
   }
@@ -755,6 +759,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
           clock,
           stateStore,
           eventWriter,
+          ...(onEvent !== undefined ? { onEvent } : {}),
         });
       }
       return { jobId, success: false, action: "failed", detail: err instanceof Error ? err.message : String(err) };
@@ -785,6 +790,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
         clock,
         stateStore,
         eventWriter,
+        ...(onEvent !== undefined ? { onEvent } : {}),
       });
       return { jobId, success: false, action: "failed", detail: reason };
     }
@@ -806,6 +812,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       clock,
       stateStore,
       eventWriter,
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
     return { jobId, success: false, action: "failed", detail: reason };
   }
@@ -1122,6 +1129,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       clock,
       stateStore,
       eventWriter,
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
 
     if (failureResult.action === "retried") {
@@ -1235,6 +1243,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
         clock,
         stateStore,
         eventWriter,
+        ...(onEvent !== undefined ? { onEvent } : {}),
       });
       const action = failureResult.action === "run_failed" ? "failed" : (failureResult.action as JobStepResult["action"]);
       return { jobId, success: false, action, detail: err.message };
@@ -1349,6 +1358,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
           await advanceJob({
             runDir, runId, jobId, clock,
             ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+            ...(onEvent !== undefined ? { onEvent } : {}),
           });
         }
 
@@ -1373,6 +1383,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       status: report.status,
       clock,
       ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
 
     return { jobId, success: true, action: "completed" };
@@ -1396,6 +1407,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       clock,
       stateStore,
       eventWriter,
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
     const action = failureResult.action === "run_failed" ? "failed" : (failureResult.action as JobStepResult["action"]);
     return { jobId, success: false, action, detail: reason };
@@ -1406,6 +1418,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   await advanceJob({
     runDir, runId, jobId, clock,
     ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+    ...(onEvent !== undefined ? { onEvent } : {}),
   });
 
   // ── Stop checkpoint (debugging): after step completion ──────────────────
@@ -1489,6 +1502,7 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
         clock,
         stateStore,
         eventWriter,
+        ...(onEvent !== undefined ? { onEvent } : {}),
       });
       return { jobId, success: false, action: "failed", detail: `Workspace resolution failed: ${errorMsg}` };
     }
@@ -1514,6 +1528,7 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     ...(resolvedJobCwd !== undefined ? { jobCwd: resolvedJobCwd } : {}),
     ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
     ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+    ...(onEvent !== undefined ? { onEvent } : {}),
     // Real-time stdout/stderr forwarding (Issue #280)
     ...(logWriter
       ? {
@@ -1547,6 +1562,7 @@ async function executeNonAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       await advanceJob({
         runDir, runId, jobId, clock,
         ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+        ...(onEvent !== undefined ? { onEvent } : {}),
       });
     }
   }
@@ -1568,6 +1584,7 @@ interface HumanStepCtx {
   eventWriter: JsonlEventWriter;
   clock: Clock;
   logWriter: RunLogWriter | undefined;
+  onEvent?: (e: ZigmaFlowEvent) => void;
   stepDef: import("../workflow/index.js").StepDefinition;
   stepId: string;
 }
@@ -1575,7 +1592,7 @@ interface HumanStepCtx {
 async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
   const {
     runDir, runId, jobId, state,
-    stateStore, eventWriter, clock, logWriter,
+    stateStore, eventWriter, clock, logWriter, onEvent,
     stepDef, stepId,
   } = ctx;
 
@@ -1616,6 +1633,7 @@ async function executeHumanStep(ctx: HumanStepCtx): Promise<JobStepResult> {
     ...(stepDef.inputs !== undefined ? { stepInputs: stepDef.inputs as Record<string, import("../engine/humanGate.js").HumanInputSchema> } : {}),
     stateStore,
     eventWriter,
+    ...(onEvent !== undefined ? { onEvent } : {}),
   });
 
   // Read back the post-enter state to report the actual step_status (v0.6)

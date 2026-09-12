@@ -71,6 +71,11 @@ export interface RecordAgentFailureOpts {
   stateStore?: LocalStateStore;
   /** Injectable event writer (defaults to JsonlEventWriter). */
   eventWriter?: EventWriter;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 export interface RecordAgentFailureResult {
@@ -133,6 +138,7 @@ export async function recordAgentFailure(
     clock,
     stateStore = new LocalStateStore(),
     eventWriter = new JsonlEventWriter(),
+    onEvent,
   } = opts;
 
   // -- Read current state snapshot (needed for all paths) -----------------
@@ -162,6 +168,7 @@ export async function recordAgentFailure(
     },
   };
   await eventWriter.appendEvent(runDir, stepFailedEvent);
+  onEvent?.(stepFailedEvent);
 
   // -- 2. Config / Permission error ⇒ fail run immediately (no retry) -----
 
@@ -174,7 +181,7 @@ export async function recordAgentFailure(
       const lastAttempt = currentJobState.attempts[lastIdx]!;
       if (!lastAttempt.status) {
         const attemptFailedId = await nextSequentialEventId(runDir, eventWriter);
-        await eventWriter.appendEvent(runDir, {
+        const attemptFailedEvent: ZigmaFlowEvent = {
           id: attemptFailedId,
           run_id: runId,
           type: "attempt_failed",
@@ -191,7 +198,9 @@ export async function recordAgentFailure(
             step_count: lastAttempt.step_count ?? 0,
             duration_ms: 0,
           },
-        });
+        };
+        await eventWriter.appendEvent(runDir, attemptFailedEvent);
+        onEvent?.(attemptFailedEvent);
         lastEventId = attemptFailedId;
       }
     }
@@ -209,6 +218,7 @@ export async function recordAgentFailure(
       payload: { reason },
     };
     await eventWriter.appendEvent(runDir, runFailedEvent);
+    onEvent?.(runFailedEvent);
 
     // WF-7.1: Store sealed attempt in state
     await stateStore.updateState(runDir, (current) => {
@@ -270,6 +280,7 @@ export async function recordAgentFailure(
       jobId,
       clock,
       reason,
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
 
     return { action: "retried", newAttempt: attempt + 1, jobStatus: "ready" };
@@ -302,7 +313,7 @@ export async function recordAgentFailure(
     const lastAttempt = sealedAttempts[lastIdx]!;
     if (!lastAttempt.status) {
       const attemptFailedId = await nextSequentialEventId(runDir, eventWriter);
-      await eventWriter.appendEvent(runDir, {
+      const attemptFailedEvent: ZigmaFlowEvent = {
         id: attemptFailedId,
         run_id: runId,
         type: "attempt_failed",
@@ -319,7 +330,9 @@ export async function recordAgentFailure(
           step_count: lastAttempt.step_count ?? 0,
           duration_ms: 0,
         },
-      });
+      };
+      await eventWriter.appendEvent(runDir, attemptFailedEvent);
+      onEvent?.(attemptFailedEvent);
       lastEventIdBeforeTerminal = attemptFailedId;
 
       // Build sealed attempt with failure status
@@ -358,6 +371,7 @@ export async function recordAgentFailure(
         payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
       };
       await eventWriter.appendEvent(runDir, jobFailedEvent);
+      onEvent?.(jobFailedEvent);
 
       // Set job status but do NOT prematurely set run status (reconciliation handles it)
       await stateStore.updateState(runDir, (current) => ({
@@ -389,6 +403,7 @@ export async function recordAgentFailure(
         payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
       };
       await eventWriter.appendEvent(runDir, jobFailedEvent);
+      onEvent?.(jobFailedEvent);
     } else {
       const jobBlockedEvent: ZigmaFlowEvent = {
         id: terminalEventId,
@@ -402,6 +417,7 @@ export async function recordAgentFailure(
         payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
       };
       await eventWriter.appendEvent(runDir, jobBlockedEvent);
+      onEvent?.(jobBlockedEvent);
     }
 
     await stateStore.updateState(runDir, (current) => ({
@@ -428,6 +444,7 @@ export async function recordAgentFailure(
     payload: { job_id: jobId, reason: reason ?? "max attempts exceeded" },
   };
   await eventWriter.appendEvent(runDir, jobFailedEvent);
+  onEvent?.(jobFailedEvent);
 
   await stateStore.updateState(runDir, (current) => ({
     ...current,

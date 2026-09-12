@@ -20,6 +20,7 @@ import { parse as parseYaml } from "yaml";
 
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { RouterAction } from "../workflow/index.js";
+import type { ZigmaFlowEvent } from "../events/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import { StateError, ValidationError } from "../utils/index.js";
@@ -47,6 +48,11 @@ export interface ApplyStatusReturnOpts {
   clock: Clock;
   /** Managed-workspace finalize gate, forwarded to applyRoutingAction (M4). */
   beforeJobCompleted?: BeforeJobCompleted;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +92,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function applyStatusReturn(opts: ApplyStatusReturnOpts): Promise<void> {
-  const { runDir, runId, sourceJobId, sourceStepId, attempt, status, clock, beforeJobCompleted } = opts;
+  const { runDir, runId, sourceJobId, sourceStepId, attempt, status, clock, beforeJobCompleted, onEvent } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -156,7 +162,7 @@ export async function applyStatusReturn(opts: ApplyStatusReturnOpts): Promise<vo
   const { nextSequentialEventId } = await import("../events/index.js");
   const stepReturnedId = await nextSequentialEventId(runDir, eventWriterForSeq);
 
-  await eventWriter.appendEvent(runDir, {
+  const stepReturnedEvent: ZigmaFlowEvent = {
     id: stepReturnedId,
     run_id: runId,
     type: "step_returned",
@@ -171,7 +177,9 @@ export async function applyStatusReturn(opts: ApplyStatusReturnOpts): Promise<vo
       status,
       mapped_action: mappedActionStr,
     },
-  });
+  };
+  await eventWriter.appendEvent(runDir, stepReturnedEvent);
+  onEvent?.(stepReturnedEvent);
 
   // ── 9. Dispatch the mapped action via applyRoutingAction ──────────────────
 
@@ -186,5 +194,6 @@ export async function applyStatusReturn(opts: ApplyStatusReturnOpts): Promise<vo
     reason,
     clock,
     ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+    ...(onEvent !== undefined ? { onEvent } : {}),
   });
 }

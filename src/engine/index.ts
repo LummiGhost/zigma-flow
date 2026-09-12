@@ -27,11 +27,12 @@ import {
   LocalRunIdGenerator,
   LocalStateStore,
   SystemClock,
-  createRunDirectory,
+  reserveRunDirectory,
   snapshotSkillLock,
   writeRunYaml,
 } from "../run/index.js";
 import { nextEventId as formatEventId, nextSequentialEventId } from "../events/index.js";
+import type { ZigmaFlowEvent } from "../events/index.js";
 import { finalizeJobCompletion } from "./jobCompletionFinalize.js";
 import type { BeforeJobCompleted } from "./jobCompletionFinalize.js";
 import { evaluateCondition } from "../expression/index.js";
@@ -134,11 +135,9 @@ export async function createRun(inputs: CreateRunInputs): Promise<CreateRunResul
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
 
-  // RC-R01: Generate runId
-  const runId = await idGenerator.nextRunId(inputs.runsDir);
-
-  // RC-R02: Create run directory
-  const runDir = await createRunDirectory(runId, inputs.runsDir);
+  // RC-R01/R02: Reserve run id + directory atomically so parallel invokes
+  // sharing one runsDir cannot mint the same id (TOCTOU on the entry count).
+  const { runId, runDir } = await reserveRunDirectory(idGenerator, inputs.runsDir);
 
   // Load workflow (prerequisite for RC-R03..R06)
   const wf = await loadWorkflowFile(inputs.workflowPath);
@@ -348,6 +347,11 @@ export interface ExecuteCurrentStepOpts {
   signal?: AbortSignal;
   /** Managed-workspace finalize gate, invoked before job completion (M4). */
   beforeJobCompleted?: BeforeJobCompleted;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<void> {
@@ -400,6 +404,7 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       ...(opts.beforeJobCompleted !== undefined
         ? { beforeJobCompleted: opts.beforeJobCompleted }
         : {}),
+      ...(opts.onEvent !== undefined ? { onEvent: opts.onEvent } : {}),
     });
   } else if (stepDef.type === "check") {
     const actualRunner = (opts.runner as CheckRunner | undefined) ?? new LocalCheckRunner();
@@ -416,6 +421,7 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       ...(opts.beforeJobCompleted !== undefined
         ? { beforeJobCompleted: opts.beforeJobCompleted }
         : {}),
+      ...(opts.onEvent !== undefined ? { onEvent: opts.onEvent } : {}),
     });
   } else if (stepDef.type === "router") {
     await executeRouterStep({
@@ -431,6 +437,7 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       ...(opts.beforeJobCompleted !== undefined
         ? { beforeJobCompleted: opts.beforeJobCompleted }
         : {}),
+      ...(opts.onEvent !== undefined ? { onEvent: opts.onEvent } : {}),
     });
     // Agent steps are dispatched by runAll directly so their backend receives
     // the same Engine-resolved jobCwd through AgentExecuteOptions.projectRoot.
@@ -463,6 +470,11 @@ export interface AdvanceJobOpts {
    * before the completed state is ever written.
    */
   beforeJobCompleted?: BeforeJobCompleted;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 /**
@@ -492,7 +504,7 @@ export interface AdvanceJobOpts {
  * FP-MULTISTEP-EMPTY-STEPS, FP-MULTISTEP-IDEMPOTENT-TERMINAL.
  */
 export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
-  const { runDir, runId, jobId, clock } = opts;
+  const { runDir, runId, jobId, clock, onEvent } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -543,6 +555,7 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
     return await appendJobCompleted({
       state, stateStore, eventWriter, runDir, runId, jobId, clock, wf,
       ...(opts.beforeJobCompleted !== undefined ? { beforeJobCompleted: opts.beforeJobCompleted } : {}),
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
   }
 
@@ -567,7 +580,7 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
       if (newFirstVisitCount > firstMaxVisits) {
         // Implicit first step exceeded max_visits — block immediately
         const exceededEventId = await nextSequentialEventId(runDir, eventWriter);
-        await eventWriter.appendEvent(runDir, {
+        const exceededEvent: ZigmaFlowEvent = {
           id: exceededEventId,
           run_id: runId,
           type: "step_visit_exceeded",
@@ -577,7 +590,9 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
           step: firstStepDef.id,
           attempt: jobState.attempt ?? 1,
           payload: { job_id: jobId, step_id: firstStepDef.id, max_visits: firstMaxVisits, visit_count: newFirstVisitCount },
-        });
+        };
+        await eventWriter.appendEvent(runDir, exceededEvent);
+        onEvent?.(exceededEvent);
 
         const blockedState: RunState = {
           ...state,
@@ -635,7 +650,7 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
     if (newVisitCount > maxVisits) {
       // Exceeded max_visits — block the job
       const exceededEventId = await nextSequentialEventId(runDir, eventWriter);
-      await eventWriter.appendEvent(runDir, {
+      const exceededEvent: ZigmaFlowEvent = {
         id: exceededEventId,
         run_id: runId,
         type: "step_visit_exceeded",
@@ -645,7 +660,9 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
         step: nextStepId,
         attempt: jobState.attempt ?? 1,
         payload: { job_id: jobId, step_id: nextStepId, max_visits: maxVisits, visit_count: newVisitCount },
-      });
+      };
+      await eventWriter.appendEvent(runDir, exceededEvent);
+      onEvent?.(exceededEvent);
 
       mergedVisits[nextStepId] = newVisitCount;
       const blockedState: RunState = {
@@ -698,7 +715,7 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
       if (!conditionResult) {
         // Step skipped — emit step_skipped event, advance past
         const skippedEventId = await nextSequentialEventId(runDir, eventWriter);
-        await eventWriter.appendEvent(runDir, {
+        const skippedEvent: ZigmaFlowEvent = {
           id: skippedEventId,
           run_id: runId,
           type: "step_skipped",
@@ -708,7 +725,9 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
           step: nextStepId,
           attempt: jobState.attempt ?? 1,
           payload: { job_id: jobId, step_id: nextStepId, condition: nextStepDef.if },
-        });
+        };
+        await eventWriter.appendEvent(runDir, skippedEvent);
+        onEvent?.(skippedEvent);
 
         // Move to the step after the skipped one
         const skipNextIndex = nextIndex + 1;
@@ -733,6 +752,7 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
           return await appendJobCompleted({
             state, stateStore, eventWriter, runDir, runId, jobId, clock, wf,
             ...(opts.beforeJobCompleted !== undefined ? { beforeJobCompleted: opts.beforeJobCompleted } : {}),
+            ...(onEvent !== undefined ? { onEvent } : {}),
           });
         }
       }
@@ -761,6 +781,7 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
   return await appendJobCompleted({
     state, stateStore, eventWriter, runDir, runId, jobId, clock, wf,
     ...(opts.beforeJobCompleted !== undefined ? { beforeJobCompleted: opts.beforeJobCompleted } : {}),
+    ...(onEvent !== undefined ? { onEvent } : {}),
   });
 }
 
@@ -778,10 +799,15 @@ interface AppendJobCompletedOpts {
   clock: Clock;
   wf: import("../workflow/index.js").WorkflowDefinition;
   beforeJobCompleted?: BeforeJobCompleted;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> {
-  const { state, stateStore, eventWriter, runDir, runId, jobId, clock, wf } = opts;
+  const { state, stateStore, eventWriter, runDir, runId, jobId, clock, wf, onEvent } = opts;
 
   const jobState = state.jobs[jobId]!;
   const attempt = jobState.attempt ?? 1;
@@ -803,6 +829,7 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
     ...(opts.beforeJobCompleted !== undefined
       ? { beforeJobCompleted: opts.beforeJobCompleted }
       : {}),
+    ...(onEvent !== undefined ? { onEvent } : {}),
   });
   if (!proceed) return false;
 
@@ -810,7 +837,7 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
   const jobDef = wf.jobs[jobId];
   const stepCount = jobDef?.steps.length ?? 0;
   const attemptCompletedId = await nextSequentialEventId(runDir, eventWriter);
-  await eventWriter.appendEvent(runDir, {
+  const attemptCompletedEvent: ZigmaFlowEvent = {
     id: attemptCompletedId,
     run_id: runId,
     type: "attempt_completed",
@@ -825,11 +852,13 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
       step_count: stepCount,
       duration_ms: 0,
     },
-  });
+  };
+  await eventWriter.appendEvent(runDir, attemptCompletedEvent);
+  onEvent?.(attemptCompletedEvent);
 
   // Emit job_completed event BEFORE updateState (maintains events-before-state invariant)
   const jobCompletedId = await nextSequentialEventId(runDir, eventWriter);
-  await eventWriter.appendEvent(runDir, {
+  const jobCompletedEvent: ZigmaFlowEvent = {
     id: jobCompletedId,
     run_id: runId,
     type: "job_completed",
@@ -839,7 +868,9 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
     step: null,
     attempt,
     payload: { job_id: jobId, attempt },
-  });
+  };
+  await eventWriter.appendEvent(runDir, jobCompletedEvent);
+  onEvent?.(jobCompletedEvent);
 
   let lastEventId = jobCompletedId;
   const transitionTimestamp = clock.now();
@@ -1031,7 +1062,7 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
   const previewState = transitionCompletedJob(state);
   if (previewState.status === "failed") {
     const runFailedId = await nextSequentialEventId(runDir, eventWriter);
-    await eventWriter.appendEvent(runDir, {
+    const runFailedEvent: ZigmaFlowEvent = {
       id: runFailedId,
       run_id: runId,
       type: "run_failed",
@@ -1041,7 +1072,9 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
       step: null,
       attempt: null,
       payload: { reason: "job group exhausted before until condition passed" },
-    });
+    };
+    await eventWriter.appendEvent(runDir, runFailedEvent);
+    onEvent?.(runFailedEvent);
     lastEventId = runFailedId;
   } else {
     for (const [readyId, readyState] of Object.entries(previewState.jobs)) {
@@ -1049,7 +1082,7 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
       if (previousReadyState?.status === "ready" || readyState.status !== "ready") continue;
 
       const jobReadyId = await nextSequentialEventId(runDir, eventWriter);
-      await eventWriter.appendEvent(runDir, {
+      const jobReadyEvent: ZigmaFlowEvent = {
         id: jobReadyId,
         run_id: runId,
         type: "job_ready",
@@ -1059,13 +1092,15 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
         step: null,
         attempt: null,
         payload: { job_id: readyId },
-      });
+      };
+      await eventWriter.appendEvent(runDir, jobReadyEvent);
+      onEvent?.(jobReadyEvent);
       lastEventId = jobReadyId;
 
       const nextAttempt = readyState.attempt;
       if (nextAttempt !== undefined && nextAttempt > (previousReadyState?.attempt ?? 0)) {
         const attemptStartedId = await nextSequentialEventId(runDir, eventWriter);
-        await eventWriter.appendEvent(runDir, {
+        const attemptStartedEvent: ZigmaFlowEvent = {
           id: attemptStartedId,
           run_id: runId,
           type: "attempt_started",
@@ -1079,7 +1114,9 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
             attempt: nextAttempt,
             reason: "job-group-repeat",
           },
-        });
+        };
+        await eventWriter.appendEvent(runDir, attemptStartedEvent);
+        onEvent?.(attemptStartedEvent);
         lastEventId = attemptStartedId;
       }
     }
@@ -1087,7 +1124,7 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
 
   if (previewState.status === "completed") {
     const runCompletedId = await nextSequentialEventId(runDir, eventWriter);
-    await eventWriter.appendEvent(runDir, {
+    const runCompletedEvent: ZigmaFlowEvent = {
       id: runCompletedId,
       run_id: runId,
       type: "run_completed",
@@ -1097,7 +1134,9 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
       step: null,
       attempt: null,
       payload: {},
-    });
+    };
+    await eventWriter.appendEvent(runDir, runCompletedEvent);
+    onEvent?.(runCompletedEvent);
 
     lastEventId = runCompletedId;
   }

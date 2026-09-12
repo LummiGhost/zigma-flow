@@ -538,6 +538,50 @@ export async function createRunDirectory(runId: string, runsDir: string): Promis
   return runDir;
 }
 
+/**
+ * Atomically reserve a run directory for a new run.
+ *
+ * `nextRunId` alone is a TOCTOU race: several tasks in one project dispatch
+ * in parallel, all count the same runsDir entries, and all mint the same
+ * date-stamped id (observed as interleaved events.jsonl and Core callback
+ * "event id reused with different content" conflicts). Claim the candidate
+ * with a non-recursive mkdir — the loser sees EEXIST (EPERM on Windows
+ * pending-delete), re-counts, and retries.
+ */
+export async function reserveRunDirectory(
+  idGenerator: IdGenerator,
+  runsDir: string,
+): Promise<{ runId: string; runDir: string }> {
+  await mkdir(runsDir, { recursive: true });
+  let lastContendedId: string | undefined;
+  let consecutiveContention = 0;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const runId = await idGenerator.nextRunId(runsDir);
+    const runDir = join(runsDir, runId);
+    try {
+      await mkdir(runDir);
+      return { runId, runDir };
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST" && code !== "EPERM") throw error;
+      if (code === "EPERM" && runId === lastContendedId) {
+        // Windows pending-delete clears within a retry or two; persistent
+        // denial on the same candidate means a real permission failure.
+        consecutiveContention += 1;
+        if (consecutiveContention >= 5) throw error;
+        await new Promise<void>((resolve) => setTimeout(resolve, 25 * consecutiveContention));
+      } else {
+        consecutiveContention = code === "EPERM" ? 1 : 0;
+      }
+      lastContendedId = runId;
+    }
+  }
+  throw new FilesystemError(
+    `Could not reserve a run directory under ${runsDir} after 100 attempts`,
+    { details: { runsDir } },
+  );
+}
+
 export async function writeRunYaml(runDir: string, meta: RunYamlMeta): Promise<void> {
   const yamlPath = join(runDir, "run.yml");
   const content = stringify(meta);

@@ -38,6 +38,17 @@ describe("derivePlatformEventId", () => {
     const id2 = derivePlatformEventId("r1", "evt-005");
     expect(id1).toBe(id2);
   });
+
+  it("prepends a global scope when provided", () => {
+    expect(derivePlatformEventId("20260714-0001", "evt-042", "flowrun-abc"))
+      .toBe("flowrun-abc::20260714-0001::evt-042");
+  });
+
+  it("keeps run-scoped ids distinct across scopes", () => {
+    const scoped = derivePlatformEventId("20260714-0001", "evt-042", "flowrun-abc");
+    const sameRunOtherScope = derivePlatformEventId("20260714-0001", "evt-042", "flowrun-def");
+    expect(scoped).not.toBe(sameRunOtherScope);
+  });
 });
 
 describe("deriveCallbackSequence", () => {
@@ -229,7 +240,7 @@ describe("mapZigmaFlowEventToCoreCallbackEnvelope", () => {
     const event = makeEvent("evt-007", "run_completed", "runtime-run-1");
     expect(mapZigmaFlowEventToCoreCallbackEnvelope(event, callerContext)).toMatchObject({
       callbackVersion: 1,
-      eventId: "runtime-run-1::evt-007",
+      eventId: "core-flow-run-1::runtime-run-1::evt-007",
       externalRunId: "runtime-run-1",
       flowRunId: "core-flow-run-1",
       operationId: "operation-1",

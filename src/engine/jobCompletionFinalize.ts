@@ -18,6 +18,7 @@
  */
 
 import type { Clock, JsonlEventWriter, LocalStateStore } from "../run/index.js";
+import type { ZigmaFlowEvent } from "../events/index.js";
 
 export type BeforeJobCompleted = (opts: { jobId: string; attempt: number }) => Promise<
   { ok: true } | { ok: false; reason: string; failureKind: string }
@@ -38,6 +39,11 @@ export interface JobCompletionFinalizeOpts {
    */
   allocateEventId: () => string | Promise<string>;
   beforeJobCompleted?: BeforeJobCompleted;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 /**
@@ -60,7 +66,7 @@ export async function finalizeJobCompletion(
   const transitionTimestamp = clock.now();
 
   const attemptFailedId = await opts.allocateEventId();
-  await eventWriter.appendEvent(runDir, {
+  const attemptFailedEvent: ZigmaFlowEvent = {
     id: attemptFailedId,
     run_id: runId,
     type: "attempt_failed",
@@ -77,10 +83,12 @@ export async function finalizeJobCompletion(
       step_count: 0,
       duration_ms: 0,
     },
-  });
+  };
+  await eventWriter.appendEvent(runDir, attemptFailedEvent);
+  opts.onEvent?.(attemptFailedEvent);
 
   const jobFailedId = await opts.allocateEventId();
-  await eventWriter.appendEvent(runDir, {
+  const jobFailedEvent: ZigmaFlowEvent = {
     id: jobFailedId,
     run_id: runId,
     type: "job_failed",
@@ -91,10 +99,13 @@ export async function finalizeJobCompletion(
     attempt,
     payload: {
       job_id: jobId,
+      attempt,
       reason: outcome.reason,
       failure_kind: outcome.failureKind,
     },
-  });
+  };
+  await eventWriter.appendEvent(runDir, jobFailedEvent);
+  opts.onEvent?.(jobFailedEvent);
 
   await stateStore.updateState(runDir, (current) => {
     const failedJobState = { ...current.jobs[jobId]! };

@@ -122,9 +122,14 @@ const EVENT_TYPE_MAP: Record<string, FlowPlatformEventType> = {
 /**
  * Derive a stable, dedup-able platform event ID from the run ID and the
  * internal sequential event ID (e.g. "evt-042").
+ *
+ * Flow run IDs are only unique per project (.zigma-flow/runs), so consumers
+ * that index events globally (Core's callback stream) must pass a globally
+ * unique `scope` — the Core flowRunId — which is prepended to the ID.
  */
-export function derivePlatformEventId(runId: string, internalEventId: string): string {
-  return `${runId}::${internalEventId}`;
+export function derivePlatformEventId(runId: string, internalEventId: string, scope?: string): string {
+  const base = `${runId}::${internalEventId}`;
+  return scope !== undefined && scope !== "" ? `${scope}::${base}` : base;
 }
 
 export function deriveCallbackSequence(internalEventId: string): number {
@@ -222,12 +227,15 @@ export function mapZigmaFlowEventToCoreCallbackEnvelope(
   callerContext: CallerContextV1,
   runStatus?: string,
 ): FlowCoreCallbackEnvelopeV1 {
-  if (!callerContext.operationId || !callerContext.callbackCorrelationId) {
-    throw new TypeError("CallerContextV1 is missing operationId or callbackCorrelationId required for Core callbacks");
+  if (!callerContext.operationId || !callerContext.callbackCorrelationId || !callerContext.flowRunId) {
+    throw new TypeError("CallerContextV1 is missing operationId, callbackCorrelationId, or flowRunId required for Core callbacks");
   }
   const platformEvent = mapZigmaFlowEventToPlatformEvent(event, runStatus);
   return {
     ...platformEvent,
+    // Core's callback stream indexes event IDs globally, but flow run IDs are
+    // only unique per project — scope with the Core flowRunId to stay unique.
+    eventId: derivePlatformEventId(event.run_id, event.id, callerContext.flowRunId),
     callbackVersion: FLOW_CORE_CALLBACK_CONTRACT_VERSION,
     flowRunId: callerContext.flowRunId,
     externalRunId: event.run_id,

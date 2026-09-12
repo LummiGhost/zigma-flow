@@ -86,7 +86,10 @@ export async function deliverCoreCallback(
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (response.ok) return;
-      lastError = new Error(`Core callback returned HTTP ${response.status}`);
+      const bodyText = await response.text().catch(() => "");
+      lastError = new Error(
+        `Core callback returned HTTP ${response.status}${bodyText.trim() !== "" ? `: ${bodyText.trim().slice(0, 1_000)}` : ""}`,
+      );
     } catch (error: unknown) {
       lastError = error;
     }

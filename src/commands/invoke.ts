@@ -94,6 +94,16 @@ export interface InvokeSummary {
 // invokeAction
 // ---------------------------------------------------------------------------
 
+function describeInvokeError(err: unknown): string {
+  if (err instanceof AggregateError && err.errors.length > 0) {
+    const parts = err.errors.map((sub) =>
+      sub instanceof Error ? sub.message : String(sub)
+    );
+    return `${err.message}: ${parts.join(" | ")}`;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 export async function invokeAction(
   workflowPath: string,
   options: InvokeOptions,
@@ -315,7 +325,7 @@ export async function invokeAction(
     summary = await runAll(runAllOpts);
   } catch (err: unknown) {
     if (isJson) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = describeInvokeError(err);
       print(JSON.stringify({
         contractVersion: INVOKE_CONTRACT_VERSION,
         runId: "(error)",
@@ -324,6 +334,7 @@ export async function invokeAction(
         pausedGate: null,
         artifacts: [],
         eventLogUri: "",
+        error: { message: errorMsg },
       }));
       return { runId: "(error)", status: "failed", jobs: [], iterations: 0, dryRun: false };
     }

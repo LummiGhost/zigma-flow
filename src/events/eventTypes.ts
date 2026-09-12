@@ -340,6 +340,7 @@ export interface JobFailedPayload {
   job_id: string;
   reason: string;
   failure_kind?: string; // WF-7.1: failure classification
+  attempt?: number; // attempt that produced the failure (WF-7.1 seal pairing)
 }
 
 export interface StepReturnedPayload {

@@ -256,6 +256,13 @@ interface FlowPlatformEventV1 {
 event. Consumers deduplicate globally by `eventId`. Events for one run preserve
 the internal sequential order; events from different runs may interleave.
 
+In the Core `callback-envelope-v1` projection the `eventId` carries a globally
+unique scope prefix: `<flowRunId>::<runId>::<internalEventId>`. Flow run IDs are
+only unique per project (`.zigma-flow/runs`), so the Core flowRunId — the
+globally unique, restart-stable identity from the frozen CallerContextV1 — is
+prepended. The `--event-file` projection keeps the unscoped form because each
+sink file is per-run.
+
 ### 4.1 Delivery semantics
 
 Flow's internal `events.jsonl` is the authoritative append-only log. The v1

@@ -27,6 +27,7 @@ import { readFile } from "node:fs/promises";
 import { parse as parseYaml } from "yaml";
 
 import { nextEventId } from "../events/index.js";
+import type { ZigmaFlowEvent } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
@@ -62,6 +63,11 @@ export interface ExecuteRouterStepOpts {
   jobCwd?: string;
   /** Managed-workspace finalize gate, invoked before job completion (M4). */
   beforeJobCompleted?: BeforeJobCompleted;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +128,7 @@ function resolveActionFields(action: RouterAction): { action: string; target?: s
 // ---------------------------------------------------------------------------
 
 export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<void> {
-  const { runDir, runId, jobId, clock, beforeJobCompleted } = opts;
+  const { runDir, runId, jobId, clock, beforeJobCompleted, onEvent } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -245,7 +251,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
   // ── 5. Emit step_started; write intermediate state snapshot ─────────────
 
   const stepStartedId = getNextEventId();
-  await eventWriter.appendEvent(runDir, {
+  const stepStartedEvent: ZigmaFlowEvent = {
     id: stepStartedId,
     run_id: runId,
     type: "step_started",
@@ -255,7 +261,9 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     step: stepId,
     attempt,
     payload: { job_id: jobId, step_id: stepId, attempt },
-  });
+  };
+  await eventWriter.appendEvent(runDir, stepStartedEvent);
+  onEvent?.(stepStartedEvent);
 
   // Intermediate snapshot: job → running
   const runningState: RunState = {
@@ -290,7 +298,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     ...(target !== undefined ? { target } : {}),
   };
 
-  await eventWriter.appendEvent(runDir, {
+  const routerDecidedEvent: ZigmaFlowEvent = {
     id: routerDecidedId,
     run_id: runId,
     type: "router_decided",
@@ -300,7 +308,9 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     step: stepId,
     attempt,
     payload: routerDecidedPayload,
-  });
+  };
+  await eventWriter.appendEvent(runDir, routerDecidedEvent);
+  onEvent?.(routerDecidedEvent);
 
   // ── 7. Apply terminal transition ─────────────────────────────────────────
 
@@ -314,7 +324,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     }
 
     const stepCompletedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const stepCompletedEvent: ZigmaFlowEvent = {
       id: stepCompletedId,
       run_id: runId,
       type: "step_completed",
@@ -324,7 +334,9 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
       step: stepId,
       attempt,
       payload: { job_id: jobId, step_id: stepId, attempt },
-    });
+    };
+    await eventWriter.appendEvent(runDir, stepCompletedEvent);
+    onEvent?.(stepCompletedEvent);
 
     // Terminal success — run the managed finalize gate BEFORE sealing
     // completion (M4). On failure the job is transitioned to "failed".
@@ -338,11 +350,12 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
       eventWriter,
       allocateEventId: () => getNextEventId(),
       ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
     if (!proceed) return;
 
     const jobCompletedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const jobCompletedEvent: ZigmaFlowEvent = {
       id: jobCompletedId,
       run_id: runId,
       type: "job_completed",
@@ -352,7 +365,9 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
       step: null,
       attempt,
       payload: { job_id: jobId, attempt },
-    });
+    };
+    await eventWriter.appendEvent(runDir, jobCompletedEvent);
+    onEvent?.(jobCompletedEvent);
 
     // Terminal snapshot: job → completed
     const completedState: RunState = {
@@ -372,7 +387,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     const reason = `router decided: fail (case: ${resolvedSwitch})`;
 
     const stepFailedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const stepFailedEvent: ZigmaFlowEvent = {
       id: stepFailedId,
       run_id: runId,
       type: "step_failed",
@@ -382,7 +397,9 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
       step: stepId,
       attempt,
       payload: { job_id: jobId, step_id: stepId, attempt, reason },
-    });
+    };
+    await eventWriter.appendEvent(runDir, stepFailedEvent);
+    onEvent?.(stepFailedEvent);
 
     // Terminal snapshot: job → failed
     const failedState: RunState = {
@@ -402,7 +419,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     const reason = `router decided: block (case: ${resolvedSwitch})`;
 
     const stepFailedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const stepFailedEvent: ZigmaFlowEvent = {
       id: stepFailedId,
       run_id: runId,
       type: "step_failed",
@@ -412,7 +429,9 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
       step: stepId,
       attempt,
       payload: { job_id: jobId, step_id: stepId, attempt, reason },
-    });
+    };
+    await eventWriter.appendEvent(runDir, stepFailedEvent);
+    onEvent?.(stepFailedEvent);
 
     // Terminal snapshot: job → blocked
     const blockedState: RunState = {
@@ -440,6 +459,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
       reason: `router decided: ${actionStr} (case: ${switchValue})`,
       clock,
       ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
   }
 }

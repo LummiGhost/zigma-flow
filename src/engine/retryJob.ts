@@ -25,6 +25,7 @@ import { readFile } from "node:fs/promises";
 import { parse as parseYaml } from "yaml";
 
 import { nextEventId as formatEventId } from "../events/index.js";
+import type { ZigmaFlowEvent } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
@@ -50,6 +51,11 @@ export interface RetryJobOpts {
   retryInputs?: Record<string, string>;
   /** Force retry even when max_attempts is exceeded. */
   force?: boolean;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +95,7 @@ async function readWorkflowPathFromRunYml(runDir: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 export async function retryJob(opts: RetryJobOpts): Promise<void> {
-  const { runDir, runId, jobId, clock, reason, retryInputs, force } = opts;
+  const { runDir, runId, jobId, clock, reason, retryInputs, force, onEvent } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -147,7 +153,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
       const lastAttempt = jobState.attempts[lastIdx]!;
       if (!lastAttempt.status) {
         const attemptFailedId = getNextEventId();
-        await eventWriter.appendEvent(runDir, {
+        const attemptFailedEvent: ZigmaFlowEvent = {
           id: attemptFailedId,
           run_id: runId,
           type: "attempt_failed",
@@ -164,7 +170,9 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
             step_count: lastAttempt.step_count ?? 0,
             duration_ms: 0,
           },
-        });
+        };
+        await eventWriter.appendEvent(runDir, attemptFailedEvent);
+        onEvent?.(attemptFailedEvent);
       }
     }
 
@@ -179,7 +187,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
 
     const terminalEventId = getNextEventId();
     if (onExceededStatus === "failed") {
-      await eventWriter.appendEvent(runDir, {
+      const jobFailedEvent: ZigmaFlowEvent = {
         id: terminalEventId,
         run_id: runId,
         type: "job_failed",
@@ -189,9 +197,11 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
         step: null,
         attempt: currentAttempt,
         payload: { job_id: jobId, reason: reason ?? "max attempts exceeded", failure_kind: "agent_error" },
-      });
+      };
+      await eventWriter.appendEvent(runDir, jobFailedEvent);
+      onEvent?.(jobFailedEvent);
     } else {
-      await eventWriter.appendEvent(runDir, {
+      const jobBlockedEvent: ZigmaFlowEvent = {
         id: terminalEventId,
         run_id: runId,
         type: "job_blocked",
@@ -201,7 +211,9 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
         step: null,
         attempt: currentAttempt,
         payload: { job_id: jobId, reason: reason ?? "max attempts exceeded", failure_kind: "agent_error" },
-      });
+      };
+      await eventWriter.appendEvent(runDir, jobBlockedEvent);
+      onEvent?.(jobBlockedEvent);
     }
 
     const terminalJobState = { ...jobState };
@@ -237,7 +249,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
       };
 
       const attemptFailedId = getNextEventId();
-      await eventWriter.appendEvent(runDir, {
+      const attemptFailedEvent: ZigmaFlowEvent = {
         id: attemptFailedId,
         run_id: runId,
         type: "attempt_failed",
@@ -254,7 +266,9 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
           step_count: lastAttempt.step_count ?? 0,
           duration_ms: 0,
         },
-      });
+      };
+      await eventWriter.appendEvent(runDir, attemptFailedEvent);
+      onEvent?.(attemptFailedEvent);
     }
   }
 
@@ -266,7 +280,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
   const newAttempts = [...(sealedAttempts ?? jobState.attempts ?? []), newAttempt];
 
   const attemptStartedId = getNextEventId();
-  await eventWriter.appendEvent(runDir, {
+  const attemptStartedEvent: ZigmaFlowEvent = {
     id: attemptStartedId,
     run_id: runId,
     type: "attempt_started",
@@ -276,12 +290,14 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
     step: null,
     attempt: nextAttempt,
     payload: { job_id: jobId, attempt: nextAttempt, reason: reason ?? "" },
-  });
+  };
+  await eventWriter.appendEvent(runDir, attemptStartedEvent);
+  onEvent?.(attemptStartedEvent);
 
   // ── 7. Emit job_retrying event ─────────────────────────────────────────────
 
   const jobRetryingId = getNextEventId();
-  await eventWriter.appendEvent(runDir, {
+  const jobRetryingEvent: ZigmaFlowEvent = {
     id: jobRetryingId,
     run_id: runId,
     type: "job_retrying",
@@ -291,7 +307,9 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
     step: null,
     attempt: nextAttempt,
     payload: { job_id: jobId, attempt: nextAttempt, reason: reason ?? "", failure_kind: "agent_error" },
-  });
+  };
+  await eventWriter.appendEvent(runDir, jobRetryingEvent);
+  onEvent?.(jobRetryingEvent);
 
   // ── 8. Update job state: status → ready, attempt++, clear current_step ─────
 

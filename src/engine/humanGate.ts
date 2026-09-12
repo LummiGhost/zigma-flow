@@ -84,6 +84,11 @@ export interface EnterHumanGateOpts {
   stateStore?: LocalStateStore;
   /** Injectable event writer (defaults to JsonlEventWriter). */
   eventWriter?: JsonlEventWriter;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 export async function enterHumanGate(opts: EnterHumanGateOpts): Promise<void> {
@@ -99,6 +104,7 @@ export async function enterHumanGate(opts: EnterHumanGateOpts): Promise<void> {
     stepInputs,
     stateStore = new LocalStateStore(),
     eventWriter = new JsonlEventWriter(),
+    onEvent,
   } = opts;
 
   const state = await stateStore.readSnapshot(runDir);
@@ -160,6 +166,7 @@ export async function enterHumanGate(opts: EnterHumanGateOpts): Promise<void> {
     },
   };
   await eventWriter.appendEvent(runDir, event);
+  onEvent?.(event);
 
   // 2. Write human-gate.md artifact
   await mkdir(stepDir, { recursive: true });
@@ -284,6 +291,11 @@ export interface RecordHumanDecisionOpts {
   clock: Clock;
   stateStore?: LocalStateStore;
   eventWriter?: JsonlEventWriter;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 /**
@@ -315,6 +327,7 @@ export async function recordHumanDecision(opts: RecordHumanDecisionOpts): Promis
     clock,
     stateStore = new LocalStateStore(),
     eventWriter = new JsonlEventWriter(),
+    onEvent,
   } = opts;
 
   const state = await stateStore.readSnapshot(runDir);
@@ -481,6 +494,7 @@ export async function recordHumanDecision(opts: RecordHumanDecisionOpts): Promis
     },
   };
   await eventWriter.appendEvent(runDir, event);
+  onEvent?.(event);
 
   // 4. Set step.outputs
   const stepOutputs: Record<string, unknown> = {
@@ -514,7 +528,13 @@ export async function recordHumanDecision(opts: RecordHumanDecisionOpts): Promis
       };
     });
 
-    const advanced = await advanceJob({ runDir, runId, jobId, clock });
+    const advanced = await advanceJob({
+      runDir,
+      runId,
+      jobId,
+      clock,
+      ...(onEvent !== undefined ? { onEvent } : {}),
+    });
     // Check if the job completed (single-step job where approval was the last step)
     if (!advanced) {
       const postState = await stateStore.readSnapshot(runDir);
@@ -645,6 +665,11 @@ export interface ResumeWithInputOpts {
   clock: Clock;
   stateStore?: LocalStateStore;
   eventWriter?: JsonlEventWriter;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 export interface ResumeWithInputResult {
@@ -682,6 +707,7 @@ export async function resumeWithInput(opts: ResumeWithInputOpts): Promise<Resume
     clock,
     stateStore = new LocalStateStore(),
     eventWriter = new JsonlEventWriter(),
+    onEvent,
   } = opts;
 
   const state = await stateStore.readSnapshot(runDir);
@@ -843,6 +869,7 @@ export async function resumeWithInput(opts: ResumeWithInputOpts): Promise<Resume
     clock,
     stateStore,
     eventWriter,
+    ...(onEvent !== undefined ? { onEvent } : {}),
   });
 
   return {

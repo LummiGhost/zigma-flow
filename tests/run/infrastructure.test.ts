@@ -24,6 +24,7 @@ import {
   LocalStateStore,
   SystemClock,
   createRunDirectory,
+  reserveRunDirectory,
   snapshotSkillLock,
   writeRunYaml,
 } from "../../src/run/index.js";
@@ -258,6 +259,52 @@ describe("createRunDirectory", () => {
     const s = await stat(runDir);
     expect(s.isDirectory()).toBe(true);
     expect(runDir).toBe(join(runsDir, "20260607-0001"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reserveRunDirectory
+// ---------------------------------------------------------------------------
+
+describe("reserveRunDirectory", () => {
+  let tmpDir: string;
+  let runsDir: string;
+
+  beforeEach(async () => {
+    tmpDir = join(tmpdir(), `zigma-test-${randomUUID()}`);
+    runsDir = join(tmpDir, "runs");
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reserves sequential ids and creates missing parents", async () => {
+    const clock = new FakeClock(FIXED_ISO);
+    const gen = new LocalRunIdGenerator(clock);
+
+    const first = await reserveRunDirectory(gen, runsDir);
+    const second = await reserveRunDirectory(gen, runsDir);
+    expect(first.runId).toBe(`${FIXED_DATE}-0001`);
+    expect(second.runId).toBe(`${FIXED_DATE}-0002`);
+    expect((await stat(first.runDir)).isDirectory()).toBe(true);
+    expect((await stat(second.runDir)).isDirectory()).toBe(true);
+  });
+
+  it("never hands the same id to two concurrent reservers (parallel dispatch race)", async () => {
+    const clock = new FakeClock(FIXED_ISO);
+    // All 8 share one LocalRunIdGenerator like parallel invokes sharing a
+    // runsDir; the readdir-count TOCTOU would otherwise mint duplicate ids.
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => reserveRunDirectory(new LocalRunIdGenerator(clock), runsDir)),
+    );
+    const ids = results.map((r) => r.runId);
+    expect(new Set(ids).size).toBe(8);
+    const expected = Array.from({ length: 8 }, (_, i) => `${FIXED_DATE}-${String(i + 1).padStart(4, "0")}`);
+    expect(ids.sort()).toEqual(expected);
+    for (const { runDir } of results) {
+      expect((await stat(runDir)).isDirectory()).toBe(true);
+    }
   });
 });
 

@@ -25,6 +25,7 @@ import { parse as parseYaml } from "yaml";
 import { readFile } from "node:fs/promises";
 
 import { nextEventId } from "../events/index.js";
+import type { ZigmaFlowEvent } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import type { CheckRunner } from "./index.js";
@@ -69,6 +70,11 @@ export interface ExecuteCheckStepOpts {
   sleep?: (ms: number) => Promise<void>;
   /** Managed-workspace finalize gate, invoked before job completion (M4). */
   beforeJobCompleted?: BeforeJobCompleted;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,7 +140,7 @@ function parseDurationMs(duration: string): number {
 export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void> {
   const {
     runDir, zigmaflowDir: _zigmaflowDir, runId, jobId, clock, runner,
-    beforeJobCompleted,
+    beforeJobCompleted, onEvent,
   } = opts;
 
   const stateStore = new LocalStateStore();
@@ -204,7 +210,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
   // ── 5. Emit step_started; write state snapshot (ready → running) ─────────
 
   const stepStartedId = getNextEventId();
-  await eventWriter.appendEvent(runDir, {
+  const stepStartedEvent: ZigmaFlowEvent = {
     id: stepStartedId,
     run_id: runId,
     type: "step_started",
@@ -214,7 +220,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     step: stepId,
     attempt,
     payload: { job_id: jobId, step_id: stepId, attempt },
-  });
+  };
+  await eventWriter.appendEvent(runDir, stepStartedEvent);
+  onEvent?.(stepStartedEvent);
 
   // Write intermediate snapshot: job ready → running
   const runningState: RunState = {
@@ -268,7 +276,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
 
     // Emit step_poll_started
     const pollStartedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const pollStartedEvent: ZigmaFlowEvent = {
       id: pollStartedId,
       run_id: runId,
       type: "step_poll_started",
@@ -285,7 +293,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
         timeout_ms: timeoutMs,
         backoff,
       },
-    });
+    };
+    await eventWriter.appendEvent(runDir, pollStartedEvent);
+    onEvent?.(pollStartedEvent);
 
     const pollStartTime = Date.now();
     let tick = 0;
@@ -332,7 +342,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       if (elapsed >= timeoutMs) {
         // Emit step_poll_timeout
         const pollTimeoutId = getNextEventId();
-        await eventWriter.appendEvent(runDir, {
+        const pollTimeoutEvent: ZigmaFlowEvent = {
           id: pollTimeoutId,
           run_id: runId,
           type: "step_poll_timeout",
@@ -349,14 +359,16 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
             elapsed_ms: elapsed,
             timeout_ms: timeoutMs,
           },
-        });
+        };
+        await eventWriter.appendEvent(runDir, pollTimeoutEvent);
+        onEvent?.(pollTimeoutEvent);
 
         break;
       }
 
       // Emit step_poll_tick
       const pollTickId = getNextEventId();
-      await eventWriter.appendEvent(runDir, {
+      const pollTickEvent: ZigmaFlowEvent = {
         id: pollTickId,
         run_id: runId,
         type: "step_poll_tick",
@@ -373,7 +385,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
           elapsed_ms: elapsed,
           condition_result: false,
         },
-      });
+      };
+      await eventWriter.appendEvent(runDir, pollTickEvent);
+      onEvent?.(pollTickEvent);
 
       // Wait for the poll interval before the next tick
       await sleep(intervalMs);
@@ -460,7 +474,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     ...(checkResult.failures.length > 0 ? { failures: checkResult.failures } : {}),
   };
 
-  await eventWriter.appendEvent(runDir, {
+  const checkCompletedEvent: ZigmaFlowEvent = {
     id: checkCompletedId,
     run_id: runId,
     type: "check_completed",
@@ -470,7 +484,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     step: stepId,
     attempt,
     payload: checkCompletedPayload,
-  });
+  };
+  await eventWriter.appendEvent(runDir, checkCompletedEvent);
+  onEvent?.(checkCompletedEvent);
 
   // ── 9. Determine success/failure and emit terminal events ─────────────────
 
@@ -486,7 +502,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       ("retry_job" in onPass || "activate_job" in onPass || "goto_job" in onPass);
 
     const stepCompletedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const stepCompletedEvent: ZigmaFlowEvent = {
       id: stepCompletedId,
       run_id: runId,
       type: "step_completed",
@@ -496,7 +512,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       step: stepId,
       attempt,
       payload: { job_id: jobId, step_id: stepId, attempt },
-    });
+    };
+    await eventWriter.appendEvent(runDir, stepCompletedEvent);
+    onEvent?.(stepCompletedEvent);
 
     if (isObjectFormOnPass) {
       await applyRoutingAction({
@@ -509,6 +527,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
         reason: `check passed: on_pass routing action`,
         clock,
         ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+        ...(onEvent !== undefined ? { onEvent } : {}),
       });
       return;
     }
@@ -532,11 +551,12 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       eventWriter,
       allocateEventId: () => getNextEventId(),
       ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+      ...(onEvent !== undefined ? { onEvent } : {}),
     });
     if (!proceed) return;
 
     const jobCompletedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const jobCompletedEvent: ZigmaFlowEvent = {
       id: jobCompletedId,
       run_id: runId,
       type: "job_completed",
@@ -546,7 +566,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       step: null,
       attempt,
       payload: { job_id: jobId, attempt },
-    });
+    };
+    await eventWriter.appendEvent(runDir, jobCompletedEvent);
+    onEvent?.(jobCompletedEvent);
 
     // Write final state snapshot: job running → completed, then propagate readiness
     let finalState: RunState = {
@@ -579,7 +601,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       if (waitingJobState?.status !== "waiting") continue;
 
       const jobReadyId = getNextEventId();
-      await eventWriter.appendEvent(runDir, {
+      const jobReadyEvent: ZigmaFlowEvent = {
         id: jobReadyId,
         run_id: runId,
         type: "job_ready",
@@ -589,7 +611,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
         step: null,
         attempt: null,
         payload: { job_id: readyId },
-      });
+      };
+      await eventWriter.appendEvent(runDir, jobReadyEvent);
+      onEvent?.(jobReadyEvent);
 
       finalState = {
         ...finalState,
@@ -610,7 +634,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     );
     if (allNonInactiveCompleted && hasCompletedJob) {
       const runCompletedId = getNextEventId();
-      await eventWriter.appendEvent(runDir, {
+      const runCompletedEvent: ZigmaFlowEvent = {
         id: runCompletedId,
         run_id: runId,
         type: "run_completed",
@@ -620,7 +644,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
         step: null,
         attempt: null,
         payload: {},
-      });
+      };
+      await eventWriter.appendEvent(runDir, runCompletedEvent);
+      onEvent?.(runCompletedEvent);
       finalState = {
         ...finalState,
         last_event_id: runCompletedId,
@@ -638,7 +664,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       : "check failed";
 
     const stepFailedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const stepFailedEvent: ZigmaFlowEvent = {
       id: stepFailedId,
       run_id: runId,
       type: "step_failed",
@@ -648,7 +674,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       step: stepId,
       attempt,
       payload: { job_id: jobId, step_id: stepId, attempt, reason },
-    });
+    };
+    await eventWriter.appendEvent(runDir, stepFailedEvent);
+    onEvent?.(stepFailedEvent);
 
     // Step-level failure_policy: continue — treat step failure as non-blocking (#264, #268).
     // Leave the job "running" so executeNonAgentStep calls advanceJob.
@@ -663,7 +691,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     // Step-level failure_policy: block — emit job_blocked, set job to blocked.
     if (stepDef.failure_policy === "block") {
       const jobBlockedId = getNextEventId();
-      await eventWriter.appendEvent(runDir, {
+      const jobBlockedEvent: ZigmaFlowEvent = {
         id: jobBlockedId,
         run_id: runId,
         type: "job_blocked",
@@ -673,7 +701,9 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
         step: null,
         attempt,
         payload: { job_id: jobId, reason },
-      });
+      };
+      await eventWriter.appendEvent(runDir, jobBlockedEvent);
+      onEvent?.(jobBlockedEvent);
       await stateStore.writeSnapshot(runDir, {
         ...runningState,
         last_event_id: jobBlockedId,
@@ -707,6 +737,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
         reason,
         clock,
         ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+        ...(onEvent !== undefined ? { onEvent } : {}),
       });
       return;
     }

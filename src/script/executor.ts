@@ -23,6 +23,7 @@ import { parse as parseYaml } from "yaml";
 import { readFile } from "node:fs/promises";
 
 import { nextEventId } from "../events/index.js";
+import type { ZigmaFlowEvent } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import type { ProcessRunner } from "./index.js";
@@ -74,6 +75,11 @@ export interface ExecuteScriptStepOpts {
   signal?: AbortSignal;
   /** Managed-workspace finalize gate, invoked before job completion (M4). */
   beforeJobCompleted?: BeforeJobCompleted;
+  /**
+   * Engine event sink. Every appended event MUST be routed here so live
+   * Core callback delivery stays contiguous with the persisted sequence.
+   */
+  onEvent?: (e: ZigmaFlowEvent) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +234,7 @@ async function resolveSkillPackCommand(runDir: string, uses: string): Promise<st
 export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<void> {
   const {
     runDir, zigmaflowDir: _zigmaflowDir, runId, jobId, clock, runner,
-    beforeJobCompleted,
+    beforeJobCompleted, onEvent,
   } = opts;
 
   const stateStore = new LocalStateStore();
@@ -287,7 +293,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
   // ── 4. Emit step_started; write state snapshot (ready → running) ─────────
 
   const stepStartedId = getNextEventId();
-  await eventWriter.appendEvent(runDir, {
+  const stepStartedEvent: ZigmaFlowEvent = {
     id: stepStartedId,
     run_id: runId,
     type: "step_started",
@@ -297,7 +303,9 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     step: stepId,
     attempt,
     payload: { job_id: jobId, step_id: stepId, attempt },
-  });
+  };
+  await eventWriter.appendEvent(runDir, stepStartedEvent);
+  onEvent?.(stepStartedEvent);
 
   // Write intermediate snapshot: job ready → running
   const runningState: RunState = {
@@ -441,7 +449,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
   // ── 9. Emit script_completed ──────────────────────────────────────────────
 
   const scriptCompletedId = getNextEventId();
-  await eventWriter.appendEvent(runDir, {
+  const scriptCompletedEvent: ZigmaFlowEvent = {
     id: scriptCompletedId,
     run_id: runId,
     type: "script_completed",
@@ -456,7 +464,9 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       exit_code: runnerResult.exitCode,
       timed_out: runnerResult.timedOut,
     },
-  });
+  };
+  await eventWriter.appendEvent(runDir, scriptCompletedEvent);
+  onEvent?.(scriptCompletedEvent);
 
   // ── 10. Determine success/failure and emit terminal events ────────────────
 
@@ -472,7 +482,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
     // ── 10a. Success path ──────────────────────────────────────────────────
 
     const stepCompletedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const stepCompletedEvent: ZigmaFlowEvent = {
       id: stepCompletedId,
       run_id: runId,
       type: "step_completed",
@@ -482,7 +492,9 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       step: stepId,
       attempt,
       payload: { job_id: jobId, step_id: stepId, attempt },
-    });
+    };
+    await eventWriter.appendEvent(runDir, stepCompletedEvent);
+    onEvent?.(stepCompletedEvent);
 
     // ── 10a-i. Multi-step check: only complete the job on the last step (#259)
     const currentStepIdx = jobDef.steps.findIndex((s) => s.id === stepId);
@@ -507,12 +519,13 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         eventWriter,
         allocateEventId: () => getNextEventId(),
         ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+        ...(onEvent !== undefined ? { onEvent } : {}),
       });
       if (!proceed) return;
 
       // Last step — emit job_completed and handle run completion
       const jobCompletedId = getNextEventId();
-      await eventWriter.appendEvent(runDir, {
+      const jobCompletedEvent: ZigmaFlowEvent = {
         id: jobCompletedId,
         run_id: runId,
         type: "job_completed",
@@ -522,7 +535,9 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         step: null,
         attempt,
         payload: { job_id: jobId, attempt },
-      });
+      };
+      await eventWriter.appendEvent(runDir, jobCompletedEvent);
+      onEvent?.(jobCompletedEvent);
 
       // Write final state snapshot: job running → completed, then propagate readiness
       let finalState: RunState = {
@@ -555,7 +570,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         if (waitingJobState?.status !== "waiting") continue;
 
         const jobReadyId = getNextEventId();
-        await eventWriter.appendEvent(runDir, {
+        const jobReadyEvent: ZigmaFlowEvent = {
           id: jobReadyId,
           run_id: runId,
           type: "job_ready",
@@ -565,7 +580,9 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
           step: null,
           attempt: null,
           payload: { job_id: readyId },
-        });
+        };
+        await eventWriter.appendEvent(runDir, jobReadyEvent);
+        onEvent?.(jobReadyEvent);
 
         finalState = {
           ...finalState,
@@ -586,7 +603,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       );
       if (allNonInactiveCompleted && hasCompletedJob) {
         const runCompletedId = getNextEventId();
-        await eventWriter.appendEvent(runDir, {
+        const runCompletedEvent: ZigmaFlowEvent = {
           id: runCompletedId,
           run_id: runId,
           type: "run_completed",
@@ -596,7 +613,9 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
           step: null,
           attempt: null,
           payload: {},
-        });
+        };
+        await eventWriter.appendEvent(runDir, runCompletedEvent);
+        onEvent?.(runCompletedEvent);
         finalState = {
           ...finalState,
           last_event_id: runCompletedId,
@@ -616,7 +635,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         : `exit code ${runnerResult.exitCode}`;
 
     const stepFailedId = getNextEventId();
-    await eventWriter.appendEvent(runDir, {
+    const stepFailedEvent: ZigmaFlowEvent = {
       id: stepFailedId,
       run_id: runId,
       type: "step_failed",
@@ -626,7 +645,9 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       step: stepId,
       attempt,
       payload: { job_id: jobId, step_id: stepId, attempt, reason },
-    });
+    };
+    await eventWriter.appendEvent(runDir, stepFailedEvent);
+    onEvent?.(stepFailedEvent);
 
     const onFailure = stepDef.on_failure;
 
@@ -650,6 +671,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         reason,
         clock,
         ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+        ...(onEvent !== undefined ? { onEvent } : {}),
       });
 
       // activate_job and retry_job delegate to other jobs without finalizing
@@ -669,7 +691,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
               ? parseInt(lastPostId.replace("evt-", ""), 10)
               : 0;
           const blockedEventId = nextEventId(postCounter + 1);
-          await eventWriter.appendEvent(runDir, {
+          const blockedEvent: ZigmaFlowEvent = {
             id: blockedEventId,
             run_id: runId,
             type: "job_blocked",
@@ -682,7 +704,9 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
               job_id: jobId,
               reason: `on_failure delegation: ${reason}`,
             },
-          });
+          };
+          await eventWriter.appendEvent(runDir, blockedEvent);
+          onEvent?.(blockedEvent);
           await stateStore.updateState(runDir, (current) => ({
             ...current,
             last_event_id: blockedEventId,

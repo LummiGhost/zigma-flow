@@ -45,6 +45,8 @@ export interface InvokeJsonOutput {
   pausedGate: PausedGateInfo | null;
   artifacts: ArtifactRef[];
   eventLogUri: string;
+  /** Present when the run failed before an engine summary existed (e.g. invoke-level throw). */
+  error?: { message: string };
 }
 
 // ---------------------------------------------------------------------------

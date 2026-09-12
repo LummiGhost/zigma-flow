@@ -33,6 +33,8 @@ import type { RouterAction } from "../workflow/index.js";
 import { WorkflowError, StateError } from "../utils/index.js";
 import { artifactStepDir, appendArtifactIndex, artifactId, artifactFileRelativePath } from "../artifact/index.js";
 import { applyRoutingAction } from "../engine/routing.js";
+import { finalizeJobCompletion } from "../engine/jobCompletionFinalize.js";
+import type { BeforeJobCompleted } from "../engine/jobCompletionFinalize.js";
 import { resolveExpression, evaluateCondition } from "../expression/index.js";
 import type { ExpressionContext } from "../expression/index.js";
 import { computeReadyJobs } from "../dag/index.js";
@@ -65,6 +67,8 @@ export interface ExecuteCheckStepOpts {
    * Defaults to `(ms) => new Promise(r => setTimeout(r, ms))` in production.
    */
   sleep?: (ms: number) => Promise<void>;
+  /** Managed-workspace finalize gate, invoked before job completion (M4). */
+  beforeJobCompleted?: BeforeJobCompleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +132,10 @@ function parseDurationMs(duration: string): number {
 // ---------------------------------------------------------------------------
 
 export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void> {
-  const { runDir, zigmaflowDir: _zigmaflowDir, runId, jobId, clock, runner } = opts;
+  const {
+    runDir, zigmaflowDir: _zigmaflowDir, runId, jobId, clock, runner,
+    beforeJobCompleted,
+  } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -511,6 +518,21 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
         { details: { jobId, stepId, onPass } }
       );
     }
+
+    // Last step — run the managed finalize gate BEFORE sealing completion
+    // (M4). On failure the job is transitioned to "failed" in place.
+    const proceed = await finalizeJobCompletion({
+      runDir,
+      runId,
+      jobId,
+      attempt,
+      clock,
+      stateStore,
+      eventWriter,
+      allocateEventId: () => getNextEventId(),
+      ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+    });
+    if (!proceed) return;
 
     const jobCompletedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {

@@ -181,5 +181,143 @@ describe.skipIf(CLI_PATH === undefined || CLI_PATH === "")(
 
       expect(existsSync(join(fx.stateDir, "registry.db"))).toBe(true);
     });
+
+    // ── M4 lifecycle round-trip ─────────────────────────────────────────────
+
+    it("runs the full M4 lifecycle: prepare → commit → integrate → publish → reconcile → cleanup", async () => {
+      const runHandle: WorkspaceHandle = await fx.provider.prepareRun({
+        operationId: "run:real-5:create",
+        runId: "real-5",
+        projectRoot: fx.sourceRepo,
+        definition: { provider: "zigma-workspace", repository: ".", base: "main" },
+      });
+      const jobHandle: WorkspaceHandle = await fx.provider.prepareJob({
+        operationId: "run:real-5:job:impl:attempt:1:create",
+        runId: "real-5",
+        jobId: "impl",
+        attempt: 1,
+        runWorkspace: runHandle,
+        definition: { scope: "job", mode: "writable" },
+      });
+
+      writeFileSync(join(jobHandle.path, "feature.txt"), "implemented\n", "utf-8");
+      const commit = await fx.provider.commitJob({
+        operationId: "run:real-5:job:impl:attempt:1:commit",
+        runId: "real-5",
+        jobId: "impl",
+        attempt: 1,
+        jobWorkspace: jobHandle,
+      });
+      expect(commit.noOp).toBe(false);
+      expect(commit.changedFiles).toContain("feature.txt");
+      expect(commit.headCommit).toMatch(SHA_PATTERN);
+      expect(commit.headCommit).not.toBe(commit.baseCommit);
+
+      const integrate = await fx.provider.integrateJob({
+        operationId: "run:real-5:job:impl:attempt:1:integrate",
+        runId: "real-5",
+        jobId: "impl",
+        attempt: 1,
+        jobWorkspace: jobHandle,
+        runWorkspace: runHandle,
+      });
+      expect(integrate.status).toBe("merged");
+      if (integrate.status === "merged") {
+        expect(integrate.resultingCommit).toMatch(SHA_PATTERN);
+        expect(git(runHandle.path, "rev-parse", "HEAD")).toBe(integrate.resultingCommit);
+      }
+
+      const publish = await fx.provider.publishRun({
+        operationId: "run:real-5:publish",
+        runId: "real-5",
+        workspace: runHandle,
+        strategy: "branch",
+        targetRef: "flow/real-5",
+      });
+      expect(publish.resultingRef).toBe("refs/heads/flow/real-5");
+      expect(publish.resultingCommit).toBe(integrate.status === "merged" ? integrate.resultingCommit : "");
+
+      const reconcile = await fx.provider.reconcileRun({ workspace: runHandle });
+      expect(reconcile.workspaceId).toBe(runHandle.id);
+      expect(reconcile.directoryExists).toBe(true);
+      expect(["complete", "incomplete", "orphaned", "inconsistent"]).toContain(
+        reconcile.reconciledStatus,
+      );
+
+      const cleanup = await fx.provider.cleanupRun({
+        operationId: "run:real-5:cleanup",
+        workspace: runHandle,
+      });
+      expect(cleanup.status).toBe("CLEANED");
+      expect(cleanup.removed).toBe(true);
+      expect(existsSync(runHandle.path)).toBe(false);
+    }, 60_000);
+
+    it("surfaces an external-commit merge conflict as the typed conflicted result", async () => {
+      const runHandle: WorkspaceHandle = await fx.provider.prepareRun({
+        operationId: "run:real-6:create",
+        runId: "real-6",
+        projectRoot: fx.sourceRepo,
+        definition: { provider: "zigma-workspace", repository: ".", base: "main" },
+      });
+      const jobHandle: WorkspaceHandle = await fx.provider.prepareJob({
+        operationId: "run:real-6:job:impl:attempt:1:create",
+        runId: "real-6",
+        jobId: "impl",
+        attempt: 1,
+        runWorkspace: runHandle,
+        definition: { scope: "job" },
+      });
+
+      writeFileSync(join(jobHandle.path, "README.md"), "# job version\n", "utf-8");
+      const commit = await fx.provider.commitJob({
+        operationId: "run:real-6:job:impl:attempt:1:commit",
+        runId: "real-6",
+        jobId: "impl",
+        attempt: 1,
+        jobWorkspace: jobHandle,
+      });
+      expect(commit.noOp).toBe(false);
+
+      // An external writer (not the bridge) diverges the Run workspace. The
+      // bridge resolves the CAS head at call time, so the merge itself — not
+      // the CAS — must surface the conflict.
+      const externalHead = commitFile(runHandle.path, "README.md", "# external version\n");
+
+      const integrate = await fx.provider.integrateJob({
+        operationId: "run:real-6:job:impl:attempt:1:integrate",
+        runId: "real-6",
+        jobId: "impl",
+        attempt: 1,
+        jobWorkspace: jobHandle,
+        runWorkspace: runHandle,
+      });
+      expect(integrate.status).toBe("conflicted");
+      if (integrate.status === "conflicted") {
+        expect(integrate.conflictFiles).toContain("README.md");
+        expect(integrate.jobCommit).toBe(commit.headCommit);
+        expect(integrate.runHead).toBe(externalHead);
+      }
+    }, 60_000);
+
+    it("passes retention flags through prepare-run and echoes them on the handle", async () => {
+      const handle: WorkspaceHandle = await fx.provider.prepareRun({
+        operationId: "run:real-7:create",
+        runId: "real-7",
+        projectRoot: fx.sourceRepo,
+        definition: {
+          provider: "zigma-workspace",
+          repository: ".",
+          base: "main",
+          retention: { success: "cleanup", failure: "retain", blocked: "retain" },
+        },
+      });
+
+      expect(handle.retention).toEqual({
+        success: "cleanup",
+        failure: "retain",
+        blocked: "retain",
+      });
+    }, 30_000);
   },
 );

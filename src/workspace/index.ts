@@ -25,8 +25,18 @@ import type { GitInspector } from "../git/index.js";
 import { SimpleGitInspector } from "../git/index.js";
 
 export type {
+  CleanupRunInput,
+  CleanupRunResult,
+  CommitJobInput,
+  CommitJobResult,
+  IntegrateJobInput,
+  IntegrateJobResult,
   PrepareJobWorkspaceInput,
   PrepareRunWorkspaceInput,
+  PublishRunInput,
+  PublishRunResult,
+  ReconcileRunInput,
+  ReconcileRunResult,
   WorkspaceHandle,
   WorkspaceProvider,
 } from "./provider.js";

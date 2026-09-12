@@ -18,8 +18,18 @@ import { createRun, runAll } from "../../src/engine/index.js";
 import { requestInvocationCancellation } from "../../src/run/invocationControl.js";
 import type { Clock } from "../../src/run/index.js";
 import type {
+  CleanupRunInput,
+  CleanupRunResult,
+  CommitJobInput,
+  CommitJobResult,
+  IntegrateJobInput,
+  IntegrateJobResult,
   PrepareJobWorkspaceInput,
   PrepareRunWorkspaceInput,
+  PublishRunInput,
+  PublishRunResult,
+  ReconcileRunInput,
+  ReconcileRunResult,
   WorkspaceHandle,
   WorkspaceProvider,
 } from "../../src/workspace/index.js";
@@ -105,18 +115,40 @@ class CapturingBackend implements AgentBackend {
   }
 }
 
+interface TestWorkspaceBehavior {
+  /** Job ids whose integrate resolves as a typed merge conflict (M4). */
+  conflictForJobIds?: readonly string[];
+  publish?: "ok" | "throw";
+  /** Row-level retention echoed back by prepareRun (M4). */
+  runRetention?: WorkspaceHandle["retention"];
+}
+
 class TestWorkspaceProvider implements WorkspaceProvider {
   readonly runInputs: PrepareRunWorkspaceInput[] = [];
   readonly jobInputs: PrepareJobWorkspaceInput[] = [];
   readonly jobPaths = new Map<string, string>();
+  readonly commitCalls: CommitJobInput[] = [];
+  readonly integrateCalls: IntegrateJobInput[] = [];
+  readonly publishCalls: PublishRunInput[] = [];
+  readonly reconcileCalls: ReconcileRunInput[] = [];
+  readonly cleanupCalls: CleanupRunInput[] = [];
+  /** Global call order across the whole lifecycle (M4 teardown ordering). */
+  readonly lifecycleOrder: string[] = [];
 
-  constructor(private readonly root: string) {}
+  constructor(
+    private readonly root: string,
+    private readonly behavior: TestWorkspaceBehavior = {},
+  ) {}
 
   async prepareRun(input: PrepareRunWorkspaceInput): Promise<WorkspaceHandle> {
     this.runInputs.push(input);
     const path = join(this.root, "run-workspace");
     await mkdir(path, { recursive: true });
-    return { id: "run-workspace", path };
+    const handle: WorkspaceHandle = { id: "run-workspace", path };
+    if (this.behavior.runRetention !== undefined) {
+      handle.retention = this.behavior.runRetention;
+    }
+    return handle;
   }
 
   async prepareJob(input: PrepareJobWorkspaceInput): Promise<WorkspaceHandle> {
@@ -128,6 +160,92 @@ class TestWorkspaceProvider implements WorkspaceProvider {
     }
     this.jobPaths.set(input.jobId, path);
     return { id: `job-${input.jobId}-${input.attempt}`, path };
+  }
+
+  async commitJob(input: CommitJobInput): Promise<CommitJobResult> {
+    this.commitCalls.push(input);
+    this.lifecycleOrder.push(`commit:${input.jobId}`);
+    return {
+      operationId: input.operationId,
+      workspaceId: input.jobWorkspace.id,
+      baseCommit: "base-commit",
+      headCommit: "head-commit",
+      changedFiles: [],
+      evidenceDigest: "sha256:test",
+      noOp: false,
+    };
+  }
+
+  async integrateJob(input: IntegrateJobInput): Promise<IntegrateJobResult> {
+    this.integrateCalls.push(input);
+    this.lifecycleOrder.push(`integrate:${input.jobId}`);
+    if (this.behavior.conflictForJobIds?.includes(input.jobId)) {
+      return {
+        status: "conflicted",
+        operationId: input.operationId,
+        sourceWorkspaceId: input.jobWorkspace.id,
+        targetWorkspaceId: input.runWorkspace.id,
+        conflictFiles: ["conflict.txt"],
+        jobCommit: "job-head",
+        runHead: "run-head",
+        message: "merge conflict",
+      };
+    }
+    return {
+      status: "merged",
+      operationId: input.operationId,
+      sourceWorkspaceId: input.jobWorkspace.id,
+      targetWorkspaceId: input.runWorkspace.id,
+      sourceCommit: "job-head",
+      previousTargetHead: "run-head",
+      resultingCommit: "merged-head",
+      changedFiles: [],
+    };
+  }
+
+  async publishRun(input: PublishRunInput): Promise<PublishRunResult> {
+    this.publishCalls.push(input);
+    this.lifecycleOrder.push("publish");
+    if (this.behavior.publish === "throw") {
+      throw new Error("publish transport failure");
+    }
+    return {
+      operationId: input.operationId,
+      workspaceId: input.workspace.id,
+      strategy: input.strategy,
+      resultingRef: input.strategy === "branch" ? input.targetRef : null,
+      resultingCommit: "published-head",
+      previousRef: null,
+      changedFiles: [],
+    };
+  }
+
+  async reconcileRun(input: ReconcileRunInput): Promise<ReconcileRunResult> {
+    this.reconcileCalls.push(input);
+    this.lifecycleOrder.push("reconcile");
+    return {
+      workspaceId: input.workspace.id,
+      registryStatus: "active",
+      directoryExists: true,
+      gitHead: "head-commit",
+      manifestExists: true,
+      reconciledStatus: "complete",
+      recommendation: "no action needed",
+    };
+  }
+
+  async cleanupRun(input: CleanupRunInput): Promise<CleanupRunResult> {
+    this.cleanupCalls.push(input);
+    this.lifecycleOrder.push(`cleanup:${input.workspace.id}`);
+    return {
+      operationId: input.operationId,
+      workspaceId: input.workspace.id,
+      path: input.workspace.path,
+      removed: true,
+      status: "CLEANED",
+      message: "removed",
+      blockers: [],
+    };
   }
 }
 
@@ -244,6 +362,52 @@ jobs:
     const provider: WorkspaceProvider = {
       prepareRun: async () => ({ id: "run", path: workspaceRoot }),
       prepareJob: async () => ({ id: "bad-job", path: "relative-path-is-invalid" }),
+      commitJob: async (input) => ({
+        operationId: input.operationId,
+        workspaceId: input.jobWorkspace.id,
+        baseCommit: "b",
+        headCommit: "h",
+        changedFiles: [],
+        evidenceDigest: "d",
+        noOp: false,
+      }),
+      integrateJob: async (input) => ({
+        status: "merged" as const,
+        operationId: input.operationId,
+        sourceWorkspaceId: input.jobWorkspace.id,
+        targetWorkspaceId: input.runWorkspace.id,
+        sourceCommit: "s",
+        previousTargetHead: "p",
+        resultingCommit: "r",
+        changedFiles: [],
+      }),
+      publishRun: async (input) => ({
+        operationId: input.operationId,
+        workspaceId: input.workspace.id,
+        strategy: input.strategy,
+        resultingRef: null,
+        resultingCommit: "r",
+        previousRef: null,
+        changedFiles: [],
+      }),
+      reconcileRun: async (input) => ({
+        workspaceId: input.workspace.id,
+        registryStatus: "active",
+        directoryExists: true,
+        gitHead: null,
+        manifestExists: true,
+        reconciledStatus: "complete" as const,
+        recommendation: "ok",
+      }),
+      cleanupRun: async (input) => ({
+        operationId: input.operationId,
+        workspaceId: input.workspace.id,
+        path: input.workspace.path,
+        removed: true,
+        status: "CLEANED" as const,
+        message: "",
+        blockers: [],
+      }),
     };
     const workflowPath = await writeWorkflow(sandbox, "provider-failure", `\
 name: provider-failure
@@ -338,5 +502,225 @@ jobs:
     expect(backend.projectRoots).toEqual([provider.jobPaths.get("agent")]);
     expect(await readFile(join(provider.jobPaths.get("script")!, "script-cwd.txt"), "utf-8"))
       .toBe(provider.jobPaths.get("script"));
+  }, 15_000);
+
+  it("M4: surfaces a workspace merge conflict as a typed job failure while the run continues intact", async () => {
+    const workspaceRoot = join(sandbox.projectRoot, "m4-conflict");
+    const provider = new TestWorkspaceProvider(workspaceRoot, {
+      conflictForJobIds: ["conflicted"],
+    });
+    const workflowPath = await writeWorkflow(sandbox, "m4-conflict", `\
+name: m4-conflict
+version: "1"
+workspace:
+  provider: zigma-workspace
+  repository: .
+  base: main
+jobs:
+  clean:
+    steps:
+      - id: ok
+        type: script
+        run: echo done
+  conflicted:
+    steps:
+      - id: ok
+        type: script
+        run: echo done
+`);
+
+    const summary = await runAll({
+      task: "managed conflict surface",
+      workflowPath,
+      runsDir: sandbox.runsDir,
+      zigmaflowDir: sandbox.projectRoot,
+      skillLockPath: sandbox.skillLockPath,
+      backendResolver: () => new CapturingBackend(),
+      clock: new FixedClock(),
+      workspaceProvider: provider,
+    });
+
+    expect(summary.status).toBe("failed");
+    expect(summary.jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "clean", status: "completed" }),
+      expect.objectContaining({ id: "conflicted", status: "failed" }),
+    ]));
+
+    // Both attempts were committed and both integrations attempted; the
+    // conflict is typed, not thrown — no engine error replaces the run.
+    expect(provider.commitCalls.map((c) => c.jobId).sort()).toEqual(["clean", "conflicted"]);
+    expect(provider.integrateCalls).toHaveLength(2);
+
+    const runDir = join(sandbox.runsDir, summary.runId);
+    const state = JSON.parse(await readFile(join(runDir, "state.json"), "utf-8")) as {
+      jobs: Record<string, {
+        status: string;
+        attempts?: Array<{ status: string; failure_kind?: string; failure_reason?: string }>;
+      }>;
+    };
+    const conflictedAttempt = state.jobs["conflicted"]?.attempts?.[0];
+    expect(conflictedAttempt?.status).toBe("failure");
+    expect(conflictedAttempt?.failure_kind).toBe("workspace_merge_conflict");
+    expect(conflictedAttempt?.failure_reason).toContain("workspace_merge_conflict");
+    expect(conflictedAttempt?.failure_reason).toContain("conflict.txt");
+
+    // Completed attempt workspace released; the failed attempt and the Run
+    // workspace itself are retained under the default failure policy.
+    expect(provider.cleanupCalls.map((c) => c.workspace.id)).toEqual(["job-clean-1"]);
+    expect(provider.reconcileCalls).toHaveLength(1);
+  }, 15_000);
+
+  it("M4: fails the run with evidence when managed publish fails", async () => {
+    const workspaceRoot = join(sandbox.projectRoot, "m4-publish-fail");
+    const provider = new TestWorkspaceProvider(workspaceRoot, { publish: "throw" });
+    const workflowPath = await writeWorkflow(sandbox, "m4-publish-fail", `\
+name: m4-publish-fail
+version: "1"
+workspace:
+  provider: zigma-workspace
+  repository: .
+  base: main
+  publish:
+    strategy: branch
+jobs:
+  agent:
+    steps:
+      - id: ask
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/agent
+`);
+
+    const summary = await runAll({
+      task: "managed publish failure",
+      workflowPath,
+      runsDir: sandbox.runsDir,
+      zigmaflowDir: sandbox.projectRoot,
+      skillLockPath: sandbox.skillLockPath,
+      backendResolver: () => new CapturingBackend(),
+      clock: new FixedClock(),
+      workspaceProvider: provider,
+    });
+
+    expect(summary.status).toBe("failed");
+    expect(provider.publishCalls).toHaveLength(1);
+    expect(provider.publishCalls[0]).toMatchObject({
+      operationId: `run:${summary.runId}:publish`,
+      strategy: "branch",
+      targetRef: `flow/${summary.runId}`,
+    });
+
+    const runDir = join(sandbox.runsDir, summary.runId);
+    const state = JSON.parse(await readFile(join(runDir, "state.json"), "utf-8")) as {
+      status: string;
+    };
+    expect(state.status).toBe("failed");
+
+    const events = (await readFile(join(runDir, "events.jsonl"), "utf-8"))
+      .split("\n").filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as { type: string; payload?: Record<string, unknown> });
+    const lastEvent = events[events.length - 1];
+    expect(lastEvent?.type).toBe("run_failed");
+    expect(String(lastEvent?.payload?.reason)).toContain("workspace publish failed");
+
+    // The Run failed: the attempt workspace was released on success, but the
+    // Run workspace itself is retained under the default failure policy.
+    expect(provider.cleanupCalls.map((c) => c.workspace.id)).toEqual(["job-agent-1"]);
+    expect(provider.reconcileCalls).toHaveLength(1);
+  }, 15_000);
+
+  it("M4: reconciles then releases the run workspace in teardown, honoring retention", async () => {
+    const workspaceRoot = join(sandbox.projectRoot, "m4-retention-cleanup");
+    const provider = new TestWorkspaceProvider(workspaceRoot, {
+      runRetention: { success: "cleanup" },
+    });
+    const workflowPath = await writeWorkflow(sandbox, "m4-retention-cleanup", `\
+name: m4-retention-cleanup
+version: "1"
+workspace:
+  provider: zigma-workspace
+  repository: .
+  base: main
+  publish:
+    strategy: branch
+jobs:
+  agent:
+    steps:
+      - id: ask
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/agent
+`);
+
+    const summary = await runAll({
+      task: "managed retention cleanup",
+      workflowPath,
+      runsDir: sandbox.runsDir,
+      zigmaflowDir: sandbox.projectRoot,
+      skillLockPath: sandbox.skillLockPath,
+      backendResolver: () => new CapturingBackend(),
+      clock: new FixedClock(),
+      workspaceProvider: provider,
+    });
+
+    expect(summary.status).toBe("completed");
+
+    // Strict lifecycle ordering: commit → integrate → publish, then teardown
+    // reconcile → cleanup, with quiescence and resource drains in between.
+    const order = provider.lifecycleOrder;
+    expect(order.indexOf("commit:agent")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("integrate:agent")).toBeGreaterThan(order.indexOf("commit:agent"));
+    expect(order.indexOf("publish")).toBeGreaterThan(order.indexOf("integrate:agent"));
+    expect(order.indexOf("reconcile")).toBeGreaterThan(order.indexOf("publish"));
+    expect(order.indexOf("cleanup:run-workspace")).toBeGreaterThan(order.indexOf("reconcile"));
+
+    expect(provider.publishCalls[0]).toMatchObject({
+      targetRef: `flow/${summary.runId}`,
+    });
+    expect(provider.reconcileCalls).toHaveLength(1);
+    expect(provider.reconcileCalls[0]?.workspace.id).toBe("run-workspace");
+    expect(provider.cleanupCalls.map((c) => c.operationId))
+      .toContain(`run:${summary.runId}:cleanup`);
+  }, 15_000);
+
+  it("M4: retains the run workspace in teardown when per-workspace retention says retain", async () => {
+    const workspaceRoot = join(sandbox.projectRoot, "m4-retention-retain");
+    const provider = new TestWorkspaceProvider(workspaceRoot, {
+      runRetention: { success: "retain" },
+    });
+    const workflowPath = await writeWorkflow(sandbox, "m4-retention-retain", `\
+name: m4-retention-retain
+version: "1"
+workspace:
+  provider: zigma-workspace
+  repository: .
+  base: main
+jobs:
+  agent:
+    steps:
+      - id: ask
+        type: agent
+        allow_generic_prompt: true
+        uses: zigma/agent
+`);
+
+    const summary = await runAll({
+      task: "managed retention retain",
+      workflowPath,
+      runsDir: sandbox.runsDir,
+      zigmaflowDir: sandbox.projectRoot,
+      skillLockPath: sandbox.skillLockPath,
+      backendResolver: () => new CapturingBackend(),
+      clock: new FixedClock(),
+      workspaceProvider: provider,
+    });
+
+    expect(summary.status).toBe("completed");
+    expect(provider.reconcileCalls).toHaveLength(1);
+    // The Run workspace is retained; only the attempt workspace is released.
+    expect(provider.cleanupCalls.map((c) => c.operationId)).not
+      .toContain(`run:${summary.runId}:cleanup`);
+    expect(provider.cleanupCalls.map((c) => c.workspace.id))
+      .toEqual(["job-agent-1"]);
   }, 15_000);
 });

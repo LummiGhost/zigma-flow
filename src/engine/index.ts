@@ -32,6 +32,8 @@ import {
   writeRunYaml,
 } from "../run/index.js";
 import { nextEventId as formatEventId, nextSequentialEventId } from "../events/index.js";
+import { finalizeJobCompletion } from "./jobCompletionFinalize.js";
+import type { BeforeJobCompleted } from "./jobCompletionFinalize.js";
 import { evaluateCondition } from "../expression/index.js";
 import type { ExpressionContext } from "../expression/index.js";
 import type { CallerContext } from "../caller-context.js";
@@ -344,6 +346,8 @@ export interface ExecuteCurrentStepOpts {
   onStderr?: (chunk: string) => void;
   /** Cancellation propagated to owned child processes. */
   signal?: AbortSignal;
+  /** Managed-workspace finalize gate, invoked before job completion (M4). */
+  beforeJobCompleted?: BeforeJobCompleted;
 }
 
 export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<void> {
@@ -393,6 +397,9 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       ...(opts.onStdout !== undefined ? { onStdout: opts.onStdout } : {}),
       ...(opts.onStderr !== undefined ? { onStderr: opts.onStderr } : {}),
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      ...(opts.beforeJobCompleted !== undefined
+        ? { beforeJobCompleted: opts.beforeJobCompleted }
+        : {}),
     });
   } else if (stepDef.type === "check") {
     const actualRunner = (opts.runner as CheckRunner | undefined) ?? new LocalCheckRunner();
@@ -406,6 +413,9 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       // Forward job-level working directory so check implementations can
       // resolve relative file paths against the configured workspace.
       ...(jobCwd !== undefined ? { jobCwd } : {}),
+      ...(opts.beforeJobCompleted !== undefined
+        ? { beforeJobCompleted: opts.beforeJobCompleted }
+        : {}),
     });
   } else if (stepDef.type === "router") {
     await executeRouterStep({
@@ -418,6 +428,9 @@ export async function executeCurrentStep(opts: ExecuteCurrentStepOpts): Promise<
       // Router steps are primarily control-flow and less filesystem-dependent,
       // but accepting the parameter keeps the executor interface uniform.
       ...(jobCwd !== undefined ? { jobCwd } : {}),
+      ...(opts.beforeJobCompleted !== undefined
+        ? { beforeJobCompleted: opts.beforeJobCompleted }
+        : {}),
     });
     // Agent steps are dispatched by runAll directly so their backend receives
     // the same Engine-resolved jobCwd through AgentExecuteOptions.projectRoot.
@@ -442,6 +455,14 @@ export interface AdvanceJobOpts {
   jobId: string;
   /** Clock for timestamping the job_completed event (terminal path only). */
   clock: Clock;
+  /**
+   * Managed-workspace finalize hook (M4). Invoked at the start of the
+   * job-completed transition, BEFORE the attempt is sealed as success. On
+   * `{ ok: false }` the job fails instead of completing — this preserves the
+   * crash invariant "completed ⇒ finalize succeeded", since the hook runs
+   * before the completed state is ever written.
+   */
+  beforeJobCompleted?: BeforeJobCompleted;
 }
 
 /**
@@ -519,7 +540,10 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
   // ── 6. Empty steps array — defensive completion (FP-MULTISTEP-EMPTY-STEPS) ─
 
   if (steps.length === 0) {
-    return await appendJobCompleted({ state, stateStore, eventWriter, runDir, runId, jobId, clock, wf });
+    return await appendJobCompleted({
+      state, stateStore, eventWriter, runDir, runId, jobId, clock, wf,
+      ...(opts.beforeJobCompleted !== undefined ? { beforeJobCompleted: opts.beforeJobCompleted } : {}),
+    });
   }
 
   // ── 7. Resolve current step index ────────────────────────────────────────
@@ -706,7 +730,10 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
           return true;
         } else {
           // Last step skipped — job completed (no visit counted for skipped step)
-          return await appendJobCompleted({ state, stateStore, eventWriter, runDir, runId, jobId, clock, wf });
+          return await appendJobCompleted({
+            state, stateStore, eventWriter, runDir, runId, jobId, clock, wf,
+            ...(opts.beforeJobCompleted !== undefined ? { beforeJobCompleted: opts.beforeJobCompleted } : {}),
+          });
         }
       }
     }
@@ -731,7 +758,10 @@ export async function advanceJob(opts: AdvanceJobOpts): Promise<boolean> {
 
   // ── 8b. Terminal: no next step — append job_completed, complete job ───────
   // FP-MULTISTEP-JOB-COMPLETED, FP-MULTISTEP-FINAL-SEQUENCE
-  return await appendJobCompleted({ state, stateStore, eventWriter, runDir, runId, jobId, clock, wf });
+  return await appendJobCompleted({
+    state, stateStore, eventWriter, runDir, runId, jobId, clock, wf,
+    ...(opts.beforeJobCompleted !== undefined ? { beforeJobCompleted: opts.beforeJobCompleted } : {}),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -747,6 +777,7 @@ interface AppendJobCompletedOpts {
   jobId: string;
   clock: Clock;
   wf: import("../workflow/index.js").WorkflowDefinition;
+  beforeJobCompleted?: BeforeJobCompleted;
 }
 
 async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> {
@@ -754,6 +785,26 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
 
   const jobState = state.jobs[jobId]!;
   const attempt = jobState.attempt ?? 1;
+
+  // ── M4 managed finalize: commit + integrate BEFORE sealing success ────────
+  // A failed finalize converts the completion into a job failure, so a job
+  // observed as "completed" in state always implies its attempt workspace
+  // was integrated (crash-safe: no re-finalize on resume is ever needed).
+
+  const proceed = await finalizeJobCompletion({
+    runDir,
+    runId,
+    jobId,
+    attempt,
+    clock,
+    stateStore,
+    eventWriter,
+    allocateEventId: () => nextSequentialEventId(runDir, eventWriter),
+    ...(opts.beforeJobCompleted !== undefined
+      ? { beforeJobCompleted: opts.beforeJobCompleted }
+      : {}),
+  });
+  if (!proceed) return false;
 
   // ── WF-7.1: Seal the current attempt as success and emit attempt_completed ──
   const jobDef = wf.jobs[jobId];

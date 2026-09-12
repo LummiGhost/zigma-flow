@@ -33,6 +33,8 @@ import { loadWorkflowFile } from "../workflow/index.js";
 import type { RouterAction } from "../workflow/index.js";
 import { RouterError, StateError, WorkflowError } from "../utils/index.js";
 import { applyRoutingAction } from "../engine/routing.js";
+import { finalizeJobCompletion } from "../engine/jobCompletionFinalize.js";
+import type { BeforeJobCompleted } from "../engine/jobCompletionFinalize.js";
 import { resolveExpression } from "../expression/index.js";
 import type { ExpressionContext } from "../expression/index.js";
 
@@ -58,6 +60,8 @@ export interface ExecuteRouterStepOpts {
    * executor types. (Issue #178)
    */
   jobCwd?: string;
+  /** Managed-workspace finalize gate, invoked before job completion (M4). */
+  beforeJobCompleted?: BeforeJobCompleted;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +122,7 @@ function resolveActionFields(action: RouterAction): { action: string; target?: s
 // ---------------------------------------------------------------------------
 
 export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<void> {
-  const { runDir, runId, jobId, clock } = opts;
+  const { runDir, runId, jobId, clock, beforeJobCompleted } = opts;
 
   const stateStore = new LocalStateStore();
   const eventWriter = new JsonlEventWriter();
@@ -321,6 +325,21 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
       attempt,
       payload: { job_id: jobId, step_id: stepId, attempt },
     });
+
+    // Terminal success — run the managed finalize gate BEFORE sealing
+    // completion (M4). On failure the job is transitioned to "failed".
+    const proceed = await finalizeJobCompletion({
+      runDir,
+      runId,
+      jobId,
+      attempt,
+      clock,
+      stateStore,
+      eventWriter,
+      allocateEventId: () => getNextEventId(),
+      ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
+    });
+    if (!proceed) return;
 
     const jobCompletedId = getNextEventId();
     await eventWriter.appendEvent(runDir, {

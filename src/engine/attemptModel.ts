@@ -121,6 +121,22 @@ export function classifyFailureKind(
 }
 
 // ---------------------------------------------------------------------------
+// Attempt duration
+// ---------------------------------------------------------------------------
+
+/**
+ * Wall-clock duration in ms between two ISO 8601 timestamps (WF-7.1 timing sync).
+ * Returns 0 when either side is unparseable or when end precedes start
+ * (defensive — clock skew must never produce negatives).
+ */
+export function attemptDurationMs(startedAtIso: string, endedAtIso: string): number {
+  const start = Date.parse(startedAtIso);
+  const end = Date.parse(endedAtIso);
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return 0;
+  return end - start;
+}
+
+// ---------------------------------------------------------------------------
 // Attempt factory functions
 // ---------------------------------------------------------------------------
 

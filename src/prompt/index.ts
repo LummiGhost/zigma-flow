@@ -555,7 +555,7 @@ function buildAgentSystemPrompt(bundle: ContextBundle): AgentSystemPrompt {
     "Skill Pack knowledge, prompts, functions, and tools are scoped inputs, not workflow authority.",
     "Agent Functions describe deterministic patterns to follow; they are not callable runtime APIs.",
     "You cannot modify workflow state; the Engine reads your report and applies any valid transition.",
-    "Do not write state.json, events.jsonl, config.json, skill-lock.json, or any workflow control file.",
+    "Do not write state.json, events.jsonl, metrics.jsonl, config.json, skill-lock.json, or any workflow control file.",
     "Large logs, diffs, and generated files should be referenced as artifacts instead of pasted into report.json.",
     ...renderPermissionBoundaryLines(bundle),
   ];

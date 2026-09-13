@@ -261,4 +261,30 @@ describe("checkProtectedRuntimeFiles — protected-runtime-files kind", () => {
       expect(joined).not.toContain("src/x.ts");
     }
   );
+
+  it(
+    "fails when .zigma-flow/runs/<id>/metrics.jsonl is changed (Issue #286 Phase 2)",
+    async () => {
+      const fake = new FakeGitInspector([
+        ".zigma-flow/runs/abc/metrics.jsonl",
+        "src/x.ts",
+      ]);
+
+      const result = await checkProtectedRuntimeFiles({
+        with: {},
+        runDir: RUN_DIR,
+        git: fake,
+      });
+
+      expectCheckResultShape(result);
+      expect(result.passed).toBe(false);
+      expect(result.check_id).toBe("zigma/protected-runtime-files");
+      expect(result.artifacts).toEqual([]);
+
+      expect(result.failures.length).toBeGreaterThanOrEqual(1);
+      const joined = result.failures.join("\n");
+      expect(joined).toContain(".zigma-flow/runs/abc/metrics.jsonl");
+      expect(joined).not.toContain("src/x.ts");
+    }
+  );
 });

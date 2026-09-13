@@ -31,6 +31,7 @@ const micromatch = _require("micromatch") as {
 const PROTECTED_PATTERNS = [
   ".zigma-flow/runs/*/state.json",
   ".zigma-flow/runs/*/events.jsonl",
+  ".zigma-flow/runs/*/metrics.jsonl",
 ];
 
 export async function checkProtectedRuntimeFiles(opts: {

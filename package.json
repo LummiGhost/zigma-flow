@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
-    "test:unit": "vitest run tests/artifact tests/check tests/context tests/dag tests/events tests/expression tests/git tests/prompt tests/router tests/run tests/script tests/workflow",
+    "test:unit": "vitest run tests/artifact tests/check tests/context tests/dag tests/events tests/expression tests/git tests/metrics tests/prompt tests/router tests/run tests/script tests/workflow",
     "test:integration": "vitest run tests/commands tests/engine tests/init",
     "test:e2e": "vitest run tests/dogfood tests/cli",
     "test:contract-info": "pnpm run build && node tools/contract-info-smoke.mjs",

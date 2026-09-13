@@ -30,7 +30,7 @@ import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import { StateError, UserInputError } from "../utils/index.js";
-import { createOpenAttempt } from "./attemptModel.js";
+import { attemptDurationMs, createOpenAttempt } from "./attemptModel.js";
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -152,12 +152,13 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
       const lastIdx = jobState.attempts.length - 1;
       const lastAttempt = jobState.attempts[lastIdx]!;
       if (!lastAttempt.status) {
+        const sealTime = clock.now();
         const attemptFailedId = getNextEventId();
         const attemptFailedEvent: ZigmaFlowEvent = {
           id: attemptFailedId,
           run_id: runId,
           type: "attempt_failed",
-          timestamp: clock.now(),
+          timestamp: sealTime,
           producer: "engine",
           job: jobId,
           step: null,
@@ -168,7 +169,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
             failure_kind: "agent_error",
             reason: reason ?? "max attempts exceeded",
             step_count: lastAttempt.step_count ?? 0,
-            duration_ms: 0,
+            duration_ms: attemptDurationMs(lastAttempt.started_at, sealTime),
           },
         };
         await eventWriter.appendEvent(runDir, attemptFailedEvent);
@@ -242,10 +243,11 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
     const lastIdx = sealedAttempts.length - 1;
     const lastAttempt = sealedAttempts[lastIdx]!;
     if (!lastAttempt.status) {
+      const sealTime = clock.now();
       sealedAttempts[lastIdx] = {
         ...lastAttempt,
         status: "failure" as const,
-        ended_at: clock.now(),
+        ended_at: sealTime,
       };
 
       const attemptFailedId = getNextEventId();
@@ -253,7 +255,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
         id: attemptFailedId,
         run_id: runId,
         type: "attempt_failed",
-        timestamp: clock.now(),
+        timestamp: sealTime,
         producer: "engine",
         job: jobId,
         step: null,
@@ -264,7 +266,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
           failure_kind: "agent_error",
           reason: reason ?? "",
           step_count: lastAttempt.step_count ?? 0,
-          duration_ms: 0,
+          duration_ms: attemptDurationMs(lastAttempt.started_at, sealTime),
         },
       };
       await eventWriter.appendEvent(runDir, attemptFailedEvent);

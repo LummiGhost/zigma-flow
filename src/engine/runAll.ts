@@ -65,7 +65,7 @@ import {
   ValidationError,
   WorkflowError,
 } from "../utils/index.js";
-import { buildEffectiveBackendOverride, routeModel } from "../agent/model-router.js";
+import { buildEffectiveBackendOverride, routeModel, type ModelProfileDefinition } from "../agent/model-router.js";
 import {
   advanceJob,
   createRun,
@@ -77,6 +77,8 @@ import { computeReadyJobs } from "../dag/index.js";
 import { validateReportShape, validateReportAgainstStep } from "./accept.js";
 import { enterHumanGate } from "./humanGate.js";
 import { recordAgentFailure } from "./recordAgentFailure.js";
+import { classifyFailureKind } from "./attemptModel.js";
+import { appendMetricsRecord, drainMetricsWrites, disposeMetricsWriter, type MetricsStatus } from "../metrics/index.js";
 import { appendArtifactIndex } from "../artifact/artifactIndex.js";
 import { artifactId } from "../artifact/artifactMetadata.js";
 import type { ArtifactMetadata } from "../artifact/artifactMetadata.js";
@@ -751,6 +753,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
 
   let effectiveBackend = stepDef.backend;
   let routingReason = "routing skipped: step declares no model constraints";
+  let selectedProfile: ModelProfileDefinition | undefined;
   try {
     const routing = routeModel({
       candidates: Object.entries(wf.models ?? {}).map(([name, profile]) => ({ name, ...profile })),
@@ -758,8 +761,9 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       explicit: explicitOverride,
     });
     routingReason = routing.reason;
-    if (routing.profile !== undefined) {
-      effectiveBackend = buildEffectiveBackendOverride(stepDef.backend, routing.profile);
+    selectedProfile = routing.profile;
+    if (selectedProfile !== undefined) {
+      effectiveBackend = buildEffectiveBackendOverride(stepDef.backend, selectedProfile);
     }
   } catch (err) {
     if (err instanceof ModelRoutingError) {
@@ -973,6 +977,38 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   await eventWriter.appendEvent(runDir, invokedEvent);
   onEvent?.(invokedEvent);
 
+  // ── Runtime metrics (Issue #286 Phase 2) ───────────────────────────────
+  // One record per invoked backend execution, written only at terminal
+  // outcomes reached after backend.execute() (never for routing / config /
+  // permission failures that return before execution).
+  const appendAgentMetrics = (opts: {
+    status: MetricsStatus;
+    durationMs: number;
+    reportAccepted: boolean;
+    failureKind?: string;
+    exitCode?: number;
+  }): Promise<void> =>
+    appendMetricsRecord(runDir, {
+      timestamp: clock.now(),
+      run_id: runId,
+      workflow: wf.name,
+      job: jobId,
+      step: bundle.stepId,
+      attempt,
+      ...(stepDef.uses !== undefined ? { skill: stepDef.uses } : {}),
+      backend: backend.name,
+      ...(backend.model !== undefined ? { model: backend.model } : {}),
+      ...(selectedProfile !== undefined
+        ? { cost_class: selectedProfile.cost_class ?? "high" }
+        : {}),
+      duration_ms: opts.durationMs,
+      status: opts.status,
+      ...(opts.failureKind !== undefined ? { failure_kind: opts.failureKind } : {}),
+      ...(opts.exitCode !== undefined ? { exit_code: opts.exitCode } : {}),
+      report_accepted: opts.reportAccepted,
+      invocation_id: invokedEventId,
+    });
+
   // ── Pause checkpoint (debugging): before agent execution ───────────────
   // If pauseBefore matches current job.step, pause and return blocked status
   if (pauseBefore !== undefined) {
@@ -1085,6 +1121,13 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       await eventWriter.appendEvent(runDir, cancelledEvent);
       onEvent?.(cancelledEvent);
 
+      await appendAgentMetrics({
+        status: "cancelled",
+        durationMs: result.durationMs ?? 0,
+        reportAccepted: false,
+        failureKind: "cancelled",
+      });
+
       // Write run_cancelled event
       const runCancelledEventId = await nextSequentialEventId(runDir, eventWriter);
       const runCancelledEvent: ZigmaFlowEvent = {
@@ -1167,6 +1210,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
           reason: result.error ?? "Agent backend failed",
           ...(failStdoutArtifact !== undefined ? { stdout_artifact: failStdoutArtifact } : {}),
           ...(failStderrArtifact !== undefined ? { stderr_artifact: failStderrArtifact } : {}),
+          ...(backend.model !== undefined ? { model: backend.model } : {}),
         },
       };
       await eventWriter.appendEvent(runDir, failedEvent);
@@ -1177,6 +1221,22 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     // IMPORTANT: agent_cancelled with reason="fail_fast" does NOT enter
     // recordAgentFailure. Only agent_failed goes through retry (AD-P14-005).
     const errorType = classifyError(result);
+    await appendAgentMetrics(
+      isTimeout
+        ? {
+            status: "timed_out",
+            durationMs: result.durationMs ?? 0,
+            reportAccepted: false,
+            failureKind: "timeout",
+          }
+        : {
+            status: "failed",
+            durationMs: result.durationMs ?? 0,
+            reportAccepted: false,
+            failureKind: classifyFailureKind(errorType),
+            exitCode: result.exitCode ?? 1,
+          },
+    );
     const failureResult = await recordAgentFailure({
       runDir,
       runId,
@@ -1291,6 +1351,13 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     });
   } catch (err) {
     if (err instanceof ValidationError) {
+      await appendAgentMetrics({
+        status: "failed",
+        durationMs: result.durationMs ?? 0,
+        reportAccepted: false,
+        failureKind: classifyFailureKind("execution"),
+        exitCode: result.exitCode ?? 0,
+      });
       const failureResult = await recordAgentFailure({
         runDir,
         runId,
@@ -1328,6 +1395,10 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       ...(successStdoutArtifact !== undefined ? { stdout_artifact: successStdoutArtifact } : {}),
       ...(successStderrArtifact !== undefined ? { stderr_artifact: successStderrArtifact } : {}),
       ...(successInvocationArtifact !== undefined ? { invocation_artifact: successInvocationArtifact } : {}),
+      ...(backend.model !== undefined ? { model: backend.model } : {}),
+      ...(selectedProfile !== undefined
+        ? { cost_class: selectedProfile.cost_class ?? "high" }
+        : {}),
     },
   };
   await eventWriter.appendEvent(runDir, completedEvent);
@@ -1364,6 +1435,12 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   };
   await eventWriter.appendEvent(runDir, acceptedEvent);
   onEvent?.(acceptedEvent);
+
+  await appendAgentMetrics({
+    status: "completed",
+    durationMs: result.durationMs ?? 0,
+    reportAccepted: true,
+  });
 
   // Write intermediate state snapshot with outputs stored (atomic within queue — AD-P14-003)
   await stateStore.updateState(runDir, (current) => ({
@@ -3058,6 +3135,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
       await collect([
         drainEventWrites(runDir),
         drainStateWrites(runDir),
+        drainMetricsWrites(runDir),
         lifecycle.logWriter?.drain() ?? Promise.resolve(),
       ]);
       await collect([lifecycle.replayPersistedCallbacks?.() ?? Promise.resolve()]);
@@ -3068,6 +3146,7 @@ export async function runAll(opts: RunAllOpts): Promise<RunAllSummary> {
         disposeEventWriter(runDir),
         disposeEventSequence(runDir),
         disposeStateStore(runDir),
+        disposeMetricsWriter(runDir),
         lifecycle.ownsLogWriter === true
           ? RunLogWriter.dispose(runDir)
           : Promise.resolve(),

@@ -37,7 +37,7 @@ import { loadWorkflowFile } from "../workflow/index.js";
 import type { WorkflowDefinition } from "../workflow/index.js";
 import { StateError } from "../utils/index.js";
 import { retryJob } from "./retryJob.js";
-import { classifyFailureKind } from "./attemptModel.js";
+import { attemptDurationMs, classifyFailureKind } from "./attemptModel.js";
 import { AttemptOutcome, JobConclusion } from "../run/index.js";
 import type { Attempt } from "../run/index.js";
 import { computeJobConclusion } from "./outcomeModel.js";
@@ -175,6 +175,7 @@ export async function recordAgentFailure(
   if (errorType === "config" || errorType === "permission") {
     // WF-7.1: Seal the last open attempt as failure
     let lastEventId = stepFailedId;
+    const sealTime = clock.now();
     const currentJobState = currentState.jobs[jobId];
     if (currentJobState?.attempts && currentJobState.attempts.length > 0) {
       const lastIdx = currentJobState.attempts.length - 1;
@@ -185,7 +186,7 @@ export async function recordAgentFailure(
           id: attemptFailedId,
           run_id: runId,
           type: "attempt_failed",
-          timestamp: clock.now(),
+          timestamp: sealTime,
           producer: "engine",
           job: jobId,
           step: stepId,
@@ -196,7 +197,7 @@ export async function recordAgentFailure(
             failure_kind: classifyFailureKind(errorType),
             reason,
             step_count: lastAttempt.step_count ?? 0,
-            duration_ms: 0,
+            duration_ms: attemptDurationMs(lastAttempt.started_at, sealTime),
           },
         };
         await eventWriter.appendEvent(runDir, attemptFailedEvent);
@@ -230,7 +231,7 @@ export async function recordAgentFailure(
         if (!la.status) {
           updatedJob.attempts = [
             ...updatedJob.attempts.slice(0, li),
-            { ...la, status: "failure" as const, ended_at: clock.now() },
+            { ...la, status: "failure" as const, ended_at: sealTime },
           ];
         }
       }
@@ -312,12 +313,13 @@ export async function recordAgentFailure(
     const lastIdx = sealedAttempts.length - 1;
     const lastAttempt = sealedAttempts[lastIdx]!;
     if (!lastAttempt.status) {
+      const sealTime = clock.now();
       const attemptFailedId = await nextSequentialEventId(runDir, eventWriter);
       const attemptFailedEvent: ZigmaFlowEvent = {
         id: attemptFailedId,
         run_id: runId,
         type: "attempt_failed",
-        timestamp: clock.now(),
+        timestamp: sealTime,
         producer: "engine",
         job: jobId,
         step: stepId,
@@ -328,7 +330,7 @@ export async function recordAgentFailure(
           failure_kind: classifyFailureKind(errorType),
           reason: reason ?? "max attempts exceeded",
           step_count: lastAttempt.step_count ?? 0,
-          duration_ms: 0,
+          duration_ms: attemptDurationMs(lastAttempt.started_at, sealTime),
         },
       };
       await eventWriter.appendEvent(runDir, attemptFailedEvent);
@@ -339,7 +341,7 @@ export async function recordAgentFailure(
       sealedAttempts[lastIdx] = {
         ...lastAttempt,
         status: "failure" as const,
-        ended_at: clock.now(),
+        ended_at: sealTime,
         failure_kind: classifyFailureKind(errorType),
         failure_reason: reason ?? "max attempts exceeded",
       };

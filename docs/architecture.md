@@ -682,6 +682,7 @@ Reader/writer 分离：
 | `state.json` | engine via state store | 当前状态快照 |
 | `skill-lock.snapshot.json` | run module | 本次运行使用的 skill lock 快照 |
 | `events.jsonl` | event logger | append-only |
+| `metrics.jsonl` | engine metrics writer | append-only，每次 agent 后端执行的终态指标（Issue #286 Phase 2） |
 | `artifacts.jsonl` | artifact manager | run 级 artifact index |
 | `jobs/<job>/attempts/<n>/steps/<step>/` | artifact manager | step 产物目录 |
 
@@ -839,7 +840,7 @@ permissions:
 
 - Prompt Builder 必须把权限和禁止动作渲染进 Agent prompt。
 - Runtime 必须用 Workspace Guard 验证只读约束，不能只依赖 prompt。
-- `.zigma-flow/runs/*/state.json`、`events.jsonl` 和 lock snapshot 属于 runtime 保护路径。
+- `.zigma-flow/runs/*/state.json`、`events.jsonl`、`metrics.jsonl` 和 lock snapshot 属于 runtime 保护路径。
 - Script Step 默认需要 timeout。
 - 默认不允许删除项目文件。
 - `abort` 只改变 run 状态，不删除运行记录。
@@ -859,9 +860,9 @@ agent_invoked  (backend.execute 之前)
 
 | 结果 | 事件 | 关键 payload |
 |---|---|---|
-| 成功 | `agent_completed` | `duration_ms`, `stdout_artifact`, `stderr_artifact`, `invocation_artifact` |
+| 成功 | `agent_completed` | `duration_ms`, `stdout_artifact`, `stderr_artifact`, `invocation_artifact`；v0.9 增量：可选 `model`、`cost_class` |
 | 超时 | `agent_timed_out` | `duration_ms`, `timeout_ms`, `stdout_artifact`, `stderr_artifact` |
-| 失败 | `agent_failed` | `duration_ms`, `exit_code`, `reason`, `stdout_artifact`, `stderr_artifact` |
+| 失败 | `agent_failed` | `duration_ms`, `exit_code`, `reason`, `stdout_artifact`, `stderr_artifact`；v0.9 增量：可选 `model` |
 | 取消 | `agent_cancelled` | `duration_ms`, `reason` |
 
 **产物落地：** Backend 将 stdout/stderr 写入 `${stepDir}/agent.stdout.log` 和 `${stepDir}/agent.stderr.log`，调用元数据写入 `${stepDir}/agent.invocation.json`。Engine 将这些文件作为 artifact 登记到 `artifacts.jsonl`（kind=`agent_stdout`/`agent_stderr`/`agent_invocation`），不在 error message 中嵌入截尾字符串。
@@ -872,6 +873,12 @@ agent_invoked  (backend.execute 之前)
 - 配置类错误（command not found → ConfigError、未登录 → PermissionError）绕过 retry 直接 `run.failed` exit code 4，不重复拉起子进程。
 
 **retry 语义：** agent_failed / agent_timed_out 不直接置 run.failed；Engine 调用 `recordAgentFailure` 按 `JobDefinition.retry` 推进 attempt，达 `max_attempts` 后按 `on_exceeded` 处置。
+
+**运行时指标（Issue #286 Phase 2）：** 每次实际调用 backend 的执行（即 `backend.execute()` 已发生）在其终态（completed / failed / timed_out / cancelled / report 校验失败）写入一条 `runs/<run-id>/metrics.jsonl` 记录，字段为 `timestamp`、`run_id`、`workflow`、`job`、`step`、`attempt`、可选 `skill`、`backend`、可选 `model`、可选 `cost_class`、`duration_ms`、`status`、可选 `failure_kind`、可选 `exit_code`、`report_accepted`、`invocation_id`（本次执行的 `agent_invoked` 事件 id，作为关联键）。report 校验失败（执行已发生但 report 被终线校验拒绝）记录为 `status: "failed"` 且 `exit_code: 0`——`exit_code: 0` 与 `report_accepted: false` 的组合将其与 backend 执行失败区分开。routing 无匹配、config/permission 等执行前失败不产生记录。
+
+`cost_class` 语义：路由选中 profile 时记录该 profile 的静态 `cost_class`（low/medium/high；profile 未声明时默认 `high`）；路由未选中任何 profile（如 step 无 constraints）时整个键缺省。这是静态经济分档，不是真实 token 费用——backend 不解析费用数据。
+
+关联契约：记录通过 `workflow/job/step/attempt` 与事件、状态对账，`invocation_id` 直接 join 回 `agent_invoked`；`report_accepted` 标记该次执行的 report 是否通过终线校验被接受。human gate / review 信号不变。Phase 3 按任务类别历史路由将扫描各 run 目录的 `metrics.jsonl` 聚合（先例：`list-runs` 扫描 per-run `state.json`）；Phase 4 Accepted Artifact Cost 消费同一数据。
 
 ## 12. MVP Execution Flows
 

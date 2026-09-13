@@ -69,12 +69,14 @@ const micromatch = _require("micromatch") as {
  * be touched by read-only jobs.
  *
  * See also src/check/checks/protected-runtime-files.ts — architecture §11
- * is the canonical source for these patterns. If a third runtime path is
- * ever added, BOTH locations must be updated (TD-WG-2 tracks this debt).
+ * is the canonical source for these patterns. If another runtime path is
+ * ever added, BOTH locations must be updated (TD-WG-2 tracks this debt;
+ * metrics.jsonl is the third path, added with Issue #286 Phase 2).
  */
 export const PROTECTED_RUNTIME_PATTERNS: readonly string[] = [
   ".zigma-flow/runs/*/state.json",
   ".zigma-flow/runs/*/events.jsonl",
+  ".zigma-flow/runs/*/metrics.jsonl",
 ];
 
 // ---------------------------------------------------------------------------

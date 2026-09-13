@@ -63,7 +63,8 @@ export interface CheckRunner {
 
   /**
    * Execute the check. Only called after `resolveKind()` has returned
-   * without throwing. The runner MUST NOT write state.json or events.jsonl.
+   * without throwing. The runner MUST NOT write state.json, events.jsonl,
+   * or metrics.jsonl.
    */
   run(opts: CheckRunnerRunOpts): Promise<CheckResult>;
 }

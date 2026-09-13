@@ -46,6 +46,7 @@ type MetricsBackendBehavior =
   | "success"
   | "failure"
   | "timeout"
+  | "invalid_report"
   | "fail_first_then_succeed";
 
 interface MetricsBackendConfig {
@@ -141,6 +142,21 @@ class MetricsBackend implements AgentBackend {
     }
 
     await mkdir(dirname(reportPath), { recursive: true });
+
+    if (this.config.behavior === "invalid_report") {
+      // Execution succeeded but the report fails final-line validation.
+      await writeFile(reportPath, "this is not json", "utf-8");
+      return {
+        success: true,
+        exitCode: 0,
+        reportPath,
+        stdoutPath,
+        stderrPath,
+        invocationPath,
+        durationMs: this.config.durationMs,
+      };
+    }
+
     await writeFile(
       reportPath,
       JSON.stringify({ outputs: {}, artifacts: [], signals: [], summary: "ok" }, null, 2),
@@ -506,6 +522,43 @@ describe("runAll — runtime metrics recording (Issue #286 Phase 2)", () => {
     expect(rec["failure_kind"]).toBe("timeout");
     expect(rec["report_accepted"]).toBe(false);
     expect("exit_code" in rec).toBe(false);
+    expect(rec["duration_ms"]).toBe(FAKE_DURATION_MS);
+  });
+
+  it("records a report-validation failure with exit_code 0 (execution happened, report rejected)", async () => {
+    const workflowPath = await writeWorkflow(sandbox, "report-invalid", ROUTED_YAML);
+
+    const summary = await callRunAll({
+      task: "exercise metrics report validation",
+      workflowPath,
+      runsDir: sandbox.runsDir,
+      zigmaflowDir: sandbox.projectRoot,
+      skillLockPath: sandbox.skillLockPath,
+      backendResolver: (stepBackend) =>
+        new MetricsBackend(
+          {
+            command: "fake",
+            ...(typeof stepBackend === "object" && stepBackend.model !== undefined
+              ? { model: stepBackend.model }
+              : {}),
+          },
+          { behavior: "invalid_report" },
+        ),
+      clock: new FakeClock(),
+    });
+
+    // No agent_completed: a rejected report never produces a success signal.
+    const events = await readEvents(join(sandbox.runsDir, summary.runId));
+    expect(events.some((e) => e.type === "agent_completed")).toBe(false);
+    expect(events.some((e) => e.type === "step_failed")).toBe(true);
+
+    const metrics = await readMetrics(join(sandbox.runsDir, summary.runId));
+    expect(metrics).toHaveLength(1);
+    const rec = metrics[0]!;
+    expect(rec["status"]).toBe("failed");
+    expect(rec["failure_kind"]).toBe("agent_error");
+    expect(rec["exit_code"]).toBe(0);
+    expect(rec["report_accepted"]).toBe(false);
     expect(rec["duration_ms"]).toBe(FAKE_DURATION_MS);
   });
 

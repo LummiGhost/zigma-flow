@@ -874,7 +874,7 @@ agent_invoked  (backend.execute 之前)
 
 **retry 语义：** agent_failed / agent_timed_out 不直接置 run.failed；Engine 调用 `recordAgentFailure` 按 `JobDefinition.retry` 推进 attempt，达 `max_attempts` 后按 `on_exceeded` 处置。
 
-**运行时指标（Issue #286 Phase 2）：** 每次实际调用 backend 的执行（即 `backend.execute()` 已发生）在其终态（completed / failed / timed_out / cancelled / report 校验失败）写入一条 `runs/<run-id>/metrics.jsonl` 记录，字段为 `timestamp`、`run_id`、`workflow`、`job`、`step`、`attempt`、可选 `skill`、`backend`、可选 `model`、可选 `cost_class`、`duration_ms`、`status`、可选 `failure_kind`、可选 `exit_code`、`report_accepted`、`invocation_id`（本次执行的 `agent_invoked` 事件 id，作为关联键）。routing 无匹配、config/permission 等执行前失败不产生记录。
+**运行时指标（Issue #286 Phase 2）：** 每次实际调用 backend 的执行（即 `backend.execute()` 已发生）在其终态（completed / failed / timed_out / cancelled / report 校验失败）写入一条 `runs/<run-id>/metrics.jsonl` 记录，字段为 `timestamp`、`run_id`、`workflow`、`job`、`step`、`attempt`、可选 `skill`、`backend`、可选 `model`、可选 `cost_class`、`duration_ms`、`status`、可选 `failure_kind`、可选 `exit_code`、`report_accepted`、`invocation_id`（本次执行的 `agent_invoked` 事件 id，作为关联键）。report 校验失败（执行已发生但 report 被终线校验拒绝）记录为 `status: "failed"` 且 `exit_code: 0`——`exit_code: 0` 与 `report_accepted: false` 的组合将其与 backend 执行失败区分开。routing 无匹配、config/permission 等执行前失败不产生记录。
 
 `cost_class` 语义：路由选中 profile 时记录该 profile 的静态 `cost_class`（low/medium/high；profile 未声明时默认 `high`）；路由未选中任何 profile（如 step 无 constraints）时整个键缺省。这是静态经济分档，不是真实 token 费用——backend 不解析费用数据。
 

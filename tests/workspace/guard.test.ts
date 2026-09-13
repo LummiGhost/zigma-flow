@@ -262,6 +262,7 @@ describe("SimpleWorkspaceGuard — protected runtime path classification", () =>
     async () => {
       const fake = new FakeGitInspector([
         ".zigma-flow/runs/abc/state.json",
+        ".zigma-flow/runs/abc/metrics.jsonl",
         "src/x.ts",
       ]);
       const guard = new SimpleWorkspaceGuard(fake);
@@ -269,14 +270,20 @@ describe("SimpleWorkspaceGuard — protected runtime path classification", () =>
       const result = await guard.detectModifications(FAKE_CWD);
 
       expectWorkspaceModificationShape(result);
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(3);
 
-      // The protected runtime path MUST be classified.
+      // The protected runtime paths MUST be classified.
       const stateEntry = result.find(
         (m) => m.path === ".zigma-flow/runs/abc/state.json",
       );
       expect(stateEntry).toBeDefined();
       expect(stateEntry?.kind).toBe("protected-runtime");
+
+      const metricsEntry = result.find(
+        (m) => m.path === ".zigma-flow/runs/abc/metrics.jsonl",
+      );
+      expect(metricsEntry).toBeDefined();
+      expect(metricsEntry?.kind).toBe("protected-runtime");
 
       // The unrelated source file is a plain modification.
       const srcEntry = result.find((m) => m.path === "src/x.ts");
@@ -289,7 +296,7 @@ describe("SimpleWorkspaceGuard — protected runtime path classification", () =>
     "exposes the protected pattern list as a non-empty readonly constant",
     async () => {
       // FP-WG-PROTECTED-PATTERNS — the exported constant must include
-      // both architecturally-protected paths (architecture §11). This
+      // all architecturally-protected paths (architecture §11). This
       // test pins the public surface so a future PR cannot silently
       // drop one of them.
       expect(Array.isArray(PROTECTED_RUNTIME_PATTERNS)).toBe(true);
@@ -298,6 +305,9 @@ describe("SimpleWorkspaceGuard — protected runtime path classification", () =>
       );
       expect(PROTECTED_RUNTIME_PATTERNS).toContain(
         ".zigma-flow/runs/*/events.jsonl",
+      );
+      expect(PROTECTED_RUNTIME_PATTERNS).toContain(
+        ".zigma-flow/runs/*/metrics.jsonl",
       );
     },
   );

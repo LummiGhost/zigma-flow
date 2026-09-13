@@ -19,7 +19,8 @@ export type ZigmaFlowErrorKind =
   | "PermissionError"
   | "ArtifactError"
   | "ConfigError"
-  | "PromptBuildError";
+  | "PromptBuildError"
+  | "ModelRoutingError";
 
 export interface ZigmaFlowErrorOptions {
   readonly details?: Record<string, unknown>;
@@ -111,6 +112,12 @@ export class CheckError extends ZigmaFlowError {
 export class RouterError extends ZigmaFlowError {
   public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
     super("RouterError", message, 23, options);
+  }
+}
+
+export class ModelRoutingError extends ZigmaFlowError {
+  public constructor(message: string, options: ZigmaFlowErrorOptions = {}) {
+    super("ModelRoutingError", message, 31, options);
   }
 }
 

@@ -42,7 +42,7 @@ export class ClaudeCodeBackend implements AgentBackend {
   private readonly args: string[];
   private readonly timeout: number;
   private readonly env: Record<string, string | undefined>;
-  private readonly model: string | undefined;
+  readonly model: string | undefined;
   private readonly useResultFile: boolean;
   private readonly useOutputFormatJson: boolean;
   private readonly maxTurns: number | undefined;

@@ -59,11 +59,13 @@ import { loadWorkflowFile } from "../workflow/index.js";
 import type { WorkspaceRetentionDefinition } from "../workflow/index.js";
 import {
   ConfigError,
+  ModelRoutingError,
   PermissionError,
   StateError,
   ValidationError,
   WorkflowError,
 } from "../utils/index.js";
+import { buildEffectiveBackendOverride, routeModel } from "../agent/model-router.js";
 import {
   advanceJob,
   createRun,
@@ -737,12 +739,67 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     },
   }));
 
+  // ── Capability-based model routing (Issue #286 Phase 1) ──
+  const explicitOverride = typeof stepDef.backend === "string"
+    ? { backendName: stepDef.backend }
+    : stepDef.backend !== undefined
+      ? {
+          ...(stepDef.backend.name !== undefined ? { backendName: stepDef.backend.name } : {}),
+          ...(stepDef.backend.model !== undefined ? { model: stepDef.backend.model } : {}),
+        }
+      : undefined;
+
+  let effectiveBackend = stepDef.backend;
+  let routingReason = "routing skipped: step declares no model constraints";
+  try {
+    const routing = routeModel({
+      candidates: Object.entries(wf.models ?? {}).map(([name, profile]) => ({ name, ...profile })),
+      constraints: stepDef.constraints,
+      explicit: explicitOverride,
+    });
+    routingReason = routing.reason;
+    if (routing.profile !== undefined) {
+      effectiveBackend = buildEffectiveBackendOverride(stepDef.backend, routing.profile);
+    }
+  } catch (err) {
+    if (err instanceof ModelRoutingError) {
+      await recordAgentFailure({
+        runDir,
+        runId,
+        jobId,
+        stepId: bundle.stepId,
+        attempt,
+        reason: err.message,
+        errorType: "config",
+        clock,
+        stateStore,
+        eventWriter,
+        ...(onEvent !== undefined ? { onEvent } : {}),
+      });
+      // The structured rejection evidence (candidates, constraints,
+      // per-candidate reasons) is not part of the event payload — preserve it
+      // in the run log so operators can diagnose the no-match.
+      if (logWriter) {
+        logWriter.writeSystemDetached(
+          `${err.message} [routing details: ${JSON.stringify(err.details)}]`,
+          {
+            job_id: jobId,
+            step_id: bundle.stepId,
+            attempt,
+          },
+        );
+      }
+      return { jobId, success: false, action: "failed", detail: err.message };
+    }
+    throw err;
+  }
+
   // Resolve the agent backend (cached per job+step for retry continuity)
   let backend: AgentBackend;
-  const cacheKey = `${jobId}::${JSON.stringify(stepDef.backend ?? null)}`;
+  const cacheKey = `${jobId}::${JSON.stringify(effectiveBackend ?? null)}`;
   if (backendCache === undefined || backendCache.key !== cacheKey) {
     try {
-      const bk = backendResolver(stepDef.backend as string | StepBackendOverride | undefined);
+      const bk = backendResolver(effectiveBackend);
       backendCache = { key: cacheKey, backend: bk };
       backend = bk;
     } catch (err) {
@@ -909,6 +966,8 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       args_hash: argsHash,
       timeout_ms: backend.backendTimeoutMs ?? DEFAULT_BACKEND_TIMEOUT,
       step_artifact_dir: relative(runDir, stepDir).replace(/\\/g, "/"),
+      ...(backend.model !== undefined ? { model: backend.model } : {}),
+      routing_reason: routingReason,
     },
   };
   await eventWriter.appendEvent(runDir, invokedEvent);

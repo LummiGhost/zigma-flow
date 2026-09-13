@@ -13,6 +13,7 @@ import { z } from "zod";
 import { detectCycles, validateNeedsReferences } from "../dag/index.js";
 import { deprecationWarn, FilesystemError, ValidationError, WorkflowError } from "../utils/index.js";
 import type { StepBackendOverride } from "../agent/config.js";
+import type { ModelProfileDefinition, StepModelConstraints } from "../agent/model-router.js";
 
 // ---------------------------------------------------------------------------
 // RouterAction schema
@@ -109,6 +110,42 @@ const StepBackendOverrideSchema = z.object({
   ephemeral: z.boolean().optional(),
   /** @stability experimental */
   timeout: z.number().int().positive().optional(),
+});
+
+// Issue #286: Capability-based model routing (Phase 1)
+const COST_CLASS_VALUES = ["low", "medium", "high"] as const;
+const DATA_CLASSIFICATION_VALUES = ["public", "internal", "confidential", "restricted"] as const;
+
+const StepModelConstraintsSchema = z.object({
+  /** @stability experimental — may change in any minor version release without deprecation */
+  data_classification: z.enum(DATA_CLASSIFICATION_VALUES).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  regions: z.array(z.string().min(1)).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  local_required: z.boolean().optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  max_cost_class: z.enum(COST_CLASS_VALUES).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  max_latency_class: z.enum(COST_CLASS_VALUES).optional(),
+});
+
+const ModelProfileSchema = z.object({
+  /** @stability experimental — may change in any minor version release without deprecation */
+  model: z.string().min(1),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  backend: z.string().min(1).optional(),
+  /** @stability experimental — reserved capability map, not matched in Phase 1 — may change in any minor version release without deprecation */
+  capabilities: z.record(z.string(), z.unknown()).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  cost_class: z.enum(COST_CLASS_VALUES).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  latency_class: z.enum(COST_CLASS_VALUES).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  data_classification: z.array(z.enum(DATA_CLASSIFICATION_VALUES)).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  regions: z.array(z.string().min(1)).optional(),
+  /** @stability experimental — may change in any minor version release without deprecation */
+  local_required: z.boolean().optional(),
 });
 
 const StepBaseSchema = z.object({
@@ -313,6 +350,9 @@ const StepBaseSchema = z.object({
   // Issue #238: Step-level backend override
   /** @stability experimental — may change in any minor version release without deprecation */
   backend: z.union([z.string(), StepBackendOverrideSchema]).optional(),
+  // Issue #286: Capability-based model routing constraints (agent steps only — enforced in loadWorkflow check 6f)
+  /** @stability experimental — may change in any minor version release without deprecation */
+  constraints: StepModelConstraintsSchema.optional(),
 });
 
 export interface StepDefinition {
@@ -384,6 +424,8 @@ export interface StepDefinition {
   allow_generic_prompt?: boolean;
   // Issue #238: Step-level backend override (string name or override object)
   backend?: string | StepBackendOverride;
+  // Issue #286: Capability-based model routing constraints (agent steps only)
+  constraints?: StepModelConstraints;
   [key: string]: unknown;
 }
 
@@ -758,6 +800,9 @@ const WorkflowSchema = z.object({
     /** @stability experimental — may change in any minor version release without deprecation */
     allowed_writers: z.array(z.string()),
   })).optional(),
+  // Issue #286: Capability-based model routing — workflow model profile registry
+  /** @stability experimental — may change in any minor version release without deprecation */
+  models: z.record(z.string(), ModelProfileSchema).optional(),
   /** @stability stable */
   jobs: z.record(z.string(), JobSchema),
   /** @stability experimental — may change in any minor version release without deprecation */
@@ -799,6 +844,8 @@ export interface WorkflowDefinition {
     initial_artifact?: string | null;
     allowed_writers: string[];
   }>;
+  /** Issue #286: Capability-based model routing — workflow model profile registry. */
+  models?: Record<string, ModelProfileDefinition>;
   jobs: Record<string, JobDefinition>;
   traverse?: Record<string, TraverseDefinition>;
   job_groups?: Record<string, JobGroupDefinition>;
@@ -1398,6 +1445,18 @@ export function loadWorkflow(yamlText: string, options?: LoadWorkflowOptions): W
             }
           }
         }
+      }
+    }
+  }
+
+  // 6f. Model routing constraints are only valid on agent steps (Issue #286)
+  for (const [jobName, job] of Object.entries(wf.jobs)) {
+    for (const step of job.steps) {
+      if (step.constraints !== undefined && step.type !== "agent") {
+        throw new ValidationError(
+          `Step "${step.id}" in job "${jobName}" declares "constraints" but has type "${step.type}" — model constraints are only valid on agent steps`,
+          { details: { job: jobName, step: step.id, type: step.type } },
+        );
       }
     }
   }

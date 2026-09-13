@@ -14,6 +14,7 @@ export {
   RouterError,
   PermissionError,
   PromptBuildError,
+  ModelRoutingError,
   type ZigmaFlowErrorKind,
   type ZigmaFlowErrorOptions
 } from "./errors.js";

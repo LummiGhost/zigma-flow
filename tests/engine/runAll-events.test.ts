@@ -945,6 +945,9 @@ describe("runAll — event payload completeness (T-EVT-007)", () => {
           "args_hash",
           "timeout_ms",
           "step_artifact_dir",
+          // Issue #286: engine always emits the routing reason; `model` is
+          // present only when the backend was created with a model.
+          "routing_reason",
         ].sort();
         expect(payloadKeys).toEqual(expectedKeys);
       }

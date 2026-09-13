@@ -853,7 +853,7 @@ agent_invoked  (backend.execute 之前)
   └─ agent_completed | agent_timed_out | agent_failed | agent_cancelled
 ```
 
-**调用前：** Engine 记录 `agent_invoked` 事件，payload 含 `backend_name`、`command`、`args_hash`（SHA-256，不含 prompt token）、`timeout_ms`、`step_artifact_dir`。
+**调用前：** Engine 记录 `agent_invoked` 事件，payload 含 `backend_name`、`command`、`args_hash`（SHA-256，不含 prompt token）、`timeout_ms`、`step_artifact_dir`，以及 v0.9 起可选的 `model`（本次调用选定的模型）和 `routing_reason`（Engine 总是写入，记录模型路由结果，见 Issue #286）。
 
 **调用后：** 根据 backend 返回结果写入对应的终端事件：
 

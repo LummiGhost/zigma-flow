@@ -35,7 +35,7 @@ export class CodexCliBackend implements AgentBackend {
   private readonly args: string[];
   private readonly timeout: number;
   private readonly env: Record<string, string | undefined>;
-  private readonly model: string | undefined;
+  readonly model: string | undefined;
   private readonly sandbox: "read-only" | "workspace-write" | "danger-full-access";
   private readonly profile: string | undefined;
   private readonly reasoningEffort: string | undefined;

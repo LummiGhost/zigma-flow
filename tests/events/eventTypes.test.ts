@@ -538,6 +538,8 @@ describe("ZigmaFlowEvent JSON round-trip", () => {
       stdout_artifact: "jobs/intake/attempts/1/steps/analyze/agent.stdout.log",
       stderr_artifact: "jobs/intake/attempts/1/steps/analyze/agent.stderr.log",
       invocation_artifact: "jobs/intake/attempts/1/steps/analyze/agent.invocation.json",
+      model: "claude-sonnet-4-6",
+      cost_class: "high",
     };
     const ev: ZigmaFlowEvent = {
       ...stepEnvelope("evt-023", "agent_completed", "engine", "intake", "analyze", 1),
@@ -571,6 +573,7 @@ describe("ZigmaFlowEvent JSON round-trip", () => {
       exit_code: 1,
       reason: "Agent exited with code 1",
       stdout_artifact: "jobs/intake/attempts/1/steps/analyze/agent.stdout.log",
+      model: "claude-sonnet-4-6",
     };
     const ev: ZigmaFlowEvent = {
       ...stepEnvelope("evt-025", "agent_failed", "engine", "intake", "analyze", 1),

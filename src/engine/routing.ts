@@ -25,7 +25,7 @@ import type { ZigmaFlowEvent } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import { StateError, WorkflowError } from "../utils/index.js";
-import { createOpenAttempt } from "./attemptModel.js";
+import { attemptDurationMs, createOpenAttempt } from "./attemptModel.js";
 import { createImplicitGroup, startNextIteration } from "./jobGroupModel.js";
 import { finalizeJobCompletion } from "./jobCompletionFinalize.js";
 import type { BeforeJobCompleted } from "./jobCompletionFinalize.js";
@@ -284,6 +284,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     const nextAttempt = currentAttempt + 1;
 
     if (nextAttempt > maxAttempts) {
+      const sealTime = clock.now();
       // WF-7.1: Seal the last open attempt as failure before terminal event
       if (targetJobState.attempts && targetJobState.attempts.length > 0) {
         const li = targetJobState.attempts.length - 1;
@@ -294,7 +295,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
             id: attemptFailedId,
             run_id: runId,
             type: "attempt_failed",
-            timestamp: clock.now(),
+            timestamp: sealTime,
             producer: "engine",
             job: targetJobId,
             step: null,
@@ -305,7 +306,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
               failure_kind: "agent_error",
               reason,
               step_count: la.step_count ?? 0,
-              duration_ms: 0,
+              duration_ms: attemptDurationMs(la.started_at, sealTime),
             },
           };
           await eventWriter.appendEvent(runDir, attemptFailedEvent);
@@ -366,7 +367,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         if (!la.status) {
           terminalJobState.attempts = [
             ...terminalJobState.attempts.slice(0, li),
-            { ...la, status: "failure" as const, ended_at: clock.now() },
+            { ...la, status: "failure" as const, ended_at: sealTime },
           ];
         }
       }
@@ -390,13 +391,14 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       const li = sealedAttempts.length - 1;
       const la = sealedAttempts[li]!;
       if (!la.status) {
-        sealedAttempts[li] = { ...la, status: "failure" as const, ended_at: clock.now() };
+        const sealTime = clock.now();
+        sealedAttempts[li] = { ...la, status: "failure" as const, ended_at: sealTime };
         const attemptFailedId = getNextEventId();
         const attemptFailedEvent: ZigmaFlowEvent = {
           id: attemptFailedId,
           run_id: runId,
           type: "attempt_failed",
-          timestamp: clock.now(),
+          timestamp: sealTime,
           producer: "engine",
           job: targetJobId,
           step: null,
@@ -407,7 +409,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
             failure_kind: "agent_error",
             reason,
             step_count: la.step_count ?? 0,
-            duration_ms: 0,
+            duration_ms: attemptDurationMs(la.started_at, sealTime),
           },
         };
         await eventWriter.appendEvent(runDir, attemptFailedEvent);

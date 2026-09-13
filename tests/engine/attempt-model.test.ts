@@ -36,6 +36,7 @@ import {
   WELL_KNOWN_FAILURE_KINDS,
 } from "../../src/run/index.js";
 import {
+  attemptDurationMs,
   classifyFailureKind,
   createOpenAttempt,
   deriveJobConclusion,
@@ -353,6 +354,29 @@ describe("classifyFailureKind", () => {
 
   it("T-AM-20: defaults to 'agent_error' for undefined errorType", () => {
     expect(classifyFailureKind(undefined)).toBe("agent_error");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// attemptDurationMs (Issue #286 Phase 2)
+// ---------------------------------------------------------------------------
+
+describe("attemptDurationMs", () => {
+  it("computes the wall-clock difference in ms between two ISO timestamps", () => {
+    expect(attemptDurationMs("2026-09-13T00:00:00.000Z", "2026-09-13T00:00:05.000Z")).toBe(5000);
+  });
+
+  it("returns 0 for equal timestamps", () => {
+    expect(attemptDurationMs("2026-09-13T00:00:00.000Z", "2026-09-13T00:00:00.000Z")).toBe(0);
+  });
+
+  it("returns 0 when either timestamp is unparseable", () => {
+    expect(attemptDurationMs("not-a-date", "2026-09-13T00:00:05.000Z")).toBe(0);
+    expect(attemptDurationMs("2026-09-13T00:00:00.000Z", "not-a-date")).toBe(0);
+  });
+
+  it("returns 0 when end precedes start (clock skew must never produce negatives)", () => {
+    expect(attemptDurationMs("2026-09-13T00:00:05.000Z", "2026-09-13T00:00:00.000Z")).toBe(0);
   });
 });
 

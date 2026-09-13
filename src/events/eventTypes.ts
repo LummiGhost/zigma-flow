@@ -216,6 +216,10 @@ export interface AgentCompletedPayload {
   stdout_artifact?: string;
   stderr_artifact?: string;
   invocation_artifact?: string;
+  /** Model selected for this invocation (Issue #286 Phase 2). Present when the backend was created with a model. */
+  model?: string;
+  /** Static economics class of the routed profile (Issue #286 Phase 2). Present only when routing selected a profile. */
+  cost_class?: "low" | "medium" | "high";
 }
 
 export interface AgentTimedOutPayload {
@@ -231,6 +235,8 @@ export interface AgentFailedPayload {
   reason: string;
   stdout_artifact?: string;
   stderr_artifact?: string;
+  /** Model selected for this invocation (Issue #286 Phase 2). Present when the backend was created with a model. */
+  model?: string;
 }
 
 export interface AgentCancelledPayload {

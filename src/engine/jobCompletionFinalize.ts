@@ -12,13 +12,14 @@
  * preserves the crash invariant: a job observed as "completed" in state
  * always implies its finalize succeeded, so resume never re-finalizes.
  *
- * This module deliberately imports nothing from the engine layer: the
+ * This module deliberately imports nothing that reaches engine/index.ts: the
  * executors (script/check/router) import it directly without creating an
- * import cycle through engine/index.ts.
+ * import cycle. (attemptModel.js is a leaf that imports only the run layer.)
  */
 
 import type { Clock, JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { ZigmaFlowEvent } from "../events/index.js";
+import { attemptDurationMs } from "./attemptModel.js";
 
 export type BeforeJobCompleted = (opts: { jobId: string; attempt: number }) => Promise<
   { ok: true } | { ok: false; reason: string; failureKind: string }
@@ -65,6 +66,17 @@ export async function finalizeJobCompletion(
   const { runDir, runId, jobId, attempt, clock, stateStore, eventWriter } = opts;
   const transitionTimestamp = clock.now();
 
+  const snapshot = await stateStore.readSnapshot(runDir);
+  const jobAttempts = snapshot?.jobs[jobId]?.attempts;
+  const openAttempt =
+    jobAttempts !== undefined && jobAttempts.length > 0
+      ? jobAttempts[jobAttempts.length - 1]!
+      : undefined;
+  const openAttemptStartedAt =
+    openAttempt !== undefined && openAttempt.status === undefined
+      ? openAttempt.started_at
+      : undefined;
+
   const attemptFailedId = await opts.allocateEventId();
   const attemptFailedEvent: ZigmaFlowEvent = {
     id: attemptFailedId,
@@ -81,7 +93,10 @@ export async function finalizeJobCompletion(
       failure_kind: outcome.failureKind,
       reason: outcome.reason,
       step_count: 0,
-      duration_ms: 0,
+      duration_ms:
+        openAttemptStartedAt !== undefined
+          ? attemptDurationMs(openAttemptStartedAt, transitionTimestamp)
+          : 0,
     },
   };
   await eventWriter.appendEvent(runDir, attemptFailedEvent);

@@ -14,7 +14,7 @@ import { computeReadyJobs } from "../dag/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { Clock, RunState } from "../run/index.js";
 import { StateError, WorkflowError } from "../utils/index.js";
-import { createOpenAttempt } from "./attemptModel.js";
+import { attemptDurationMs, createOpenAttempt } from "./attemptModel.js";
 import type { ProcessRunner } from "../script/index.js";
 import { ExecaProcessRunner } from "../script/index.js";
 import { executeScriptStep } from "../script/executor.js";
@@ -82,6 +82,7 @@ export { resolveJobWorkingDirectory, extractWorkspacePath } from "./workspace.js
 export { resetRun } from "./resetRun.js";
 export type { ResetRunOpts, ResetRunResult, ResetJobChange } from "./resetRun.js";
 export {
+  attemptDurationMs,
   classifyFailureKind,
   createOpenAttempt,
   deriveJobConclusion,
@@ -836,12 +837,18 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
   // ── WF-7.1: Seal the current attempt as success and emit attempt_completed ──
   const jobDef = wf.jobs[jobId];
   const stepCount = jobDef?.steps.length ?? 0;
+  const transitionTimestamp = clock.now();
+  const openAttempts = jobState.attempts;
+  const openAttempt =
+    openAttempts !== undefined && openAttempts.length > 0
+      ? openAttempts[openAttempts.length - 1]!
+      : undefined;
   const attemptCompletedId = await nextSequentialEventId(runDir, eventWriter);
   const attemptCompletedEvent: ZigmaFlowEvent = {
     id: attemptCompletedId,
     run_id: runId,
     type: "attempt_completed",
-    timestamp: clock.now(),
+    timestamp: transitionTimestamp,
     producer: "engine",
     job: jobId,
     step: null,
@@ -850,7 +857,10 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
       job_id: jobId,
       attempt,
       step_count: stepCount,
-      duration_ms: 0,
+      duration_ms:
+        openAttempt !== undefined && openAttempt.status === undefined
+          ? attemptDurationMs(openAttempt.started_at, transitionTimestamp)
+          : 0,
     },
   };
   await eventWriter.appendEvent(runDir, attemptCompletedEvent);
@@ -873,7 +883,6 @@ async function appendJobCompleted(opts: AppendJobCompletedOpts): Promise<false> 
   onEvent?.(jobCompletedEvent);
 
   let lastEventId = jobCompletedId;
-  const transitionTimestamp = clock.now();
   function transitionCompletedJob(current: RunState): RunState {
     const completedJobState = { ...current.jobs[jobId]! };
     delete completedJobState.current_step;

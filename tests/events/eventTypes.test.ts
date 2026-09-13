@@ -519,6 +519,8 @@ describe("ZigmaFlowEvent JSON round-trip", () => {
       args_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
       timeout_ms: 600_000,
       step_artifact_dir: "jobs/intake/attempts/1/steps/analyze",
+      model: "claude-sonnet-4-6",
+      routing_reason: 'matched profile "premium" (first of 1 candidate(s) satisfying constraints)',
     };
     const ev: ZigmaFlowEvent = {
       ...stepEnvelope("evt-022", "agent_invoked", "engine", "intake", "analyze", 1),

@@ -74,6 +74,8 @@ export interface AgentBackend {
   readonly backendArgs?: readonly string[];
   /** Timeout in milliseconds. Optional for backwards compatibility. */
   readonly backendTimeoutMs?: number;
+  /** Model id this backend instance was created with (Issue #286). Optional — test fakes need not set it. */
+  readonly model?: string | undefined;
 
   /** Execute the agent with the given options. */
   execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult>;

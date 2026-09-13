@@ -59,6 +59,7 @@ The following fields are **deprecated** in v0.7 and internally translated to the
    - [context_blocks](#38-context_blocks)
    - [jobs](#39-jobs)
    - [job_groups](#310-job_groups)
+   - [models](#311-models)
 4. [Job Fields](#4-job-fields)
    - [needs](#41-needs)
    - [optional_needs](#42-optional_needs)
@@ -495,6 +496,66 @@ jobs:
 
 ---
 
+### 3.11 `models`
+
+**Stability:** `experimental ⚠` — may change in any minor version release without deprecation
+
+The `models` block is a registry of model profiles that agent steps may be routed to by capability. Profiles are matched statically at step execution time against the step's `constraints` (see [§5.2](#52-agent-step)). Routing selects the first matching profile in declaration order; the matched profile's `model` (and optionally `backend`) is merged into the step's effective backend configuration.
+
+#### Fields
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `model` | `string` | Yes | — | Model id (e.g. `claude-sonnet-4-6`). |
+| `backend` | `string` | No | — | Named backend the model runs on. Applied only when the step pins no backend name. |
+| `capabilities` | `map<string, any>` | No | `{}` | Reserved capability map. Not matched in Phase 1 (Issue #286). |
+| `cost_class` | `low` \| `medium` \| `high` | No | `high` | Economics class used for `max_cost_class` filtering. |
+| `latency_class` | `low` \| `medium` \| `high` | No | `high` | Latency class used for `max_latency_class` filtering. |
+| `data_classification` | `DataClassification[]` | No | `[]` | Data classifications this model may serve. |
+| `regions` | `string[]` | No | `[]` | Regions this model may run in. |
+| `local_required` | `boolean` | No | `false` | Whether this model runs locally. |
+
+`DataClassification` = `public` | `internal` | `confidential` | `restricted`.
+
+Omitted capability fields mean "does not satisfy": a profile without `data_classification` serves no classification, a profile without `regions` covers no region, and a profile without `local_required: true` does not run locally. Omitted economics classes default to `high` (most conservative).
+
+#### Selection and precedence
+
+1. CLI `--backend` pins the backend **name** only (highest priority); the routed model still applies.
+2. Step `backend.model` / `backend.name` (explicit override) bypasses routing selection. When the model is declared in the `models` registry, the override is still verified against hard constraints; a violation fails the step (hard constraints are not overridable). An override whose model is not in the registry fails closed when hard constraints are declared, and bypasses routing otherwise.
+3. Routing matches profiles against the step `constraints` in declaration order; the first profile satisfying every constraint wins.
+4. Global/default backend config (existing fallback).
+
+Hard constraints (`data_classification`, `regions`, `local_required`) are enforced strictly. Economics constraints (`max_cost_class`, `max_latency_class`) only filter candidates and do not apply to explicit overrides.
+
+When no profile satisfies the constraints, the step fails with `ModelRoutingError` (exit code 31) carrying the candidates, the constraints, and per-candidate rejection reasons.
+
+#### Example
+
+```yaml
+models:
+  cheap:
+    model: claude-haiku-4-5
+    cost_class: low
+    data_classification: [internal]
+    regions: [us-east-1]
+  premium:
+    model: claude-sonnet-4-6
+    cost_class: high
+    data_classification: [internal, confidential]
+    regions: [us-east-1, eu-west-1]
+
+jobs:
+  main:
+    steps:
+      - id: analyze
+        type: agent
+        constraints:
+          max_cost_class: low
+```
+
+---
+
 ## 4. Job Fields
 
 Each entry under `jobs` is a map with the following fields.
@@ -839,6 +900,7 @@ An Agent Step is the only step type that involves an LLM. The Engine generates a
 | `expose` | `ExposeDef` | `stable` | No | Controls which Skill Pack capabilities are visible to the agent. |
 | `returns` | `ReturnsDef` | `experimental ⚠` | No | v0.2: Declares a structured status return with allowed values and corresponding actions. |
 | `on_return` | `map<string, OnReturnAction>` | `experimental ⚠` | No | v0.2: Maps each allowed `returns.status.values` entry to an Engine action. |
+| `constraints` | `ConstraintsDef` | `experimental ⚠` | No | Capability constraints for model routing (Issue #286). See [Model routing](#model-routing) below. |
 
 **ExposeDef fields:**
 
@@ -868,6 +930,20 @@ An Agent Step is the only step type that involves an LLM. The Engine generates a
 | `goto_step` | `string` | **Deprecated in v0.7.** Jump to the named step within the current job. Internally translated to an implicit Job Group Iteration. |
 | `fail` | `"fail"` | Mark the step as failed. |
 | `block` | `"block"` | Block the run. |
+
+#### Model routing
+
+An agent step may declare `constraints` (experimental ⚠) to route its model by capability:
+
+| Field | Type | Hard | Description |
+|-------|------|------|-------------|
+| `data_classification` | `public` \| `internal` \| `confidential` \| `restricted` | Yes | The selected profile must serve this classification. |
+| `regions` | `string[]` | Yes | The profile must cover every listed region. |
+| `local_required` | `boolean` | Yes | The profile must declare local execution when `true`. |
+| `max_cost_class` | `low` \| `medium` \| `high` | No | Profile `cost_class` must be at most this class. |
+| `max_latency_class` | `low` \| `medium` \| `high` | No | Profile `latency_class` must be at most this class. |
+
+Profiles come from the workflow top-level `models` registry ([§3.11](#311-models)). When a step declares `constraints`, routing fails the step if no profile matches; steps without `constraints` resolve their backend exactly as before. The selected `model` and the routing reason are recorded in the `agent_invoked` event (`model` and `routing_reason` payload fields).
 
 #### Execution semantics
 
@@ -1427,6 +1503,12 @@ The following rules are enforced by the workflow validator. Any violation produc
 |---|------|
 | V38 | `failure_policy` must be one of `fail`, `continue`, `block`. |
 | V39 | `retry.when` values must be non-empty strings; each value should match a known `FailureKind` (see [§4.4](#44-retry)). Unknown values produce a validation warning. |
+| V40 | `models.<name>.model` must be a non-empty string. |
+| V41 | `models.<name>.cost_class` and `latency_class` must be one of `low`, `medium`, `high`. |
+| V42 | `models.<name>.data_classification` values must be one of `public`, `internal`, `confidential`, `restricted`; `regions` must be an array of non-empty strings; `local_required` must be a boolean. |
+| V43 | `constraints` is only valid on `agent` steps (rejected otherwise). |
+| V44 | Step `constraints` values must match the same enums as V41/V42; `regions` must be an array of non-empty strings; `local_required` must be a boolean. |
+| V45 | At runtime, an agent step with `constraints` and zero matching profiles fails the step with `ModelRoutingError` (exit code 31); schema validation passes. |
 
 ---
 
@@ -1751,6 +1833,7 @@ jobs:
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2026-09-13 | 0.9.0 | v0.9 model routing (ISSUE #286 Phase 1). Added top-level `models` registry (§3.11) and agent step `constraints` (§5.2) for capability-based model routing: class-based cost/latency filters, hard constraints (`data_classification`, `regions`, `local_required`), explicit override verification, routing reason in `agent_invoked` events (`model`, `routing_reason`), structured `ModelRoutingError` (exit code 31). Added validation rules V40–V45. |
 | 2026-08-09 | 0.9.0 | v0.9 Schedule Trigger (ISSUE #269). Added `on.schedule` trigger type with `cron`, `timezone`, and `skip_if_running` fields (§3.3). `on.manual` and `on.schedule` are mutually exclusive. Wired `invocation.trigger` through the runtime for `${{ invocation.trigger }}` resolution in step `if:` conditions. |
 | 2026-07-17 | 0.7.0 | v0.7 Execution Model. Added `job_groups` top-level field with `repeat` blocks (§3.10), `group` field on jobs (§4.8), `concurrency` with four policies (§4.9), `failure_policy` with cascade semantics (§4.10). Updated `retry` with `when` FailureKind whitelist (§4.4). Extended expression namespaces: `invocation`, `attempt`, `iteration.previous`, job/step status and attempt (§6.1). Added status functions `success()`, `failure()`, `always()`, `cancelled()` with pre-resolution semantics (§6.4). Relaxed depth limit to 4 for `iteration.previous` paths. Marked `goto_step`, `goto_job`, `retry_job`, `max_visits`, `retry_with`, `on_failure` object form as deprecated with internal translation notes. Added validation rules V29–V39 for job groups, concurrency, and failure policies. Updated full example to demonstrate v0.7 features. |
 | 2026-07-03 | 0.3.0 | Initial published language specification. Covers all top-level fields, all 5 step types, reserved `workflow` type, expression syntax, forbidden constructs, and validation rules. |

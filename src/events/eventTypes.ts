@@ -205,6 +205,10 @@ export interface AgentInvokedPayload {
   args_hash: string;
   timeout_ms: number;
   step_artifact_dir: string;
+  /** Model selected for this invocation (Issue #286). Present when the backend was created with a model. */
+  model?: string;
+  /** Why this model was chosen (Issue #286). Present for engine-emitted agent_invoked events. */
+  routing_reason?: string;
 }
 
 export interface AgentCompletedPayload {

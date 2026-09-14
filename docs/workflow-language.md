@@ -534,7 +534,7 @@ When no profile satisfies the constraints, the step fails with `ModelRoutingErro
 
 When at least two profiles match the step constraints, routing reorders the matched set by the aggregated history of the step's **task class**. A task class is the `(job id, skill)` pair — the id of the job the step belongs to and the step's `uses` skill. Steps without `uses` have no task class and are never historically ordered.
 
-History is aggregated by scanning every `runs/<id>/metrics.jsonl` under the active runs directory (the runtime-metrics journal, Phase 2). Records without `skill` or `model`, and `cancelled` executions, are excluded. Per model, the aggregator counts:
+History is aggregated by scanning every `runs/<id>/metrics.jsonl` under the active runs directory (the runtime-metrics journal, Phase 2). Records without `skill` or `model`, `cancelled` executions, and records with an invalid `attempt` number or missing `report_accepted` flag are excluded. Per model, the aggregator counts:
 
 - `samples` — terminal records for the class;
 - `accepted` — records with `report_accepted: true`;

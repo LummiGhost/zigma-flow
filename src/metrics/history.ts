@@ -132,12 +132,13 @@ export async function loadModelHistory(runsDir: string): Promise<ModelHistory> {
 /**
  * Per-run lazy, single-flight history store.
  *
- * Cached after the first load; `get(true)` forces a fresh scan. The engine
- * forces on retry attempts (`attempt > 1`) — `appendMetricsRecord` is
- * awaited at every terminal outcome before the next attempt starts, so the
- * re-scan sees the prior attempt's record. Records appended by OTHER
- * concurrent CLI processes after the first scan remain invisible until a
- * forced refresh (documented staleness).
+ * Cached after the first load; `get(true)` forces a fresh scan (forced
+ * loads are single-flight too). The engine forces on retry attempts
+ * (`attempt > 1`) — `appendMetricsRecord` is awaited at every terminal
+ * outcome before the next attempt starts, so the re-scan sees the prior
+ * attempt's record. Records appended by OTHER concurrent CLI processes
+ * after the first scan remain invisible until a forced refresh
+ * (documented staleness).
  */
 export interface ModelHistoryStore {
   get(force?: boolean): Promise<ModelHistory>;
@@ -146,24 +147,39 @@ export interface ModelHistoryStore {
 export function createModelHistoryStore(runsDir: string): ModelHistoryStore {
   let cached: ModelHistory | undefined;
   let inFlight: Promise<ModelHistory> | undefined;
+  let inFlightForced = false;
+  // A slow (stale) load finishing after a newer load must not clobber the
+  // newer cache; each load carries the generation it started under.
+  let generation = 0;
 
   async function load(): Promise<ModelHistory> {
+    const gen = ++generation;
     const history = await loadModelHistory(runsDir);
-    cached = history;
-    inFlight = undefined;
+    if (gen === generation) {
+      cached = history;
+      inFlight = undefined;
+    }
     return history;
   }
 
   return {
     get(force = false): Promise<ModelHistory> {
       if (force) {
-        return load();
+        if (inFlight !== undefined && inFlightForced) {
+          return inFlight;
+        }
+        const p = load();
+        inFlight = p;
+        inFlightForced = true;
+        return p;
       }
       if (cached !== undefined) {
         return Promise.resolve(cached);
       }
       if (inFlight === undefined) {
-        inFlight = load();
+        const p = load();
+        inFlight = p;
+        inFlightForced = false;
       }
       return inFlight;
     },

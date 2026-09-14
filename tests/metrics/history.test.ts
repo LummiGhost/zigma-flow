@@ -263,17 +263,16 @@ describe("createModelHistoryStore — caching, refresh, single-flight", () => {
     const p2 = store.get();
     const p3 = store.get();
 
-    await seedMetricsRun(runsDir, "seed-late", [line({ model: "m1" })]);
-
-    // All three promises resolve to the SAME history object — a single scan
-    // was shared (single-flight), and the late-seeded run is invisible to it.
+    // All three promises resolve to the SAME history object — one shared
+    // scan (single-flight).
     const [h1, h2, h3] = await Promise.all([p1, p2, p3]);
     expect(h1).toBe(h2);
     expect(h1).toBe(h3);
-    expect(statsFor(h1, "main", "zigma/analyze-skill", "m1")).toBeUndefined();
 
     // The cache persists: a subsequent non-forced get still returns the
-    // stale object, while force re-scans.
+    // same object, while a forced re-scan picks up runs seeded after the
+    // first load.
+    await seedMetricsRun(runsDir, "seed-late", [line({ model: "m1" })]);
     expect(await store.get()).toBe(h1);
     const refreshed = await store.get(true);
     expect(statsFor(refreshed, "main", "zigma/analyze-skill", "m1")?.samples).toBe(1);

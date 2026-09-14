@@ -1,0 +1,281 @@
+/**
+ * Model-history aggregation tests (Issue #286 Phase 3).
+ *
+ * Exercises `loadModelHistory`, `makeTaskClassKey`, and
+ * `createModelHistoryStore` against seeded run directories:
+ *
+ *   - T-HIST-1: missing / empty runsDir → empty history, never rejects.
+ *   - T-HIST-2: per-(job, skill, model) grouping and counts.
+ *   - T-HIST-3..5: exclusion rules — no skill, no model, cancelled.
+ *   - T-HIST-6: tolerance — garbage lines, dirs without metrics.jsonl,
+ *               stray files, malformed records.
+ *   - T-HIST-7: task-class key isolation across jobs/skills.
+ *   - T-HIST-8: store caching / forced refresh / single-flight.
+ */
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+
+import {
+  createModelHistoryStore,
+  loadModelHistory,
+  makeTaskClassKey,
+  type ModelHistory,
+} from "../../src/metrics/history.js";
+
+// ---------------------------------------------------------------------------
+// Fixtures and helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Seed one run directory with a metrics.jsonl file. `lines` are written
+ * verbatim as JSONL (one JSON record per line) — the same shape
+ * `appendMetricsRecord` produces. Mirrors the `seedRun` precedent in
+ * tests/commands/list-runs.test.ts.
+ */
+async function seedMetricsRun(
+  runsDir: string,
+  runId: string,
+  lines: ReadonlyArray<Record<string, unknown>>,
+): Promise<void> {
+  const runDir = join(runsDir, runId);
+  await mkdir(runDir, { recursive: true });
+  await writeFile(
+    join(runDir, "metrics.jsonl"),
+    lines.map((l) => JSON.stringify(l)).join("\n") + "\n",
+    "utf-8",
+  );
+}
+
+/** A well-formed metrics line; only the fields the aggregator consumes matter. */
+function line(overrides: Record<string, unknown>): Record<string, unknown> {
+  return {
+    timestamp: "2026-09-13T00:00:00.000Z",
+    run_id: "seed-run",
+    workflow: "wf",
+    job: "main",
+    step: "analyze",
+    attempt: 1,
+    skill: "zigma/analyze-skill",
+    backend: "fake",
+    model: "claude-haiku-4-5",
+    cost_class: "low",
+    duration_ms: 1234,
+    status: "completed",
+    report_accepted: true,
+    invocation_id: "evt-001",
+    ...overrides,
+  };
+}
+
+function statsFor(
+  history: ModelHistory,
+  jobId: string,
+  skill: string,
+  model: string,
+): { samples: number; accepted: number; retried: number } | undefined {
+  return history.get(makeTaskClassKey(jobId, skill))?.get(model);
+}
+
+describe("loadModelHistory — aggregation", () => {
+  let runsDir: string;
+
+  beforeEach(async () => {
+    runsDir = join(tmpdir(), `zigma-history-${randomUUID()}`);
+    await mkdir(runsDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(runsDir, { recursive: true, force: true });
+  });
+
+  it("returns an empty history for a missing runsDir and never rejects (T-HIST-1)", async () => {
+    const missing = join(runsDir, "does-not-exist");
+    const history = await loadModelHistory(missing);
+    expect(history.size).toBe(0);
+  });
+
+  it("returns an empty history for an empty runsDir (T-HIST-1)", async () => {
+    const history = await loadModelHistory(runsDir);
+    expect(history.size).toBe(0);
+  });
+
+  it("groups by (job, skill, model) and counts samples/accepted/retried (T-HIST-2)", async () => {
+    await seedMetricsRun(runsDir, "seed-1", [
+      line({ run_id: "seed-1", attempt: 1, model: "m1", report_accepted: true }),
+      line({ run_id: "seed-1", attempt: 2, model: "m1", report_accepted: true }),
+      line({ run_id: "seed-1", attempt: 3, model: "m1", report_accepted: false }),
+      line({ run_id: "seed-1", attempt: 1, model: "m2", report_accepted: true }),
+    ]);
+    await seedMetricsRun(runsDir, "seed-2", [
+      line({ run_id: "seed-2", attempt: 1, model: "m1", report_accepted: true }),
+    ]);
+
+    const history = await loadModelHistory(runsDir);
+    expect(history.size).toBe(1);
+
+    // m1: 4 records across two runs; attempts 2 and 3 are retry evidence.
+    expect(statsFor(history, "main", "zigma/analyze-skill", "m1")).toEqual({
+      samples: 4,
+      accepted: 3,
+      retried: 2,
+    });
+    expect(statsFor(history, "main", "zigma/analyze-skill", "m2")).toEqual({
+      samples: 1,
+      accepted: 1,
+      retried: 0,
+    });
+  });
+
+  it("excludes records without a skill (T-HIST-3)", async () => {
+    const noSkillA = { ...line({ model: "m1" }) };
+    delete (noSkillA as Record<string, unknown>)["skill"];
+    const noSkillB = { ...line({ model: "m1" }) };
+    delete (noSkillB as Record<string, unknown>)["skill"];
+    await seedMetricsRun(runsDir, "seed-1", [noSkillA]);
+    await seedMetricsRun(runsDir, "seed-2", [noSkillB]);
+
+    const history = await loadModelHistory(runsDir);
+    expect(history.size).toBe(0);
+  });
+
+  it("excludes records without a model (T-HIST-4)", async () => {
+    const noModel = { ...line({}) };
+    delete (noModel as Record<string, unknown>)["model"];
+    await seedMetricsRun(runsDir, "seed-1", [noModel, line({ model: "m1" })]);
+
+    const history = await loadModelHistory(runsDir);
+    const stats = statsFor(history, "main", "zigma/analyze-skill", "m1");
+    expect(stats?.samples).toBe(1);
+  });
+
+  it("excludes cancelled records; counts failed report-validation records (T-HIST-5)", async () => {
+    await seedMetricsRun(runsDir, "seed-1", [
+      line({ model: "m1", status: "cancelled", report_accepted: false }),
+      // Phase 2 report-validation failure: execution happened, report
+      // rejected — exit_code 0 distinguishes it from backend failures.
+      line({
+        model: "m1",
+        status: "failed",
+        exit_code: 0,
+        report_accepted: false,
+      }),
+      line({ model: "m1", status: "timed_out", report_accepted: false }),
+    ]);
+
+    const history = await loadModelHistory(runsDir);
+    const stats = statsFor(history, "main", "zigma/analyze-skill", "m1");
+    expect(stats).toEqual({ samples: 2, accepted: 0, retried: 0 });
+  });
+
+  it("tolerates garbage lines, dirs without metrics.jsonl, stray files, and malformed records (T-HIST-6)", async () => {
+    await seedMetricsRun(runsDir, "seed-1", [line({ model: "m1" })]);
+    await writeFile(
+      join(runsDir, "seed-1", "metrics.jsonl"),
+      JSON.stringify(line({ model: "m1" })) + "\n",
+      { flag: "a", encoding: "utf-8" },
+    );
+    await writeFile(
+      join(runsDir, "seed-1", "metrics.jsonl"),
+      '{"torn": ',
+      { flag: "a", encoding: "utf-8" },
+    );
+
+    // Dir without metrics.jsonl at all.
+    await mkdir(join(runsDir, "seed-empty"), { recursive: true });
+
+    // A stray FILE inside runsDir (not a directory).
+    await writeFile(join(runsDir, "stray.txt"), "not a run", "utf-8");
+
+    // Malformed records: missing attempt / missing report_accepted.
+    await seedMetricsRun(runsDir, "seed-2", [
+      line({ model: "m2" }),
+      { ...line({ model: "m2", attempt: undefined as unknown }) },
+      { ...line({ model: "m2", report_accepted: "yes" as unknown }) },
+      { ...line({ model: "m2", attempt: 0 }) },
+    ]);
+
+    const history = await loadModelHistory(runsDir);
+    // seed-1: the original line plus the appended duplicate — the torn
+    // garbage line is skipped.
+    expect(statsFor(history, "main", "zigma/analyze-skill", "m1")?.samples).toBe(2);
+    expect(statsFor(history, "main", "zigma/analyze-skill", "m2")?.samples).toBe(1);
+    expect(history.size).toBe(1);
+  });
+
+  it("isolates task classes by job and skill (T-HIST-7)", async () => {
+    await seedMetricsRun(runsDir, "seed-1", [
+      line({ job: "job-a", skill: "skill-x", model: "m1" }),
+      line({ job: "job-a", skill: "skill-y", model: "m1" }),
+      line({ job: "job-b", skill: "skill-x", model: "m1" }),
+    ]);
+
+    const history = await loadModelHistory(runsDir);
+    expect(history.size).toBe(3);
+    expect(makeTaskClassKey("job-a", "skill-x")).toBe(
+      makeTaskClassKey("job-a", "skill-x"),
+    );
+    expect(makeTaskClassKey("job-a", "skill-x")).not.toBe(
+      makeTaskClassKey("job-b", "skill-x"),
+    );
+    expect(makeTaskClassKey("job-a", "skill-x")).not.toBe(
+      makeTaskClassKey("job-a", "skill-y"),
+    );
+    expect(statsFor(history, "job-a", "skill-x", "m1")?.samples).toBe(1);
+  });
+});
+
+describe("createModelHistoryStore — caching, refresh, single-flight", () => {
+  let runsDir: string;
+
+  beforeEach(async () => {
+    runsDir = join(tmpdir(), `zigma-history-store-${randomUUID()}`);
+    await mkdir(runsDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(runsDir, { recursive: true, force: true });
+  });
+
+  it("caches after first load and re-scans on force (T-HIST-8)", async () => {
+    await seedMetricsRun(runsDir, "seed-a", [line({ model: "m1" })]);
+    const store = createModelHistoryStore(runsDir);
+
+    const first = await store.get();
+    expect(statsFor(first, "main", "zigma/analyze-skill", "m1")?.samples).toBe(1);
+
+    // A run seeded after the first load is invisible to cached gets...
+    await seedMetricsRun(runsDir, "seed-b", [line({ model: "m1" })]);
+    const cached = await store.get();
+    expect(statsFor(cached, "main", "zigma/analyze-skill", "m1")?.samples).toBe(1);
+
+    // ...and visible after a forced refresh.
+    const refreshed = await store.get(true);
+    expect(statsFor(refreshed, "main", "zigma/analyze-skill", "m1")?.samples).toBe(2);
+  });
+
+  it("shares one in-flight scan across concurrent gets (T-HIST-8)", async () => {
+    const store = createModelHistoryStore(runsDir);
+    const p1 = store.get();
+    const p2 = store.get();
+    const p3 = store.get();
+
+    await seedMetricsRun(runsDir, "seed-late", [line({ model: "m1" })]);
+
+    // All three promises resolve to the SAME history object — a single scan
+    // was shared (single-flight), and the late-seeded run is invisible to it.
+    const [h1, h2, h3] = await Promise.all([p1, p2, p3]);
+    expect(h1).toBe(h2);
+    expect(h1).toBe(h3);
+    expect(statsFor(h1, "main", "zigma/analyze-skill", "m1")).toBeUndefined();
+
+    // The cache persists: a subsequent non-forced get still returns the
+    // stale object, while force re-scans.
+    expect(await store.get()).toBe(h1);
+    const refreshed = await store.get(true);
+    expect(statsFor(refreshed, "main", "zigma/analyze-skill", "m1")?.samples).toBe(1);
+  });
+});

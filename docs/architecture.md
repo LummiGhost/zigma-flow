@@ -854,7 +854,7 @@ agent_invoked  (backend.execute 之前)
   └─ agent_completed | agent_timed_out | agent_failed | agent_cancelled
 ```
 
-**调用前：** Engine 记录 `agent_invoked` 事件，payload 含 `backend_name`、`command`、`args_hash`（SHA-256，不含 prompt token）、`timeout_ms`、`step_artifact_dir`，以及 v0.9 起可选的 `model`（本次调用选定的模型）和 `routing_reason`（Engine 总是写入，记录模型路由结果，见 Issue #286）。
+**调用前：** Engine 记录 `agent_invoked` 事件，payload 含 `backend_name`、`command`、`args_hash`（SHA-256，不含 prompt token）、`timeout_ms`、`step_artifact_dir`，以及 v0.9 起可选的 `model`（本次调用选定的模型）和 `routing_reason`（Engine 总是写入，记录模型路由结果，见 Issue #286；Phase 3 起历史排序时携带 `history-ranked 1 of N candidate(s) ... acceptance a/s, retry r/s` 依据，完整排序经 run log 的 `writeSystemDetached` 保留）。
 
 **调用后：** 根据 backend 返回结果写入对应的终端事件：
 
@@ -878,7 +878,9 @@ agent_invoked  (backend.execute 之前)
 
 `cost_class` 语义：路由选中 profile 时记录该 profile 的静态 `cost_class`（low/medium/high；profile 未声明时默认 `high`）；路由未选中任何 profile（如 step 无 constraints）时整个键缺省。这是静态经济分档，不是真实 token 费用——backend 不解析费用数据。
 
-关联契约：记录通过 `workflow/job/step/attempt` 与事件、状态对账，`invocation_id` 直接 join 回 `agent_invoked`；`report_accepted` 标记该次执行的 report 是否通过终线校验被接受。human gate / review 信号不变。Phase 3 按任务类别历史路由将扫描各 run 目录的 `metrics.jsonl` 聚合（先例：`list-runs` 扫描 per-run `state.json`）；Phase 4 Accepted Artifact Cost 消费同一数据。
+关联契约：记录通过 `workflow/job/step/attempt` 与事件、状态对账，`invocation_id` 直接 join 回 `agent_invoked`；`report_accepted` 标记该次执行的 report 是否通过终线校验被接受。human gate / review 信号不变。
+
+**历史路由（Issue #286 Phase 3）：** `src/metrics/history.ts` 扫描各 run 目录的 `metrics.jsonl`（先例：`list-runs` 扫描 per-run `state.json`）聚合为按任务类别（`(job, skill)` 对；无 `skill`、无 `model`、`cancelled` 的记录被排除）的 per-model 计数（samples / accepted / retried=attempt>1）。路由在 ≥2 个 profile 满足约束时按 acceptance 降序 → retry 升序 → 样本数降序 → 声明序重排匹配集；零样本 profile 排在有样本之后；无历史或单匹配时保持 Phase 1 声明序行为。历史每 run 懒加载一次（per-run `ModelHistoryStore`，单飞），retry attempt（attempt > 1）强制重扫以纳入同 run 前次 attempt 的记录；聚合函数 total（永不 reject），历史 IO 不可能使路由失败——最坏静默退化为 Phase 1 行为。routing 决策可追溯：`routing_reason` 携带排序依据，完整排序（candidates + 原始计数）经 run log 保留。Phase 4 Accepted Artifact Cost 消费同一数据。
 
 ## 12. MVP Execution Flows
 

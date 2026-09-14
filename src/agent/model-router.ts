@@ -7,9 +7,13 @@
  * `buildEffectiveBackendOverride` so the existing backend resolution chain
  * stays unchanged.
  *
- * Phase 2 (Accepted Artifact Cost optimization) will replace the
- * filter-then-first-match pick with an economics-aware preference function;
- * `capabilities` on profiles is reserved for that phase.
+ * Phase 2 (Issue #286) shipped runtime metrics recording. Phase 3 (this
+ * change) orders matched candidates by historical stats passed in via
+ * `ModelRouteInput.history` when at least two profiles match; with no
+ * history (or a single match) the declaration-order first-match pick is
+ * unchanged. Phase 4 (Accepted Artifact Cost optimization) will replace
+ * the preference function with an economics-aware one; `capabilities` on
+ * profiles is reserved for that phase.
  */
 
 import type { StepBackendOverride } from "./config.js";
@@ -57,6 +61,38 @@ export interface ModelProfileCandidate extends ModelProfileDefinition {
   name: string;
 }
 
+/**
+ * Phase 3: per-model aggregate for one task class (job, skill).
+ *
+ * Raw counts are stored (not rates) so the routing reason can carry exact
+ * `accepted/samples` figures; rates are derived at comparison time.
+ */
+export interface ModelHistoryStats {
+  /** Terminal records aggregated for this (job, skill, model). */
+  samples: number;
+  /** Records with report_accepted === true. */
+  accepted: number;
+  /** Records with attempt > 1 (each post-first attempt counts as retry evidence). */
+  retried: number;
+}
+
+/** Historical stats keyed by model id, for the current task class. */
+export type TaskClassHistory = ReadonlyMap<string, ModelHistoryStats>;
+
+/**
+ * Phase 3: one entry of the post-ordering matched-candidate ranking,
+ * exposed for traceability logging. Order is the final preference order.
+ */
+export interface ModelHistoryRankingEntry {
+  /** Registry key from the workflow `models:` block. */
+  name: string;
+  /** Profile model id. */
+  model: string;
+  samples: number;
+  accepted: number;
+  retried: number;
+}
+
 export interface ModelRouteInput {
   /** Workflow model registry entries in declaration order. */
   candidates: readonly ModelProfileCandidate[];
@@ -64,6 +100,13 @@ export interface ModelRouteInput {
   constraints?: StepModelConstraints | undefined;
   /** Explicit step backend override (#238): pinned backend name and/or model. */
   explicit?: { backendName?: string; model?: string } | undefined;
+  /**
+   * Phase 3: historical stats for the current (job, skill) task class,
+   * keyed by model id. When present and at least two profiles match,
+   * matched candidates are reordered by acceptance-first ordering;
+   * otherwise the declaration-order first match wins unchanged.
+   */
+  history?: TaskClassHistory | undefined;
 }
 
 export interface ModelRouteResult {
@@ -71,6 +114,11 @@ export interface ModelRouteResult {
   profile?: ModelProfileDefinition;
   /** Human-readable routing reason, surfaced in the agent_invoked event. */
   reason: string;
+  /**
+   * Phase 3: full post-ordering ranking of matched profiles. Set only
+   * when history was consulted (at least two matches).
+   */
+  historyRanking?: ReadonlyArray<ModelHistoryRankingEntry> | undefined;
 }
 
 function hasAnyConstraintField(constraints: StepModelConstraints): boolean {
@@ -224,6 +272,60 @@ export function routeModel(input: ModelRouteInput): ModelRouteResult {
           `Adjust the step constraints or add a model profile to the workflow "models" registry that satisfies them.`,
       },
     );
+  }
+
+  // ── Phase 3: historical ordering (Issue #286) ──
+  // Reorder the matched set only when history was supplied AND at least two
+  // profiles matched. Ordering: acceptance_rate desc → retry_rate asc →
+  // sample count desc → declaration order. Models with zero samples rank
+  // after sampled models (in declaration order). Without history (or with a
+  // single match) the pick below is byte-identical to Phase 1.
+  const history = input.history;
+  if (history !== undefined && matchedProfiles.length >= 2) {
+    const decorated = matchedProfiles.map((candidate, index) => ({
+      candidate,
+      index,
+      stats: history.get(candidate.model),
+    }));
+    const sampled = decorated.filter(
+      (e) => e.stats !== undefined && e.stats.samples > 0,
+    );
+    if (sampled.length > 0) {
+      sampled.sort(
+        (a, b) =>
+          b.stats!.accepted / b.stats!.samples -
+            a.stats!.accepted / a.stats!.samples ||
+          a.stats!.retried / a.stats!.samples -
+            b.stats!.retried / b.stats!.samples ||
+          b.stats!.samples - a.stats!.samples ||
+          a.index - b.index,
+      );
+    }
+    const ranking: ReadonlyArray<ModelHistoryRankingEntry> = [
+      ...sampled,
+      ...decorated.filter((e) => e.stats === undefined || e.stats.samples === 0),
+    ].map((e) => ({
+      name: e.candidate.name,
+      model: e.candidate.model,
+      samples: e.stats?.samples ?? 0,
+      accepted: e.stats?.accepted ?? 0,
+      retried: e.stats?.retried ?? 0,
+    }));
+
+    const selected = sampled[0]?.candidate ?? matchedProfiles[0]!;
+    const stats = sampled[0]?.stats;
+    if (stats !== undefined) {
+      return {
+        profile: selected,
+        reason: `matched profile "${selected.name}" (history-ranked 1 of ${matchedProfiles.length} candidate(s) satisfying constraints; acceptance ${stats.accepted}/${stats.samples}, retry ${stats.retried}/${stats.samples})`,
+        historyRanking: ranking,
+      };
+    }
+    return {
+      profile: selected,
+      reason: `matched profile "${selected.name}" (first of ${matchedProfiles.length} candidate(s) satisfying constraints; no historical samples for any candidate)`,
+      historyRanking: ranking,
+    };
   }
 
   const selected = matchedProfiles[0]!;

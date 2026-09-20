@@ -7,13 +7,19 @@
  * `buildEffectiveBackendOverride` so the existing backend resolution chain
  * stays unchanged.
  *
- * Phase 2 (Issue #286) shipped runtime metrics recording. Phase 3 (this
- * change) orders matched candidates by historical stats passed in via
+ * Phase 2 (Issue #286) shipped runtime metrics recording. Phase 3 orders
+ * matched candidates by historical stats passed in via
  * `ModelRouteInput.history` when at least two profiles match; with no
  * history (or a single match) the declaration-order first-match pick is
- * unchanged. Phase 4 (Accepted Artifact Cost optimization) will replace
- * the preference function with an economics-aware one; `capabilities` on
- * profiles is reserved for that phase.
+ * unchanged.
+ *
+ * Phase 4 (Accepted Artifact Cost optimization, this change) adds a
+ * cost-aware preference that engages ONLY when the step constraints
+ * declare `routing_policy.objective: accepted_artifact_cost`. The proxy
+ * cost units are accumulated by the metrics aggregation
+ * (src/metrics/history.ts); this module combines them into the AAC score
+ * (pure arithmetic — the router never does IO). Without the policy the
+ * Phase 3 acceptance-first ordering is preserved byte-identically.
  */
 
 import type { StepBackendOverride } from "./config.js";
@@ -23,6 +29,18 @@ export type CostClass = "low" | "medium" | "high";
 export type DataClassification = "public" | "internal" | "confidential" | "restricted";
 
 const CLASS_ORDER: Record<CostClass, number> = { low: 0, medium: 1, high: 2 };
+
+/**
+ * Phase 4 (Issue #286): routing policy objective.
+ *
+ * - `quality` — Phase 3 acceptance-first ordering (the default; explicit or
+ *   implicit when no policy is declared).
+ * - `accepted_artifact_cost` — Phase 4 AAC ordering (see routeModel).
+ *
+ * Weighted multi-objective tradeoffs (latency, risk, ...) are out of scope
+ * for v1: the issue explicitly allows a simple deterministic scoring model.
+ */
+export type RoutingPolicyObjective = "quality" | "accepted_artifact_cost";
 
 export interface StepModelConstraints {
   /** Hard constraint: the selected model's profile must serve this data classification. */
@@ -35,6 +53,12 @@ export interface StepModelConstraints {
   max_cost_class?: CostClass;
   /** Soft constraint: profile latency class must be at most this class. */
   max_latency_class?: CostClass;
+  /**
+   * Phase 4: ordering objective for matched candidates. Declaring the
+   * policy (even with `quality`) engages routing like any other constraint
+   * field; omitting it preserves Phase 3 behavior byte-identically.
+   */
+  routing_policy?: { objective: RoutingPolicyObjective };
 }
 
 export interface ModelProfileDefinition {
@@ -66,6 +90,14 @@ export interface ModelProfileCandidate extends ModelProfileDefinition {
  *
  * Raw counts are stored (not rates) so the routing reason can carry exact
  * `accepted/samples` figures; rates are derived at comparison time.
+ *
+ * Phase 4: the three cost accumulators hold proxy cost units folded by the
+ * metrics aggregation (src/metrics/history.ts): each record contributes
+ * `cost_class_weight(cost_class) × duration_ms` units (weights low=1,
+ * medium=2, high=4; missing cost_class defaults to high=4). There are no
+ * real token costs in the Phase 2 records — the proxy is the documented
+ * v1 stand-in. The fields are optional so hand-built stats (tests, older
+ * stores) keep typechecking; the AAC helpers treat a missing field as 0.
  */
 export interface ModelHistoryStats {
   /** Terminal records aggregated for this (job, skill, model). */
@@ -74,6 +106,43 @@ export interface ModelHistoryStats {
   accepted: number;
   /** Records with attempt > 1 (each post-first attempt counts as retry evidence). */
   retried: number;
+  /** Phase 4: Σ proxy cost units over all folded records (base + retry executions). */
+  execution_cost?: number;
+  /** Phase 4: Σ proxy cost units over records with attempt > 1 (wasted re-runs). */
+  retry_overhead?: number;
+  /** Phase 4: Σ proxy cost units over records with report_accepted === false (review + redo). */
+  rework_overhead?: number;
+}
+
+/**
+ * Phase 4 (Issue #286): Accepted Artifact Cost proxy.
+ *
+ * The Phase 2 metrics journal records no real token costs, so the v1 cost
+ * model is a documented deterministic proxy. The aggregation pre-computes
+ * per-(task-class, model) proxy cost units:
+ *
+ *   execution_cost = Σ cost_units(every terminal record)        — base + retry executions
+ *   retry_overhead = Σ cost_units(records with attempt > 1)     — work that forced a re-run
+ *   rework_overhead = Σ cost_units(records rejected at the report gate) — review + redo
+ *
+ * `deliveredCostUnits` is the sum of the three: the full cost the model
+ * generated before producing anything accepted. `acceptedArtifactCost`
+ * amortizes it over the accepted artifacts:
+ *
+ *   AAC = delivered_cost / max(accepted, 1)
+ *
+ * With zero accepted artifacts the whole delivered cost is charged to one
+ * hypothetical artifact — a deterministic worst case; ordering still ranks
+ * such models below any model with at least one accepted artifact.
+ */
+export function deliveredCostUnits(stats: ModelHistoryStats): number {
+  return (stats.execution_cost ?? 0)
+    + (stats.retry_overhead ?? 0)
+    + (stats.rework_overhead ?? 0);
+}
+
+export function acceptedArtifactCost(stats: ModelHistoryStats): number {
+  return deliveredCostUnits(stats) / Math.max(stats.accepted, 1);
 }
 
 /** Historical stats keyed by model id, for the current task class. */
@@ -91,6 +160,20 @@ export interface ModelHistoryRankingEntry {
   samples: number;
   accepted: number;
   retried: number;
+  /**
+   * Phase 4 (AAC policy only): proxy cost units per accepted artifact.
+   * Undefined for zero-sample candidates and under the quality objective
+   * (the ranking then stays byte-identical to Phase 3).
+   */
+  aac?: number;
+  /** Phase 4 (AAC policy only): execution + retry + rework proxy cost units. */
+  delivered_cost?: number;
+  /** Phase 4 (AAC policy only): Σ proxy cost units over all records. */
+  execution_cost?: number;
+  /** Phase 4 (AAC policy only): Σ proxy cost units over attempt > 1 records. */
+  retry_overhead?: number;
+  /** Phase 4 (AAC policy only): Σ proxy cost units over rejected-report records. */
+  rework_overhead?: number;
 }
 
 export interface ModelRouteInput {
@@ -101,10 +184,13 @@ export interface ModelRouteInput {
   /** Explicit step backend override (#238): pinned backend name and/or model. */
   explicit?: { backendName?: string; model?: string } | undefined;
   /**
-   * Phase 3: historical stats for the current (job, skill) task class,
+   * Phase 3/4: historical stats for the current (job, skill) task class,
    * keyed by model id. When present and at least two profiles match,
-   * matched candidates are reordered by acceptance-first ordering;
-   * otherwise the declaration-order first match wins unchanged.
+   * matched candidates are reordered — by acceptance-first ordering
+   * (Phase 3, also under `routing_policy.objective: quality`) or by
+   * Accepted Artifact Cost (Phase 4, only under
+   * `routing_policy.objective: accepted_artifact_cost`); otherwise the
+   * declaration-order first match wins unchanged.
    */
   history?: TaskClassHistory | undefined;
 }
@@ -126,7 +212,10 @@ function hasAnyConstraintField(constraints: StepModelConstraints): boolean {
     || constraints.regions !== undefined
     || constraints.local_required !== undefined
     || constraints.max_cost_class !== undefined
-    || constraints.max_latency_class !== undefined;
+    || constraints.max_latency_class !== undefined
+    // Phase 4: a declared policy alone engages routing (ordering needs the
+    // history lookup the engine only performs for constrained steps).
+    || constraints.routing_policy !== undefined;
 }
 
 function hasHardConstraints(constraints: StepModelConstraints): boolean {
@@ -274,12 +363,23 @@ export function routeModel(input: ModelRouteInput): ModelRouteResult {
     );
   }
 
-  // ── Phase 3: historical ordering (Issue #286) ──
+  // ── Phase 3/4: historical ordering (Issue #286) ──
   // Reorder the matched set only when history was supplied AND at least two
-  // profiles matched. Ordering: acceptance_rate desc → retry_rate asc →
-  // sample count desc → declaration order. Models with zero samples rank
-  // after sampled models (in declaration order). Without history (or with a
-  // single match) the pick below is byte-identical to Phase 1.
+  // profiles matched.
+  //
+  //   objective (default) `quality` — Phase 3: acceptance_rate desc →
+  //     retry_rate asc → sample count desc → declaration order. Models with
+  //     zero samples rank after sampled models (in declaration order).
+  //   objective `accepted_artifact_cost` — Phase 4: sampled models with at
+  //     least one accepted artifact rank by AAC asc (tie: acceptance rate
+  //     desc → declaration order); sampled models with zero accepted
+  //     artifacts rank next by delivered cost asc (they have never
+  //     delivered, so no AAC is meaningful — cheaper waste first); models
+  //     with zero samples rank last in declaration order.
+  //
+  // Hard constraints were already enforced by filtering; scoring never
+  // re-admits a rejected profile. Without history (or with a single match)
+  // the pick below is byte-identical to Phase 1.
   const history = input.history;
   if (history !== undefined && matchedProfiles.length >= 2) {
     const decorated = matchedProfiles.map((candidate, index) => ({
@@ -290,7 +390,71 @@ export function routeModel(input: ModelRouteInput): ModelRouteResult {
     const sampled = decorated.filter(
       (e) => e.stats !== undefined && e.stats.samples > 0,
     );
+    const zeroSample = decorated.filter(
+      (e) => e.stats === undefined || e.stats.samples === 0,
+    );
+    const aacPolicy =
+      constraints.routing_policy?.objective === "accepted_artifact_cost";
+
+    if (sampled.length > 0 && aacPolicy) {
+      // ── Phase 4: Accepted Artifact Cost ordering ──
+      const withAccepted = sampled.filter((e) => e.stats!.accepted > 0);
+      const zeroAccepted = sampled.filter((e) => e.stats!.accepted === 0);
+      withAccepted.sort(
+        (a, b) =>
+          acceptedArtifactCost(a.stats!) - acceptedArtifactCost(b.stats!) ||
+          b.stats!.accepted / b.stats!.samples -
+            a.stats!.accepted / a.stats!.samples ||
+          a.index - b.index,
+      );
+      zeroAccepted.sort(
+        (a, b) =>
+          deliveredCostUnits(a.stats!) - deliveredCostUnits(b.stats!) ||
+          a.index - b.index,
+      );
+      const ordered = [...withAccepted, ...zeroAccepted];
+
+      const ranking: ReadonlyArray<ModelHistoryRankingEntry> = [
+        ...ordered,
+        ...zeroSample,
+      ].map((e) => {
+        const stats = e.stats;
+        return {
+          name: e.candidate.name,
+          model: e.candidate.model,
+          samples: stats?.samples ?? 0,
+          accepted: stats?.accepted ?? 0,
+          retried: stats?.retried ?? 0,
+          ...(stats !== undefined
+            ? {
+                aac: acceptedArtifactCost(stats),
+                delivered_cost: deliveredCostUnits(stats),
+                execution_cost: stats.execution_cost ?? 0,
+                retry_overhead: stats.retry_overhead ?? 0,
+                rework_overhead: stats.rework_overhead ?? 0,
+              }
+            : {}),
+        };
+      });
+
+      const selected = ordered[0]!.candidate;
+      const stats = ordered[0]!.stats!;
+      if (stats.accepted > 0) {
+        return {
+          profile: selected,
+          reason: `matched profile "${selected.name}" (aac-ranked 1 of ${matchedProfiles.length} candidate(s) satisfying constraints; aac ${acceptedArtifactCost(stats).toFixed(2)} cost-units per accepted artifact, accepted ${stats.accepted}/${stats.samples})`,
+          historyRanking: ranking,
+        };
+      }
+      return {
+        profile: selected,
+        reason: `matched profile "${selected.name}" (aac-ranked 1 of ${matchedProfiles.length} candidate(s) satisfying constraints; no accepted artifacts for any candidate, delivered-cost ${deliveredCostUnits(stats).toFixed(2)} cost-units, accepted 0/${stats.samples})`,
+        historyRanking: ranking,
+      };
+    }
+
     if (sampled.length > 0) {
+      // ── Phase 3: acceptance-first ordering (byte-identical) ──
       sampled.sort(
         (a, b) =>
           b.stats!.accepted / b.stats!.samples -
@@ -303,7 +467,7 @@ export function routeModel(input: ModelRouteInput): ModelRouteResult {
     }
     const ranking: ReadonlyArray<ModelHistoryRankingEntry> = [
       ...sampled,
-      ...decorated.filter((e) => e.stats === undefined || e.stats.samples === 0),
+      ...zeroSample,
     ].map((e) => ({
       name: e.candidate.name,
       model: e.candidate.model,

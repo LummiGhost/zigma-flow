@@ -19,6 +19,16 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [Unreleased]
+
+### Model Routing
+
+- [runtime] Add Accepted Artifact Cost (AAC) ordering to capability-based model routing (Issue #286 Phase 4). When a step declares `constraints.routing_policy.objective: accepted_artifact_cost`, matched candidates are ordered by expected delivered cost per accepted artifact instead of acceptance rate. The v1 cost model is a documented deterministic proxy: each metrics record contributes `cost_class weight (low=1/medium=2/high=4) × duration_ms` proxy cost units; `execution_cost` (all records) + `retry_overhead` (attempt > 1) + `rework_overhead` (rejected reports) form the delivered cost, amortized over accepted artifacts. Sampled models with zero accepted artifacts rank after models that delivered (by delivered cost), zero-sample models last. Without the policy (or with `objective: quality`) behavior is byte-identical to Phase 3.
+- [runtime] `routing_reason` carries the `aac-ranked ...` basis; full per-candidate scoring detail is preserved in the run log via `writeSystemDetached`. No new event types or payload fields (59-event freeze).
+- [DSL] Add `routing_policy` to step `constraints` (experimental): `objective` ∈ `quality` (Phase 3 default) | `accepted_artifact_cost` (Phase 4).
+- [CLI] Add `zigma-flow model-history` (`--json` for machine-readable output): reports per-task-class per-model acceptance counts and AAC figures aggregated from `runs/*/metrics.jsonl`.
+- [docs] Document the AAC proxy model, ordering tiers, and policy schema in `docs/workflow-language.md` §3.11/§5.2 and `docs/architecture.md` §11.1.
+
 ## [v0.8.3] — Patch (2026-08-04)
 
 ### Agent Backend Fixes

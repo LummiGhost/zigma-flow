@@ -168,7 +168,7 @@ Event 是审计事实流，不是终端展示文本。MVP event 至少包含：
 
 - `schema_drift_detected` — 跨 attempt 检查发现该 step 新编译的 output-schema hash 与某历史先例（`agent.invocation.json` 的 `output_schema_sha256`）不一致时发出；warn-only，不改变任何执行语义。payload 含 job_id、step_id、attempt、prior_hash、new_hash
 
-【v0.9 增量（Issue #286 Phase 1/2/3）】事件类型集合不变（仍为 59 种）；仅对既有事件增加可选字段（Phase 3 不新增任何 payload 字段——历史排序依据走既有 `routing_reason` 字符串），先例同 Issue #295 `schema_drift_detected`：增量字段一律 optional、缺失时语义与旧版一致，不违反冻结的事件分类。
+【v0.9 增量（Issue #286 Phase 1/2/3/4）】事件类型集合不变（仍为 59 种）；仅对既有事件增加可选字段（Phase 3/4 不新增任何 payload 字段——历史排序与 AAC 评分依据走既有 `routing_reason` 字符串，完整评分明细经 run log 的 `writeSystemDetached` 保留），先例同 Issue #295 `schema_drift_detected`：增量字段一律 optional、缺失时语义与旧版一致，不违反冻结的事件分类。
 
 约束：
 

@@ -25,6 +25,7 @@ import { nextAction } from "./commands/next.js";
 import { retryAction } from "./commands/retry.js";
 import { abortAction } from "./commands/abort.js";
 import { listRunsAction } from "./commands/list-runs.js";
+import { modelHistoryAction } from "./commands/model-history.js";
 import { showAction } from "./commands/show.js";
 import { runAllAction } from "./commands/run-all.js";
 import { invokeAction } from "./commands/invoke.js";
@@ -498,6 +499,18 @@ async function runProgram(
     .exitOverride()
     .action(async () => {
       await listRunsAction({ zigmaflowDir: cwd() });
+    });
+
+  program
+    .command("model-history")
+    .description("Report per-task-class per-model acceptance and Accepted Artifact Cost stats from runs/*/metrics.jsonl.")
+    .option("--json", "Output as machine-readable JSON.")
+    .exitOverride()
+    .action(async (options: { json?: boolean }) => {
+      await modelHistoryAction({
+        zigmaflowDir: cwd(),
+        ...(options.json !== undefined ? { json: options.json } : {}),
+      });
     });
 
   program

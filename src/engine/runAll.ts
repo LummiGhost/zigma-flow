@@ -65,7 +65,7 @@ import {
   ValidationError,
   WorkflowError,
 } from "../utils/index.js";
-import { buildEffectiveBackendOverride, routeModel, type ModelProfileDefinition } from "../agent/model-router.js";
+import { buildEffectiveBackendOverride, routeModel, type ModelProfileDefinition, type TaskClassHistory } from "../agent/model-router.js";
 import {
   advanceJob,
   createRun,
@@ -79,6 +79,7 @@ import { enterHumanGate } from "./humanGate.js";
 import { recordAgentFailure } from "./recordAgentFailure.js";
 import { classifyFailureKind } from "./attemptModel.js";
 import { appendMetricsRecord, drainMetricsWrites, disposeMetricsWriter, type MetricsStatus } from "../metrics/index.js";
+import { createModelHistoryStore, makeTaskClassKey, type ModelHistoryStore } from "../metrics/history.js";
 import { appendArtifactIndex } from "../artifact/artifactIndex.js";
 import { artifactId } from "../artifact/artifactMetadata.js";
 import type { ArtifactMetadata } from "../artifact/artifactMetadata.js";
@@ -391,6 +392,8 @@ interface ExecuteJobOnceCtx {
   onEvent: ((e: ZigmaFlowEvent) => void) | undefined;
   /** RunLog writer for real-time log forwarding (Issue #280). */
   logWriter: RunLogWriter | undefined;
+  /** Phase 3: per-run lazy single-flight model-history store (one per runAllExecution). */
+  historyStore: ModelHistoryStore;
   /**
    * Engine-resolved execution directory. When a managed workspace is active,
    * every executable step in this job receives this exact absolute path.
@@ -443,6 +446,7 @@ async function executeJobOnce(
     stopAfter,
     saveAllPrompts,
     beforeJobCompleted,
+    historyStore,
   } = ctx;
 
   // Handle virtual traverse jobs: redirect to the target job definition (Issue #179)
@@ -560,7 +564,7 @@ async function executeJobOnce(
       runDir, runId, zigmaflowDir, jobId, wf, state,
       backendResolver, stateStore, eventWriter, clock,
       signal, batchId, onEvent, logWriter, stepDef, stepId,
-      pauseBefore, stopAfter, saveAllPrompts,
+      pauseBefore, stopAfter, saveAllPrompts, historyStore,
       ...(jobCwd !== undefined ? { jobCwd } : {}),
       ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
     });
@@ -576,7 +580,7 @@ async function executeJobOnce(
       backendResolver, stateStore, eventWriter, clock,
       signal, batchId, onEvent, logWriter,
       stepDef, stepId,
-      pauseBefore, stopAfter, saveAllPrompts,
+      pauseBefore, stopAfter, saveAllPrompts, historyStore,
       ...(jobCwd !== undefined ? { jobCwd } : {}),
       ...(beforeJobCompleted !== undefined ? { beforeJobCompleted } : {}),
     });
@@ -611,7 +615,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     backendResolver, stateStore, eventWriter, clock,
     signal, batchId, onEvent, logWriter, stepDef, stepId,
     pauseBefore, stopAfter, saveAllPrompts, jobCwd,
-    beforeJobCompleted,
+    beforeJobCompleted, historyStore,
   } = ctx;
 
   // Legacy external directories and managed-provider handles meet at the
@@ -755,13 +759,43 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
   let routingReason = "routing skipped: step declares no model constraints";
   let selectedProfile: ModelProfileDefinition | undefined;
   try {
+    // ── Phase 3: historical ordering (Issue #286) ──
+    // Load the (job, skill) task-class history when the step can actually be
+    // reordered: a skill (task class), constraints (routing engages), and at
+    // least two candidates (reordering is meaningful). `attempt > 1` forces a
+    // store re-scan so a retry sees the prior attempt's metrics record
+    // (appendAgentMetrics is awaited before the next attempt starts).
+    const candidates = Object.entries(wf.models ?? {}).map(([name, profile]) => ({ name, ...profile }));
+    let taskClassHistory: TaskClassHistory | undefined;
+    if (
+      stepDef.uses !== undefined
+      && stepDef.constraints !== undefined
+      && candidates.length >= 2
+    ) {
+      const history = await historyStore.get(attempt > 1);
+      taskClassHistory = history.get(makeTaskClassKey(jobId, stepDef.uses));
+    }
     const routing = routeModel({
-      candidates: Object.entries(wf.models ?? {}).map(([name, profile]) => ({ name, ...profile })),
+      candidates,
       constraints: stepDef.constraints,
       explicit: explicitOverride,
+      ...(taskClassHistory !== undefined ? { history: taskClassHistory } : {}),
     });
     routingReason = routing.reason;
     selectedProfile = routing.profile;
+    // Traceability: the full post-ordering ranking (candidates, raw counts,
+    // final order) is preserved in the run log — same channel as no-match
+    // evidence below.
+    if (routing.historyRanking !== undefined && logWriter !== undefined) {
+      logWriter.writeSystemDetached(
+        `history-ranked model candidates for ${jobId}/${stepDef.uses}: ${JSON.stringify(routing.historyRanking)}`,
+        {
+          job_id: jobId,
+          step_id: bundle.stepId,
+          attempt,
+        },
+      );
+    }
     if (selectedProfile !== undefined) {
       effectiveBackend = buildEffectiveBackendOverride(stepDef.backend, selectedProfile);
     }
@@ -2001,6 +2035,9 @@ async function runAllExecution(
   const runDir = join(runsDir, runId);
   lifecycle.runDir = runDir;
 
+  // Phase 3: per-run model-history store, refreshed on retry attempts only.
+  const modelHistoryStore = createModelHistoryStore(runsDir);
+
   if (hasCoreCallback) {
     callbackRunDir = runDir;
     lastDeliveredCallbackSequence = await readCoreCallbackCursor(runDir, callerContext!.callbackCorrelationId!);
@@ -2616,6 +2653,7 @@ async function runAllExecution(
         pauseBefore,
         stopAfter,
         saveAllPrompts,
+        historyStore: modelHistoryStore,
       });
     });
 

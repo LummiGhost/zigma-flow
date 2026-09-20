@@ -139,7 +139,7 @@ Event 是审计事实流，不是终端展示文本。MVP event 至少包含：
 
 **Adapter 生命周期（P13）：**
 
-- `agent_invoked` — backend 启动子进程，payload 含 backend_name、command、args_hash、timeout_ms、step_artifact_dir；v0.9 增量：可选 model、routing_reason（Issue #286 Phase 1）
+- `agent_invoked` — backend 启动子进程，payload 含 backend_name、command、args_hash、timeout_ms、step_artifact_dir；v0.9 增量：可选 model、routing_reason（Issue #286 Phase 1；Phase 3 起历史排序时 routing_reason 携带 `history-ranked ...` 依据）
 - `agent_completed` — backend 成功且 report.json 合法，payload 含 duration_ms、stdout/stderr/invocation artifact ref；v0.9 增量：可选 model、cost_class
 - `agent_timed_out` — backend 触发 timeout
 - `agent_failed` — backend 非零退出或 report.json 缺失/非法；v0.9 增量：可选 model
@@ -168,7 +168,7 @@ Event 是审计事实流，不是终端展示文本。MVP event 至少包含：
 
 - `schema_drift_detected` — 跨 attempt 检查发现该 step 新编译的 output-schema hash 与某历史先例（`agent.invocation.json` 的 `output_schema_sha256`）不一致时发出；warn-only，不改变任何执行语义。payload 含 job_id、step_id、attempt、prior_hash、new_hash
 
-【v0.9 增量（Issue #286 Phase 1/2）】事件类型集合不变（仍为 59 种）；仅对既有事件增加可选字段，先例同 Issue #295 `schema_drift_detected`：增量字段一律 optional、缺失时语义与旧版一致，不违反冻结的事件分类。
+【v0.9 增量（Issue #286 Phase 1/2/3）】事件类型集合不变（仍为 59 种）；仅对既有事件增加可选字段（Phase 3 不新增任何 payload 字段——历史排序依据走既有 `routing_reason` 字符串），先例同 Issue #295 `schema_drift_detected`：增量字段一律 optional、缺失时语义与旧版一致，不违反冻结的事件分类。
 
 约束：
 

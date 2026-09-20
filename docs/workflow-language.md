@@ -500,7 +500,7 @@ jobs:
 
 **Stability:** `experimental ⚠` — may change in any minor version release without deprecation
 
-The `models` block is a registry of model profiles that agent steps may be routed to by capability. Profiles are matched statically at step execution time against the step's `constraints` (see [§5.2](#52-agent-step)). Routing selects the first matching profile in declaration order; the matched profile's `model` (and optionally `backend`) is merged into the step's effective backend configuration.
+The `models` block is a registry of model profiles that agent steps may be routed to by capability. Profiles are matched statically at step execution time against the step's `constraints` (see [§5.2](#52-agent-step)). Routing filters candidates by the constraints, then orders the matched set by historical performance (Phase 3; see [Selection and precedence](#selection-and-precedence)), falling back to declaration-order first match when no history exists or fewer than two profiles match. The selected profile's `model` (and optionally `backend`) is merged into the step's effective backend configuration.
 
 #### Fields
 
@@ -523,12 +523,32 @@ Omitted capability fields mean "does not satisfy": a profile without `data_class
 
 1. CLI `--backend` pins the backend **name** only (highest priority); the routed model still applies.
 2. Step `backend.model` / `backend.name` (explicit override) bypasses routing selection. When the model is declared in the `models` registry, the override is still verified against hard constraints; a violation fails the step (hard constraints are not overridable). An override whose model is not in the registry fails closed when hard constraints are declared, and bypasses routing otherwise.
-3. Routing matches profiles against the step `constraints` in declaration order; the first profile satisfying every constraint wins.
+3. Routing filters profiles by the step `constraints`, then orders the matched set historically (below). With no history, a single match, or all-zero-sample candidates, the first matching profile in declaration order wins (Phase 1 behavior).
 4. Global/default backend config (existing fallback).
 
 Hard constraints (`data_classification`, `regions`, `local_required`) are enforced strictly. Economics constraints (`max_cost_class`, `max_latency_class`) only filter candidates and do not apply to explicit overrides.
 
 When no profile satisfies the constraints, the step fails with `ModelRoutingError` (exit code 31) carrying the candidates, the constraints, and per-candidate rejection reasons.
+
+#### Historical ordering (Phase 3)
+
+When at least two profiles match the step constraints, routing reorders the matched set by the aggregated history of the step's **task class**. A task class is the `(job id, skill)` pair — the id of the job the step belongs to and the step's `uses` skill. Steps without `uses` have no task class and are never historically ordered.
+
+History is aggregated by scanning every `runs/<id>/metrics.jsonl` under the active runs directory (the runtime-metrics journal, Phase 2). Records without `skill` or `model`, `cancelled` executions, and records with an invalid `attempt` number or missing `report_accepted` flag are excluded. Per model, the aggregator counts:
+
+- `samples` — terminal records for the class;
+- `accepted` — records with `report_accepted: true`;
+- `retried` — records with `attempt > 1` (each post-first attempt counts once).
+
+Ordering keys (the first non-equal key decides): acceptance rate (`accepted / samples`) descending → retry rate (`retried / samples`) ascending → sample count descending → declaration order. Models with zero samples rank **after** sampled models (in declaration order). Task-class ids are shared across workflows by design — the same `(job id, skill)` pair aggregates history from every workflow that uses it.
+
+The routing basis is recorded in the `agent_invoked` event's `routing_reason` payload:
+
+- History reorder: `matched profile "<name>" (history-ranked 1 of <N> candidate(s) satisfying constraints; acceptance <a>/<s>, retry <r>/<s>)`
+- History consulted, every matched candidate zero-sample: `matched profile "<name>" (first of <N> candidate(s) satisfying constraints; no historical samples for any candidate)`
+- No history or a single match: the Phase 1 string `matched profile "<name>" (first of <N> candidate(s) satisfying constraints)`
+
+History is loaded lazily once per run and re-scanned when a retry attempt starts, so a retry sees the prior attempt's outcome. Unreadable or malformed history is skipped silently — history can never fail routing (worst case: declaration-order behavior).
 
 #### Example
 
@@ -1834,6 +1854,7 @@ jobs:
 | Date | Version | Changes |
 |------|---------|---------|
 | 2026-09-13 | 0.9.0 | v0.9 model routing (ISSUE #286 Phase 1). Added top-level `models` registry (§3.11) and agent step `constraints` (§5.2) for capability-based model routing: class-based cost/latency filters, hard constraints (`data_classification`, `regions`, `local_required`), explicit override verification, routing reason in `agent_invoked` events (`model`, `routing_reason`), structured `ModelRoutingError` (exit code 31). Added validation rules V40–V45. |
+| 2026-09-14 | 0.9.x | v0.9 historical model routing (ISSUE #286 Phase 3). §3.11 selection now history-ranks matching profiles by task class `(job, skill)`: acceptance rate desc → retry rate asc → sample count desc → declaration order; zero-sample profiles rank after sampled profiles; no history or a single match preserves declaration-order first match. |
 | 2026-08-09 | 0.9.0 | v0.9 Schedule Trigger (ISSUE #269). Added `on.schedule` trigger type with `cron`, `timezone`, and `skip_if_running` fields (§3.3). `on.manual` and `on.schedule` are mutually exclusive. Wired `invocation.trigger` through the runtime for `${{ invocation.trigger }}` resolution in step `if:` conditions. |
 | 2026-07-17 | 0.7.0 | v0.7 Execution Model. Added `job_groups` top-level field with `repeat` blocks (§3.10), `group` field on jobs (§4.8), `concurrency` with four policies (§4.9), `failure_policy` with cascade semantics (§4.10). Updated `retry` with `when` FailureKind whitelist (§4.4). Extended expression namespaces: `invocation`, `attempt`, `iteration.previous`, job/step status and attempt (§6.1). Added status functions `success()`, `failure()`, `always()`, `cancelled()` with pre-resolution semantics (§6.4). Relaxed depth limit to 4 for `iteration.previous` paths. Marked `goto_step`, `goto_job`, `retry_job`, `max_visits`, `retry_with`, `on_failure` object form as deprecated with internal translation notes. Added validation rules V29–V39 for job groups, concurrency, and failure policies. Updated full example to demonstrate v0.7 features. |
 | 2026-07-03 | 0.3.0 | Initial published language specification. Covers all top-level fields, all 5 step types, reserved `workflow` type, expression syntax, forbidden constructs, and validation rules. |

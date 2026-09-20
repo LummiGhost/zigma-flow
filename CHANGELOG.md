@@ -19,7 +19,7 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
-## [Unreleased]
+## [v0.8.14] — Accepted Artifact Cost (2026-09-21)
 
 ### Model Routing
 

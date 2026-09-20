@@ -7,6 +7,8 @@ export { abortAction } from "./abort.js";
 export type { AbortActionOpts } from "./abort.js";
 export { listRunsAction } from "./list-runs.js";
 export type { ListRunsActionOpts } from "./list-runs.js";
+export { modelHistoryAction } from "./model-history.js";
+export type { ModelHistoryActionOpts, ModelHistoryReportRow } from "./model-history.js";
 export { showAction } from "./show.js";
 export type { ShowActionOpts } from "./show.js";
 export { runAllAction } from "./run-all.js";

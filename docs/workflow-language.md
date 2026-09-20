@@ -500,7 +500,7 @@ jobs:
 
 **Stability:** `experimental ⚠` — may change in any minor version release without deprecation
 
-The `models` block is a registry of model profiles that agent steps may be routed to by capability. Profiles are matched statically at step execution time against the step's `constraints` (see [§5.2](#52-agent-step)). Routing filters candidates by the constraints, then orders the matched set by historical performance (Phase 3; see [Selection and precedence](#selection-and-precedence)), falling back to declaration-order first match when no history exists or fewer than two profiles match. The selected profile's `model` (and optionally `backend`) is merged into the step's effective backend configuration.
+The `models` block is a registry of model profiles that agent steps may be routed to by capability. Profiles are matched statically at step execution time against the step's `constraints` (see [§5.2](#52-agent-step)). Routing filters candidates by the constraints, then orders the matched set by historical performance (Phase 3; see [Selection and precedence](#selection-and-precedence)) — or by Accepted Artifact Cost when the step declares `routing_policy.objective: accepted_artifact_cost` (Phase 4; see [AAC ordering](#accepted-artifact-cost-ordering-phase-4)) — falling back to declaration-order first match when no history exists or fewer than two profiles match. The selected profile's `model` (and optionally `backend`) is merged into the step's effective backend configuration.
 
 #### Fields
 
@@ -523,7 +523,7 @@ Omitted capability fields mean "does not satisfy": a profile without `data_class
 
 1. CLI `--backend` pins the backend **name** only (highest priority); the routed model still applies.
 2. Step `backend.model` / `backend.name` (explicit override) bypasses routing selection. When the model is declared in the `models` registry, the override is still verified against hard constraints; a violation fails the step (hard constraints are not overridable). An override whose model is not in the registry fails closed when hard constraints are declared, and bypasses routing otherwise.
-3. Routing filters profiles by the step `constraints`, then orders the matched set historically (below). With no history, a single match, or all-zero-sample candidates, the first matching profile in declaration order wins (Phase 1 behavior).
+3. Routing filters profiles by the step `constraints`, then orders the matched set historically (below) or by AAC (Phase 4, only when the step declares `routing_policy.objective: accepted_artifact_cost`). With no history, a single match, or all-zero-sample candidates, the first matching profile in declaration order wins (Phase 1 behavior).
 4. Global/default backend config (existing fallback).
 
 Hard constraints (`data_classification`, `regions`, `local_required`) are enforced strictly. Economics constraints (`max_cost_class`, `max_latency_class`) only filter candidates and do not apply to explicit overrides.
@@ -549,6 +549,59 @@ The routing basis is recorded in the `agent_invoked` event's `routing_reason` pa
 - No history or a single match: the Phase 1 string `matched profile "<name>" (first of <N> candidate(s) satisfying constraints)`
 
 History is loaded lazily once per run and re-scanned when a retry attempt starts, so a retry sees the prior attempt's outcome. Unreadable or malformed history is skipped silently — history can never fail routing (worst case: declaration-order behavior).
+
+#### Accepted Artifact Cost ordering (Phase 4)
+
+When a step declares `routing_policy.objective: accepted_artifact_cost` in its `constraints`, routing orders the matched set by **Accepted Artifact Cost** instead of acceptance rate. AAC is the expected delivered cost per accepted artifact — the optimization target is final delivered cost, not per-inference price (a cheap model that produces rework can cost more in delivery than an expensive one that passes first time). Weighted multi-objective tradeoffs (latency, risk, ...) are out of scope for v1: the model is a simple deterministic scoring, per the issue's design principles.
+
+The Phase 2 metrics journal records no real token costs, so v1 uses a documented **proxy cost model**. Each terminal metrics record contributes proxy cost units:
+
+```text
+cost_units(record) = cost_class_weight(cost_class) × duration_ms
+cost_class_weight: low = 1, medium = 2, high = 4 (missing/unrecognized = high)
+```
+
+Per (task class, model) the aggregator sums:
+
+```text
+execution_cost = Σ cost_units(every terminal record)              — base + retry executions
+retry_overhead = Σ cost_units(records with attempt > 1)           — work that forced a re-run
+rework_overhead = Σ cost_units(records with report_accepted=false) — review + redo of rejected reports
+delivered_cost = execution_cost + retry_overhead + rework_overhead
+AAC            = delivered_cost / max(accepted, 1)
+```
+
+With zero accepted artifacts the whole delivered cost is charged to a single hypothetical artifact (a deterministic worst case); ordering never prefers such a model over one with at least one accepted artifact.
+
+Ordering keys under the AAC policy (the first non-equal key decides, per tier):
+
+1. Sampled models with `accepted > 0`: AAC ascending → acceptance rate descending → declaration order.
+2. Sampled models with `accepted = 0` (never delivered): delivered cost ascending → declaration order — they rank after every tier-1 model.
+3. Zero-sample models: declaration order, after all sampled models.
+
+Without a declared policy (or with `routing_policy.objective: quality`) the Phase 3 acceptance-first ordering applies unchanged. Hard constraints are enforced by filtering before any scoring — scoring never re-admits a rejected profile. With no history, a single match, or all-zero-sample candidates, the Phase 3/Phase 1 fallback behavior and reason strings are preserved exactly.
+
+The routing basis is recorded in the `agent_invoked` event's `routing_reason` payload:
+
+- AAC reorder: `matched profile "<name>" (aac-ranked 1 of <N> candidate(s) satisfying constraints; aac <v> cost-units per accepted artifact, accepted <a>/<s>)`
+- AAC reorder, no candidate has an accepted artifact: `matched profile "<name>" (aac-ranked 1 of <N> candidate(s) satisfying constraints; no accepted artifacts for any candidate, delivered-cost <v> cost-units, accepted 0/<s>)`
+
+The full scoring detail (per-candidate `aac`, `delivered_cost`, `execution_cost`, `retry_overhead`, `rework_overhead` plus the raw counts) is preserved in the run log via `writeSystemDetached` — no event payload changes (59-event freeze).
+
+The `zigma-flow model-history` command reports the same aggregated stats (acceptance counts and AAC figures) per task class and model from `runs/*/metrics.jsonl`.
+
+```yaml
+jobs:
+  main:
+    steps:
+      - id: analyze
+        type: agent
+        uses: zigma/analyze-skill
+        constraints:
+          max_cost_class: medium
+          routing_policy:
+            objective: accepted_artifact_cost
+```
 
 #### Example
 
@@ -962,6 +1015,7 @@ An agent step may declare `constraints` (experimental ⚠) to route its model by
 | `local_required` | `boolean` | Yes | The profile must declare local execution when `true`. |
 | `max_cost_class` | `low` \| `medium` \| `high` | No | Profile `cost_class` must be at most this class. |
 | `max_latency_class` | `low` \| `medium` \| `high` | No | Profile `latency_class` must be at most this class. |
+| `routing_policy.objective` | `quality` \| `accepted_artifact_cost` | No | Phase 4: ordering objective for matched candidates. `quality` = Phase 3 acceptance-first ordering (default); `accepted_artifact_cost` = AAC ordering ([§3.11](#311-models)). |
 
 Profiles come from the workflow top-level `models` registry ([§3.11](#311-models)). When a step declares `constraints`, routing fails the step if no profile matches; steps without `constraints` resolve their backend exactly as before. The selected `model` and the routing reason are recorded in the `agent_invoked` event (`model` and `routing_reason` payload fields).
 

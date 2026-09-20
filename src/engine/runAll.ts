@@ -784,11 +784,13 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
     routingReason = routing.reason;
     selectedProfile = routing.profile;
     // Traceability: the full post-ordering ranking (candidates, raw counts,
-    // final order) is preserved in the run log — same channel as no-match
-    // evidence below.
+    // final order; under the AAC policy also the full cost breakdown) is
+    // preserved in the run log — same channel as no-match evidence below.
     if (routing.historyRanking !== undefined && logWriter !== undefined) {
+      const aacPolicy =
+        stepDef.constraints?.routing_policy?.objective === "accepted_artifact_cost";
       logWriter.writeSystemDetached(
-        `history-ranked model candidates for ${jobId}/${stepDef.uses}: ${JSON.stringify(routing.historyRanking)}`,
+        `${aacPolicy ? "aac-ranked" : "history-ranked"} model candidates for ${jobId}/${stepDef.uses}: ${JSON.stringify(routing.historyRanking)}`,
         {
           job_id: jobId,
           step_id: bundle.stepId,

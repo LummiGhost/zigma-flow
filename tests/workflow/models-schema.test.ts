@@ -86,6 +86,22 @@ describe("models registry + step constraints — valid", () => {
     });
   });
 
+  it("accepts and parses a routing_policy objective on step constraints (Phase 4)", () => {
+    const stepBlock = [
+      "      - id: a1",
+      "        type: agent",
+      "        allow_generic_prompt: true",
+      "        uses: zigma/analyze-skill",
+      "        constraints:",
+      "          routing_policy:",
+      "            objective: accepted_artifact_cost",
+    ].join("\n");
+    const wf = loadWorkflow(makeYaml(VALID_MODELS, stepBlock));
+    expect(wf.jobs["main"]!.steps[0]!.constraints).toEqual({
+      routing_policy: { objective: "accepted_artifact_cost" },
+    });
+  });
+
   it("loads workflows without models or constraints unchanged (backward compat)", () => {
     const yaml = [
       "name: models-schema-test",
@@ -146,6 +162,37 @@ describe("models registry + step constraints — invalid", () => {
     ].join("\n");
     const yaml = makeYaml(VALID_MODELS, stepBlock);
     expect(() => loadWorkflow(yaml)).toThrow(/model constraints are only valid on agent steps/);
+  });
+
+  it("rejects an unknown routing_policy objective value (Phase 4)", () => {
+    const stepBlock = [
+      "      - id: a1",
+      "        type: agent",
+      "        allow_generic_prompt: true",
+      "        uses: zigma/analyze-skill",
+      "        constraints:",
+      "          routing_policy:",
+      "            objective: cheapest_token_price",
+    ].join("\n");
+    expect(() => loadWorkflow(makeYaml("", stepBlock))).toThrow(
+      /constraints\.routing_policy\.objective/,
+    );
+  });
+
+  it("rejects unknown keys inside routing_policy (strict)", () => {
+    const stepBlock = [
+      "      - id: a1",
+      "        type: agent",
+      "        allow_generic_prompt: true",
+      "        uses: zigma/analyze-skill",
+      "        constraints:",
+      "          routing_policy:",
+      "            objective: accepted_artifact_cost",
+      "            weights: {}",
+    ].join("\n");
+    expect(() => loadWorkflow(makeYaml("", stepBlock))).toThrow(
+      /constraints\.routing_policy/,
+    );
   });
 
   it("rejects a non-boolean local_required", () => {

@@ -127,6 +127,17 @@ const StepModelConstraintsSchema = z.object({
   max_cost_class: z.enum(COST_CLASS_VALUES).optional(),
   /** @stability experimental — may change in any minor version release without deprecation */
   max_latency_class: z.enum(COST_CLASS_VALUES).optional(),
+  /**
+   * @stability experimental — may change in any minor version release without deprecation
+   *
+   * Issue #286 Phase 4: ordering objective for matched candidates.
+   * `quality` = Phase 3 acceptance-first ordering (default);
+   * `accepted_artifact_cost` = AAC ordering.
+   */
+  routing_policy: z.object({
+    /** @stability experimental — may change in any minor version release without deprecation */
+    objective: z.enum(["quality", "accepted_artifact_cost"]),
+  }).strict().optional(),
 });
 
 const ModelProfileSchema = z.object({

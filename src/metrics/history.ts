@@ -1,10 +1,15 @@
 /**
- * Model-history aggregation (Issue #286 Phase 3).
+ * Model-history aggregation (Issue #286 Phase 3, extended in Phase 4).
  *
  * Scans every runs/<id>/metrics.jsonl under a runs directory (precedent:
  * src/commands/list-runs.ts scans per-run state.json) and aggregates the
  * Phase 2 metrics records into per-task-class, per-model stats consumed by
  * the router's historical ordering (src/agent/model-router.ts).
+ *
+ * Phase 4 adds the Accepted Artifact Cost proxy accumulators: each folded
+ * record contributes `cost_class_weight × duration_ms` proxy cost units
+ * (there are no real token costs in the Phase 2 journal). The weights are
+ * documented here and consumed by the router's pure AAC helpers.
  *
  * This module imports only TYPES from the router (the same direction as
  * src/metrics/index.ts) — the router never imports metrics at runtime, and
@@ -15,9 +20,32 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
+  CostClass,
   ModelHistoryStats,
   TaskClassHistory,
 } from "../agent/model-router.js";
+
+/**
+ * Phase 4 proxy unit-price weights: a static economics class stands in for
+ * the unknown real price per duration unit (low=1, medium=2, high=4).
+ * Records whose `cost_class` is absent or unrecognized default to `high`
+ * (4) — the same conservative default as the profile schema.
+ */
+const COST_CLASS_WEIGHT: Record<CostClass, number> = { low: 1, medium: 2, high: 4 };
+
+/** Proxy cost units one record contributes: weight × duration_ms. */
+function recordCostUnits(record: Record<string, unknown>): number {
+  const costClass = record["cost_class"];
+  const weight =
+    costClass === "low" || costClass === "medium" || costClass === "high"
+      ? COST_CLASS_WEIGHT[costClass]
+      : COST_CLASS_WEIGHT.high;
+  const duration =
+    typeof record["duration_ms"] === "number" && record["duration_ms"] >= 0
+      ? record["duration_ms"]
+      : 0;
+  return weight * duration;
+}
 
 /**
  * Full aggregated history keyed by task-class key (see `makeTaskClassKey`).
@@ -69,6 +97,9 @@ function foldRecord(
     samples: 0,
     accepted: 0,
     retried: 0,
+    execution_cost: 0,
+    retry_overhead: 0,
+    rework_overhead: 0,
   };
   stats.samples += 1;
   if (r["report_accepted"]) stats.accepted += 1;
@@ -76,6 +107,15 @@ function foldRecord(
   // counts once. Per-attempt records carry exact per-model attribution, so
   // no cross-attempt grouping is needed.
   if (r["attempt"] > 1) stats.retried += 1;
+  // Phase 4 AAC proxy: every record costs weight × duration_ms. A retried
+  // record charges that cost AGAIN as retry overhead (its work forced a
+  // re-run), and a rejected report charges it AGAIN as rework overhead
+  // (review + redo). The three sums feed deliveredCostUnits/AAC in the
+  // router; documented in docs/workflow-language.md §3.11.
+  const units = recordCostUnits(r);
+  stats.execution_cost = (stats.execution_cost ?? 0) + units;
+  if (r["attempt"] > 1) stats.retry_overhead = (stats.retry_overhead ?? 0) + units;
+  if (!r["report_accepted"]) stats.rework_overhead = (stats.rework_overhead ?? 0) + units;
   classMap.set(r["model"], stats);
 }
 
@@ -127,6 +167,46 @@ export async function loadModelHistory(runsDir: string): Promise<ModelHistory> {
     await aggregateRunDir(map, join(runsDir, entry, "metrics.jsonl"));
   }
   return map;
+}
+
+/**
+ * One aggregated (job, skill, model) row — the display shape consumed by
+ * the `zigma-flow model-history` CLI report (Issue #286 Phase 4, inspect /
+ * report acceptance criterion).
+ */
+export interface TaskClassHistoryRow {
+  job: string;
+  skill: string;
+  model: string;
+  stats: ModelHistoryStats;
+}
+
+/**
+ * Phase 4: the same scan as `loadModelHistory`, flattened into per-(job,
+ * skill, model) rows for reporting. Reuses the same aggregation (identical
+ * counts and cost units); rows are sorted by (job, skill, model) for
+ * deterministic output.
+ */
+export async function loadModelHistoryRows(
+  runsDir: string,
+): Promise<TaskClassHistoryRow[]> {
+  const history = await loadModelHistory(runsDir);
+  const rows: TaskClassHistoryRow[] = [];
+  for (const [classKey, classMap] of history) {
+    const separatorIndex = classKey.indexOf(TASK_CLASS_SEPARATOR);
+    const job = classKey.slice(0, separatorIndex);
+    const skill = classKey.slice(separatorIndex + TASK_CLASS_SEPARATOR.length);
+    for (const [model, stats] of classMap) {
+      rows.push({ job, skill, model, stats });
+    }
+  }
+  rows.sort(
+    (a, b) =>
+      a.job.localeCompare(b.job)
+      || a.skill.localeCompare(b.skill)
+      || a.model.localeCompare(b.model),
+  );
+  return rows;
 }
 
 /**

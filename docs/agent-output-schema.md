@@ -84,7 +84,7 @@ directory and its SHA-256 hash is recorded in `agent.invocation.json`.
 - Codex CLI receives the file through `--output-schema` and writes its final
   structured response through `--output-last-message`.
 - Claude Code receives the same schema through `--json-schema`, with
-  `--output-format json`; the backend extracts the structured `result` and
+  `--output-format json`; the backend extracts native `structured_output` (or legacy JSON report text in `result`) and
   writes the canonical `report.json`.
 
 ## Compile-time validation
@@ -247,3 +247,7 @@ Signal (all three channels):
 
 The signal never alters execution: the compiled schema, backend invocation,
 and final-line validation all proceed unchanged.
+
+Claude CLI failures (`is_error`, an error subtype, or a nonzero process exit) are rejected before a report is accepted. The failure includes the provider reason, CLI cost estimate and actual model identifiers when supplied; stdout/stderr remain audit artifacts. A process exit of zero alone is not evidence of a valid report. Markdown fences or prose around report JSON remain invalid, and the Engine still validates the report against the workflow schema.
+
+See [Claude Code programmatic output](https://code.claude.com/docs/en/headless#get-structured-output) for the native wrapper fields. A third-party route that returns only text is not evidence that native schema enforcement worked.

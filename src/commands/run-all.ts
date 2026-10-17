@@ -46,7 +46,7 @@ export interface RunAllOptions {
 export async function runAllAction(
   workflowPath: string,
   options: RunAllOptions,
-): Promise<void> {
+): Promise<RunAllSummary> {
   deprecationWarn("'zigma-flow run-all' is deprecated", "zigma-flow invoke");
   const projectRoot = options.projectRoot ?? process.cwd();
   const absWorkflowPath = await resolveWorkflowPath(workflowPath, projectRoot);
@@ -115,4 +115,5 @@ export async function runAllAction(
       console.log(`  ${job.id}: ${job.status}${activation} (attempt ${job.attempts})`);
     }
   }
+  return summary;
 }

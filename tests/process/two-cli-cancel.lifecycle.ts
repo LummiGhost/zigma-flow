@@ -151,3 +151,29 @@ jobs:
     await expect(access(markerPath, constants.F_OK)).rejects.toMatchObject({ code: "ENOENT" });
   }, 20_000);
 });
+
+
+it("returns nonzero process status for failed invoke and legacy run-all", async () => {
+  const root=await mkdtemp(join(tmpdir(),"zigma-cli-failure-"));
+  try {
+    const workflow=join(root,"fail.yml");
+    await writeFile(workflow,`name: cli-failure
+version: "1"
+jobs:
+  fails:
+    steps:
+      - id: fail
+        type: script
+        run: node -e "process.exit(7)"
+`);
+    for (const command of ["invoke","run-all"]) {
+      const child=runCli(root,[command,workflow,"--task","fail",...(command === "invoke" ? ["--json"] : [])]);
+      expect(await child.exited).toEqual({code:1,signal:null});
+      if(command === "invoke")expect(parseSingleJson(child.stdout)).toMatchObject({status:"failed",exitCode:1});
+    }
+    await writeFile(workflow,"invalid: workflow");
+    const invalid=runCli(root,["invoke",workflow,"--task","fail","--json"]);
+    expect(await invalid.exited).toEqual({code:1,signal:null});
+    expect(parseSingleJson(invalid.stdout)).toMatchObject({runId:"(error)",status:"failed",exitCode:1});
+  } finally {await rm(root,{recursive:true,force:true});}
+},20000);

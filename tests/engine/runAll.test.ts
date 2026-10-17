@@ -1275,3 +1275,30 @@ describe("runAll — terminal reconciliation (T-RUNALL-RECONCILE)", () => {
     }
   );
 });
+
+
+describe("runAll relative prompt files", () => {
+  it("resolves a prompt relative to the workflow on creation and resume", async () => {
+    const sandbox = await makeSandbox();
+    try {
+      for (const resume of [false,true]) {
+        const workflowPath = join(sandbox.projectRoot, `file-${resume}.yml`);
+        await writeFile(join(sandbox.projectRoot,"task.txt"),"RELATIVE_PROMPT_SENTINEL");
+        await writeFile(workflowPath, `name: file-prompt
+version: "1.0.0"
+jobs:
+  work:
+    steps:
+      - id: repair
+        type: agent
+        prompt: {file: task.txt}
+`);
+        const run = resume ? await createRun({workflowPath,task:"resume",runsDir:sandbox.runsDir,skillLockPath:sandbox.skillLockPath,clock:new FakeClock()}) : undefined;
+        FakeBackend.calls=[];
+        const result = await callRunAll({workflowPath,...(run ? {runId:run.runId}:{task:"new"}),runsDir:sandbox.runsDir,zigmaflowDir:sandbox.zigmaflowDir,skillLockPath:sandbox.skillLockPath,backendResolver:()=>new FakeBackend({command:"fake"})});
+        expect(result.status).toBe("completed");
+        expect(FakeBackend.calls[0]?.prompt).toContain("RELATIVE_PROMPT_SENTINEL");
+      }
+    } finally { await rm(sandbox.projectRoot,{recursive:true,force:true}); }
+  });
+});

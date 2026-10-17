@@ -977,3 +977,46 @@ describe("ClaudeCodeBackend — exitCode in result (T-CCB-010)", () => {
     }
   );
 });
+
+
+describe("Claude CLI native envelopes", () => {
+  let temp: TempDirs;
+  beforeEach(async () => { temp = await makeTempDirs(); });
+  afterEach(async () => { await rm(temp.projectRoot, {recursive:true, force:true}); });
+  for (const mode of ["native", "legacy", "error-zero", "error-nonzero"]) {
+    it(`handles ${mode} envelopes without accepting CLI failures`, async () => {
+      const win = process.platform === "win32";
+      const wrapper = join(temp.projectRoot, win ? "cli.cmd" : "cli.sh");
+      await writeFile(wrapper, win ? '@echo off\r\nnode "%~dp0response.mjs"\r\n' : '#!/bin/sh\nnode "$(dirname "$0")/response.mjs"\n');
+      if (!win) await import("node:fs/promises").then(({chmod})=>chmod(wrapper,0o755));
+      const report = {outputs:{answer:"ok"},artifacts:[],signals:[],summary:"ok"};
+      const failed = mode.startsWith("error");
+      const envelope = failed
+        ? {is_error:true,subtype:"error_max_budget_usd",errors:["Reached maximum budget"],total_cost_usd:3.33,modelUsage:{"routed-model":{}}}
+        : mode === "native" ? {is_error:false,structured_output:report,result:""} : {result:JSON.stringify(report)};
+      await writeFile(join(temp.projectRoot,"response.mjs"), `console.log(${JSON.stringify(JSON.stringify(envelope))});process.exit(${mode === "error-nonzero" ? 1 : 0});`);
+      const backend = new ClaudeCodeBackend({command:wrapper,args:[],use_output_format_json:true});
+      const result = await backend.execute({prompt:"respond",reportPath:temp.reportPath,stepDir:temp.stepDir,projectRoot:temp.projectRoot});
+      expect(result.success).toBe(!failed);
+      if (failed) {
+        expect(result.exitCode).toBe(1);
+        expect(result.error).toContain("error_max_budget_usd");
+        expect(result.error).toContain("cost_usd=3.33");
+        expect(result.error).toContain("routed-model");
+        await expect(readFile(temp.reportPath,"utf8")).rejects.toThrow();
+      } else expect(JSON.parse(await readFile(temp.reportPath,"utf8"))).toEqual(report);
+    });
+  }
+});
+
+
+it("does not accept a report flushed before the agent was terminated by a signal", async () => {
+  const temp=await makeTempDirs();
+  try {
+    const code=`require('node:fs').writeFileSync(${JSON.stringify(temp.reportPath)},JSON.stringify({outputs:{},artifacts:[],signals:[],summary:'flushed before termination'}));process.kill(process.pid,'SIGTERM');`;
+    const backend=new ClaudeCodeBackend({command:process.execPath,args:["-e",code]});
+    const result=await backend.execute({prompt:"test",reportPath:temp.reportPath,stepDir:temp.stepDir,projectRoot:temp.projectRoot});
+    expect(result.success).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+  } finally {await rm(temp.projectRoot,{recursive:true,force:true});}
+});

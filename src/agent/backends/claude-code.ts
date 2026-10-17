@@ -140,6 +140,7 @@ export class ClaudeCodeBackend implements AgentBackend {
       const subprocess = execa(this.command, execArgs, {
         cwd: projectRoot,
         env: mergedEnv,
+        reject: false,
         stdout: "pipe" as const,
         stderr: "pipe" as const,
         ...(useStdin ? { input: fullPrompt } : {}),
@@ -200,9 +201,11 @@ export class ClaudeCodeBackend implements AgentBackend {
       // When --output-format json is set, parse stdout as Claude CLI JSON wrapper
       // and extract the agent's response as the report.
       if (outputSchema !== undefined || this.useOutputFormatJson) {
-        let cliResult: { result?: unknown } | undefined;
+        let cliResult: { result?: unknown; structured_output?: unknown; is_error?: boolean; subtype?: string; errors?: string[]; total_cost_usd?: number; modelUsage?: Record<string, unknown> };
         try {
-          cliResult = JSON.parse(result.stdout ?? "") as { result?: unknown };
+          const parsed: unknown = JSON.parse(result.stdout ?? "");
+          if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Expected CLI result object");
+          cliResult = parsed as typeof cliResult;
         } catch {
           return {
             success: false,
@@ -214,16 +217,26 @@ export class ClaudeCodeBackend implements AgentBackend {
             durationMs,
           };
         }
-        // The agent's final text response is in .result; parse it as our report JSON.
+        if (cliResult.is_error === true || (result.exitCode !== 0 || result.signal !== undefined) || cliResult.subtype?.startsWith("error")) {
+          const detail = (cliResult.errors ?? []).join("; ") || (typeof cliResult.result === "string" ? cliResult.result : "Agent execution failed");
+          return {
+            success: false, exitCode: result.exitCode || 1,
+            error: `Claude CLI failure (${cliResult.subtype ?? "unknown"}): ${detail.slice(0, 2000)}; cost_usd=${cliResult.total_cost_usd ?? "unknown"}; models=${Object.keys(cliResult.modelUsage ?? {}).join(",") || "unknown"}`,
+            stdoutPath, stderrPath, invocationPath, durationMs,
+          };
+        }
+        // Native schema mode uses structured_output; older CLIs return report text in result.
         let reportText: string;
         try {
-          reportText = typeof cliResult.result === "string" ? cliResult.result : JSON.stringify(cliResult.result);
+          const report = cliResult.structured_output ?? cliResult.result;
+          reportText = typeof report === "string" ? report : JSON.stringify(report);
+          if (typeof reportText !== "string") throw new Error("Missing structured output");
           JSON.parse(reportText);
         } catch {
           return {
             success: false,
             exitCode: result.exitCode ?? 1,
-            error: `--output-format json: agent response in .result is not valid report JSON.`,
+            error: `--output-format json: agent response in .structured_output/.result is not valid report JSON.`,
             stdoutPath,
             stderrPath,
             invocationPath,
@@ -232,6 +245,11 @@ export class ClaudeCodeBackend implements AgentBackend {
         }
         await writeFile(reportPath, reportText, "utf-8");
       } else {
+        if ((result.exitCode !== 0 || result.signal !== undefined)) {
+          return { success: false, exitCode: result.exitCode ?? 1,
+            error: `Claude Code exited with code ${result.exitCode}. See agent.stdout.log and agent.stderr.log for full output.`,
+            stdoutPath, stderrPath, invocationPath, durationMs };
+        }
         // Check if report.json was written (skip existsSync when --result-file is used,
         // as the CLI guarantees the file exists)
         if (!this.useResultFile && !existsSync(reportPath)) {

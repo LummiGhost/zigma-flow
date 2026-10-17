@@ -566,12 +566,12 @@ describe("runAll — runtime metrics recording (Issue #286 Phase 2)", () => {
     const workflowPath = await writeWorkflow(sandbox, "cancelled", ROUTED_YAML);
 
     const controller = new AbortController();
-    const abortPromise = new Promise<void>((resolve) => {
-      setTimeout(() => {
-        controller.abort();
-        resolve();
-      }, 50);
-    });
+    class CancellingBackend extends MetricsBackend {
+      override async execute(opts: AgentExecuteOptions): Promise<AgentExecuteResult> {
+        controller.abort(); // Cancel only after the agent has actually started.
+        return super.execute(opts);
+      }
+    }
 
     const summaryPromise = callRunAll({
       task: "exercise metrics cancellation",
@@ -580,19 +580,19 @@ describe("runAll — runtime metrics recording (Issue #286 Phase 2)", () => {
       zigmaflowDir: sandbox.projectRoot,
       skillLockPath: sandbox.skillLockPath,
       backendResolver: (stepBackend) =>
-        new MetricsBackend(
+        new CancellingBackend(
           {
             command: "fake",
             ...(typeof stepBackend === "object" && stepBackend.model !== undefined
               ? { model: stepBackend.model }
               : {}),
           },
-          { behavior: "success", delayMs: 100 },
+          { behavior: "success" },
         ),
       clock: new FakeClock(),
       signal: controller.signal,
     });
-    const [summary] = await Promise.all([summaryPromise, abortPromise]);
+    const summary = await summaryPromise;
 
     const events = await readEvents(join(sandbox.runsDir, summary.runId));
     expect(events.some((e) => e.type === "agent_cancelled")).toBe(true);

@@ -377,6 +377,7 @@ function getJobMode(
 // ---------------------------------------------------------------------------
 
 interface ExecuteJobOnceCtx {
+  workflowPath: string;
   runDir: string;
   runId: string;
   zigmaflowDir: string;
@@ -562,6 +563,7 @@ async function executeJobOnce(
   if (stepDef.type === "agent") {
     return executeAgentStep({
       runDir, runId, zigmaflowDir, jobId, wf, state,
+      workflowPath: ctx.workflowPath,
       backendResolver, stateStore, eventWriter, clock,
       signal, batchId, onEvent, logWriter, stepDef, stepId,
       pauseBefore, stopAfter, saveAllPrompts, historyStore,
@@ -576,6 +578,7 @@ async function executeJobOnce(
     stepDef.type === "router"
   ) {
     return executeNonAgentStep({
+      workflowPath: ctx.workflowPath,
       runDir, runId, zigmaflowDir, jobId, wf, state,
       backendResolver, stateStore, eventWriter, clock,
       signal, batchId, onEvent, logWriter,
@@ -655,6 +658,7 @@ async function executeAgentStep(ctx: StepCtx): Promise<JobStepResult> {
       runDir,
       zigmaflowDir,
       workflowDef: wf,
+      workflowPath: ctx.workflowPath,
       state,
       jobId,
     });
@@ -2633,6 +2637,7 @@ async function runAllExecution(
         workspaceError = error instanceof Error ? error.message : String(error);
       }
       return executeJobOnce({
+        workflowPath,
         runDir,
         runId,
         zigmaflowDir,

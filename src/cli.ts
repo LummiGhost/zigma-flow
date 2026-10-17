@@ -265,7 +265,7 @@ async function runProgram(
         process.exit(2);
       }
       const inputs = parseInputs(options.input);
-      await invokeAction(workflowPath, {
+      const result = await invokeAction(workflowPath, {
         projectRoot: cwd(),
         ...(options.task !== undefined ? { task: options.task } : {}),
         ...(options.resume !== undefined ? { resume: options.resume } : {}),
@@ -282,6 +282,7 @@ async function runProgram(
         ...(options.eventFile !== undefined ? { eventFile: options.eventFile } : {}),
         ...(options.contextFile !== undefined ? { contextFile: options.contextFile } : {}),
       });
+      if (result.status === "failed" || result.status === "cancelled") process.exitCode = 1;
     });
 
   program
@@ -355,7 +356,7 @@ async function runProgram(
       const mergedInputs: Record<string, string> | undefined = (options.task !== undefined || inputs !== undefined)
         ? { ...(options.task !== undefined ? { task: options.task } : {}), ...(inputs ?? {}) }
         : undefined;
-      await runAllAction(workflowPath, {
+      const result = await runAllAction(workflowPath, {
         projectRoot: cwd(),
         ...(options.task !== undefined ? { task: options.task } : {}),
         ...(options.resume !== undefined ? { resume: options.resume } : {}),
@@ -364,6 +365,7 @@ async function runProgram(
         ...(options.failFast !== undefined ? { failFast: options.failFast } : {}),
         ...(mergedInputs !== undefined ? { inputs: mergedInputs } : {}),
       });
+      if (result.status === "failed" || result.status === "cancelled") process.exitCode = 1;
     });
 
   program

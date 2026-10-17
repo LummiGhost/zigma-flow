@@ -1008,3 +1008,15 @@ describe("Claude CLI native envelopes", () => {
     });
   }
 });
+
+
+it("does not accept a report flushed before the agent was terminated by a signal", async () => {
+  const temp=await makeTempDirs();
+  try {
+    const code=`require('node:fs').writeFileSync(${JSON.stringify(temp.reportPath)},JSON.stringify({outputs:{},artifacts:[],signals:[],summary:'flushed before termination'}));process.kill(process.pid,'SIGTERM');`;
+    const backend=new ClaudeCodeBackend({command:process.execPath,args:["-e",code]});
+    const result=await backend.execute({prompt:"test",reportPath:temp.reportPath,stepDir:temp.stepDir,projectRoot:temp.projectRoot});
+    expect(result.success).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+  } finally {await rm(temp.projectRoot,{recursive:true,force:true});}
+});

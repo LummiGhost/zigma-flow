@@ -217,7 +217,7 @@ export class ClaudeCodeBackend implements AgentBackend {
             durationMs,
           };
         }
-        if (cliResult.is_error === true || (result.exitCode ?? 0) !== 0 || cliResult.subtype?.startsWith("error")) {
+        if (cliResult.is_error === true || (result.exitCode !== 0 || result.signal !== undefined) || cliResult.subtype?.startsWith("error")) {
           const detail = (cliResult.errors ?? []).join("; ") || (typeof cliResult.result === "string" ? cliResult.result : "Agent execution failed");
           return {
             success: false, exitCode: result.exitCode || 1,
@@ -245,7 +245,7 @@ export class ClaudeCodeBackend implements AgentBackend {
         }
         await writeFile(reportPath, reportText, "utf-8");
       } else {
-        if ((result.exitCode ?? 0) !== 0) {
+        if ((result.exitCode !== 0 || result.signal !== undefined)) {
           return { success: false, exitCode: result.exitCode ?? 1,
             error: `Claude Code exited with code ${result.exitCode}. See agent.stdout.log and agent.stderr.log for full output.`,
             stdoutPath, stderrPath, invocationPath, durationMs };

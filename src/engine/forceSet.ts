@@ -15,7 +15,7 @@ import { readFile } from "node:fs/promises";
 
 import { parse as parseYaml } from "yaml";
 
-import { nextEventId as formatEventId } from "../events/index.js";
+import { nextSequentialEventId } from "../events/sequence.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, JobState } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
@@ -99,17 +99,15 @@ export async function forceSetJob(opts: ForceSetJobOpts): Promise<void> {
 
   // ── 2. Get sequential event id ─────────────────────────────────────────────
 
-  const lastId = await eventWriter.readLastEventId(runDir);
-  let eventCounter = lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
-  function getNextEventId(): string {
-    return formatEventId(++eventCounter);
+  function getNextEventId(): Promise<string> {
+    return nextSequentialEventId(runDir, eventWriter);
   }
 
   const attempt = jobState.attempt ?? 1;
 
   // ── 3. Emit job_state_override audit event ─────────────────────────────────
 
-  const overrideEventId = getNextEventId();
+  const overrideEventId = await getNextEventId();
   await eventWriter.appendEvent(runDir, {
     id: overrideEventId,
     run_id: runId,
@@ -133,7 +131,7 @@ export async function forceSetJob(opts: ForceSetJobOpts): Promise<void> {
 
   if (status === "completed") {
     // Emit job_completed event
-    const jobCompletedId = getNextEventId();
+    const jobCompletedId = await getNextEventId();
     await eventWriter.appendEvent(runDir, {
       id: jobCompletedId,
       run_id: runId,
@@ -222,7 +220,7 @@ export async function forceSetJob(opts: ForceSetJobOpts): Promise<void> {
 
       for (const readyId of updatedReadyIds) {
         if (updatedState.jobs[readyId]?.status === "ready") {
-          const jobReadyId = getNextEventId();
+          const jobReadyId = await getNextEventId();
           await eventWriter.appendEvent(runDir, {
             id: jobReadyId,
             run_id: runId,

@@ -20,7 +20,7 @@ import { parse as parseYaml } from "yaml";
 import { computeReadyJobs } from "../dag/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
 import type { RouterAction } from "../workflow/index.js";
-import { nextEventId as formatEventId } from "../events/index.js";
+import { nextSequentialEventId } from "../events/sequence.js";
 import type { ZigmaFlowEvent } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
@@ -191,11 +191,11 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
 
   // ── 6. Append signal_received event ──────────────────────────────────────
 
-  const lastId = await eventWriter.readLastEventId(runDir);
-  let eventCounter = lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
-  function getNextEventId(): string { return formatEventId(++eventCounter); }
+  function getNextEventId(): Promise<string> {
+    return nextSequentialEventId(runDir, eventWriter);
+  }
 
-  const signalReceivedId = getNextEventId();
+  const signalReceivedId = await getNextEventId();
   const signalReceivedEvent: ZigmaFlowEvent = {
     id: signalReceivedId,
     run_id: runId,
@@ -290,7 +290,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         const li = targetJobState.attempts.length - 1;
         const la = targetJobState.attempts[li]!;
         if (!la.status) {
-          const attemptFailedId = getNextEventId();
+          const attemptFailedId = await getNextEventId();
           const attemptFailedEvent: ZigmaFlowEvent = {
             id: attemptFailedId,
             run_id: runId,
@@ -324,7 +324,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
           : "blocked";
 
       // Emit terminal event (job_blocked or job_failed)
-      const terminalEventId = getNextEventId();
+      const terminalEventId = await getNextEventId();
       if (onExceededStatus === "failed") {
         const terminalEvent: ZigmaFlowEvent = {
           id: terminalEventId,
@@ -393,7 +393,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       if (!la.status) {
         const sealTime = clock.now();
         sealedAttempts[li] = { ...la, status: "failure" as const, ended_at: sealTime };
-        const attemptFailedId = getNextEventId();
+        const attemptFailedId = await getNextEventId();
         const attemptFailedEvent: ZigmaFlowEvent = {
           id: attemptFailedId,
           run_id: runId,
@@ -420,7 +420,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     // WF-7.1: Create new open attempt
     const newAttempt = createOpenAttempt(nextAttempt, clock.now(), reason);
     const newAttempts = [...(sealedAttempts ?? targetJobState.attempts ?? []), newAttempt];
-    const attemptStartedId = getNextEventId();
+    const attemptStartedId = await getNextEventId();
     const attemptStartedEvent: ZigmaFlowEvent = {
       id: attemptStartedId,
       run_id: runId,
@@ -436,7 +436,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     onEvent?.(attemptStartedEvent);
 
     // Append job_retrying
-    const jobRetryingId = getNextEventId();
+    const jobRetryingId = await getNextEventId();
     const jobRetryingEvent: ZigmaFlowEvent = {
       id: jobRetryingId,
       run_id: runId,
@@ -496,7 +496,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     }
 
     // Append job_activated
-    const jobActivatedId = getNextEventId();
+    const jobActivatedId = await getNextEventId();
     const jobActivatedEvent: ZigmaFlowEvent = {
       id: jobActivatedId,
       run_id: runId,
@@ -539,7 +539,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       activatedJobState.attempt = 1;
       activatedJobState.attempts = [openAttempt];
 
-      const attemptStartedId = getNextEventId();
+      const attemptStartedId = await getNextEventId();
       const attemptStartedEvent: ZigmaFlowEvent = {
         id: attemptStartedId,
         run_id: runId,
@@ -607,7 +607,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     if (!proceed) return;
 
     // Append job_skipped
-    const jobSkippedId = getNextEventId();
+    const jobSkippedId = await getNextEventId();
     const jobSkippedEvent: ZigmaFlowEvent = {
       id: jobSkippedId,
       run_id: runId,
@@ -638,7 +638,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         const started = startNextIteration(updatedJobGroups[groupId]!, clock.now(), [sourceJobId]);
         updatedJobGroups[groupId] = started;
 
-        const iterStartedId = getNextEventId();
+        const iterStartedId = await getNextEventId();
         const iterStartedEvent: ZigmaFlowEvent = {
           id: iterStartedId,
           run_id: runId,
@@ -696,7 +696,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
       readyTargetState.attempt = 1;
       readyTargetState.attempts = [openAttempt];
 
-      const attemptStartedId = getNextEventId();
+      const attemptStartedId = await getNextEventId();
       const attemptStartedEvent: ZigmaFlowEvent = {
         id: attemptStartedId,
         run_id: runId,
@@ -750,7 +750,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
 
     if (newVisitCount > maxVisits) {
       // Exceeded — block step and job
-      const exceededEventId = getNextEventId();
+      const exceededEventId = await getNextEventId();
       const exceededEvent: ZigmaFlowEvent = {
         id: exceededEventId,
         run_id: runId,
@@ -784,7 +784,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
     }
 
     // Within limits — append step_revisited event
-    const revisitedEventId = getNextEventId();
+    const revisitedEventId = await getNextEventId();
     const revisitedEvent: ZigmaFlowEvent = {
       id: revisitedEventId,
       run_id: runId,
@@ -826,7 +826,7 @@ export async function applyRoutingAction(opts: ApplyRoutingActionOpts): Promise<
         const started = startNextIteration(updatedJobGroups[groupId]!, clock.now(), [sourceJobId]);
         updatedJobGroups[groupId] = started;
 
-        const iterStartedId = getNextEventId();
+        const iterStartedId = await getNextEventId();
         const iterStartedEvent: ZigmaFlowEvent = {
           id: iterStartedId,
           run_id: runId,

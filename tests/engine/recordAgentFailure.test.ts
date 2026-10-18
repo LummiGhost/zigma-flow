@@ -435,6 +435,12 @@ describe("recordAgentFailure — retry succeeds on 2nd attempt (T-RETRYF-1)", ()
       // Must have job_retrying event
       expect(eventTypes).toContain("job_retrying");
 
+      // Retry must share the allocator used by subsequent agent invocations.
+      // Duplicate IDs make Core discard distinct events as callback replays.
+      expect(events.map((e) => e.id)).toEqual(
+        events.map((_, index) => `evt-${String(index + 1).padStart(3, "0")}`),
+      );
+
       // Must have agent_completed from attempt 2
       expect(eventTypes).toContain("agent_completed");
 

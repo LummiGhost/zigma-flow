@@ -28,7 +28,7 @@ import { readFile } from "node:fs/promises";
 import { parse as parseYaml } from "yaml";
 
 import { computeReadyJobs } from "../dag/index.js";
-import { nextEventId as formatEventId } from "../events/index.js";
+import { nextSequentialEventId } from "../events/sequence.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, JobState, RunState } from "../run/index.js";
 import { loadWorkflowFile } from "../workflow/index.js";
@@ -262,17 +262,14 @@ export async function resetRun(opts: ResetRunOpts): Promise<ResetRunResult> {
 
   // ── 8. Emit events and write state ─────────────────────────────────────────
 
-  const lastId = await eventWriter.readLastEventId(runDir);
-  let eventCounter =
-    lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
-  function getNextEventId(): string {
-    return formatEventId(++eventCounter);
+  function getNextEventId(): Promise<string> {
+    return nextSequentialEventId(runDir, eventWriter);
   }
 
   // Emit job_reset events for each reset job
   for (const change of jobChanges) {
     const jobState = state.jobs[change.jobId]!;
-    const eventId = getNextEventId();
+    const eventId = await getNextEventId();
     await eventWriter.appendEvent(runDir, {
       id: eventId,
       run_id: runId,
@@ -294,7 +291,7 @@ export async function resetRun(opts: ResetRunOpts): Promise<ResetRunResult> {
   // Emit job_ready events for newly-ready jobs
   for (const readyId of nowReadyIds) {
     if (newJobs[readyId]?.status === "ready") {
-      const eventId = getNextEventId();
+      const eventId = await getNextEventId();
       await eventWriter.appendEvent(runDir, {
         id: eventId,
         run_id: runId,
@@ -311,7 +308,7 @@ export async function resetRun(opts: ResetRunOpts): Promise<ResetRunResult> {
 
   // ── 9. Write updated state ─────────────────────────────────────────────────
 
-  const lastEventId = formatEventId(eventCounter);
+  const lastEventId = (await eventWriter.readLastEventId(runDir))!;
 
   await stateStore.updateState(runDir, (current) => {
     const updatedJobs: Record<string, JobState> = { ...current.jobs };

@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { parse as parseYaml } from "yaml";
 
-import { nextEventId } from "../events/index.js";
+import { nextSequentialEventId } from "../events/sequence.js";
 import type { ZigmaFlowEvent } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
@@ -241,16 +241,13 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
 
   // ── 4. Initialize in-process event counter ──────────────────────────────
 
-  const initialLastId = await eventWriter.readLastEventId(runDir);
-  let eventCounter =
-    initialLastId !== null ? parseInt(initialLastId.replace("evt-", ""), 10) : 0;
-  function getNextEventId(): string {
-    return nextEventId(++eventCounter);
+  function getNextEventId(): Promise<string> {
+    return nextSequentialEventId(runDir, eventWriter);
   }
 
   // ── 5. Emit step_started; write intermediate state snapshot ─────────────
 
-  const stepStartedId = getNextEventId();
+  const stepStartedId = await getNextEventId();
   const stepStartedEvent: ZigmaFlowEvent = {
     id: stepStartedId,
     run_id: runId,
@@ -285,7 +282,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
 
   const { action: actionStr, target } = resolveActionFields(matchedAction);
 
-  const routerDecidedId = getNextEventId();
+  const routerDecidedId = await getNextEventId();
   const routerDecidedPayload: {
     job_id: string;
     step_id: string;
@@ -323,7 +320,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
       );
     }
 
-    const stepCompletedId = getNextEventId();
+    const stepCompletedId = await getNextEventId();
     const stepCompletedEvent: ZigmaFlowEvent = {
       id: stepCompletedId,
       run_id: runId,
@@ -354,7 +351,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
     });
     if (!proceed) return;
 
-    const jobCompletedId = getNextEventId();
+    const jobCompletedId = await getNextEventId();
     const jobCompletedEvent: ZigmaFlowEvent = {
       id: jobCompletedId,
       run_id: runId,
@@ -386,7 +383,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
   } else if (actionStr === "fail") {
     const reason = `router decided: fail (case: ${resolvedSwitch})`;
 
-    const stepFailedId = getNextEventId();
+    const stepFailedId = await getNextEventId();
     const stepFailedEvent: ZigmaFlowEvent = {
       id: stepFailedId,
       run_id: runId,
@@ -418,7 +415,7 @@ export async function executeRouterStep(opts: ExecuteRouterStepOpts): Promise<vo
   } else if (actionStr === "block") {
     const reason = `router decided: block (case: ${resolvedSwitch})`;
 
-    const stepFailedId = getNextEventId();
+    const stepFailedId = await getNextEventId();
     const stepFailedEvent: ZigmaFlowEvent = {
       id: stepFailedId,
       run_id: runId,

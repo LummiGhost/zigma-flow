@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readFile } from "node:fs/promises";
 
-import { nextEventId } from "../events/index.js";
+import { nextSequentialEventId } from "../events/sequence.js";
 import type { ZigmaFlowEvent } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
@@ -203,13 +203,13 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
   // ── 4. Initialize in-process event counter ──────────────────────────────
   // Read once here; all subsequent IDs are generated in-process.
 
-  const initialLastId = await eventWriter.readLastEventId(runDir);
-  let eventCounter = initialLastId !== null ? parseInt(initialLastId.replace("evt-", ""), 10) : 0;
-  function getNextEventId(): string { return nextEventId(++eventCounter); }
+  function getNextEventId(): Promise<string> {
+    return nextSequentialEventId(runDir, eventWriter);
+  }
 
   // ── 5. Emit step_started; write state snapshot (ready → running) ─────────
 
-  const stepStartedId = getNextEventId();
+  const stepStartedId = await getNextEventId();
   const stepStartedEvent: ZigmaFlowEvent = {
     id: stepStartedId,
     run_id: runId,
@@ -275,7 +275,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
     // Emit step_poll_started
-    const pollStartedId = getNextEventId();
+    const pollStartedId = await getNextEventId();
     const pollStartedEvent: ZigmaFlowEvent = {
       id: pollStartedId,
       run_id: runId,
@@ -341,7 +341,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       // Check timeout
       if (elapsed >= timeoutMs) {
         // Emit step_poll_timeout
-        const pollTimeoutId = getNextEventId();
+        const pollTimeoutId = await getNextEventId();
         const pollTimeoutEvent: ZigmaFlowEvent = {
           id: pollTimeoutId,
           run_id: runId,
@@ -367,7 +367,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       }
 
       // Emit step_poll_tick
-      const pollTickId = getNextEventId();
+      const pollTickId = await getNextEventId();
       const pollTickEvent: ZigmaFlowEvent = {
         id: pollTickId,
         run_id: runId,
@@ -459,7 +459,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
   // ── 8. Emit check_completed ───────────────────────────────────────────────
   // Per FP-CHECK-EVENT-CHECK-COMPLETED: failures is included only when non-empty.
 
-  const checkCompletedId = getNextEventId();
+  const checkCompletedId = await getNextEventId();
   const checkCompletedPayload: {
     job_id: string;
     step_id: string;
@@ -501,7 +501,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       typeof onPass === "object" &&
       ("retry_job" in onPass || "activate_job" in onPass || "goto_job" in onPass);
 
-    const stepCompletedId = getNextEventId();
+    const stepCompletedId = await getNextEventId();
     const stepCompletedEvent: ZigmaFlowEvent = {
       id: stepCompletedId,
       run_id: runId,
@@ -555,7 +555,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
     });
     if (!proceed) return;
 
-    const jobCompletedId = getNextEventId();
+    const jobCompletedId = await getNextEventId();
     const jobCompletedEvent: ZigmaFlowEvent = {
       id: jobCompletedId,
       run_id: runId,
@@ -600,7 +600,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       const waitingJobState = finalState.jobs[readyId];
       if (waitingJobState?.status !== "waiting") continue;
 
-      const jobReadyId = getNextEventId();
+      const jobReadyId = await getNextEventId();
       const jobReadyEvent: ZigmaFlowEvent = {
         id: jobReadyId,
         run_id: runId,
@@ -633,7 +633,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       (js) => js.status === "completed"
     );
     if (allNonInactiveCompleted && hasCompletedJob) {
-      const runCompletedId = getNextEventId();
+      const runCompletedId = await getNextEventId();
       const runCompletedEvent: ZigmaFlowEvent = {
         id: runCompletedId,
         run_id: runId,
@@ -663,7 +663,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
       ? `check failed: ${firstFailure}`
       : "check failed";
 
-    const stepFailedId = getNextEventId();
+    const stepFailedId = await getNextEventId();
     const stepFailedEvent: ZigmaFlowEvent = {
       id: stepFailedId,
       run_id: runId,
@@ -690,7 +690,7 @@ export async function executeCheckStep(opts: ExecuteCheckStepOpts): Promise<void
 
     // Step-level failure_policy: block — emit job_blocked, set job to blocked.
     if (stepDef.failure_policy === "block") {
-      const jobBlockedId = getNextEventId();
+      const jobBlockedId = await getNextEventId();
       const jobBlockedEvent: ZigmaFlowEvent = {
         id: jobBlockedId,
         run_id: runId,

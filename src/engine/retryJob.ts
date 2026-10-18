@@ -24,7 +24,7 @@ import { readFile } from "node:fs/promises";
 
 import { parse as parseYaml } from "yaml";
 
-import { nextEventId as formatEventId } from "../events/index.js";
+import { nextSequentialEventId } from "../events/sequence.js";
 import type { ZigmaFlowEvent } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock } from "../run/index.js";
@@ -138,10 +138,8 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
 
   // ── 4. Get next event id ───────────────────────────────────────────────────
 
-  const lastId = await eventWriter.readLastEventId(runDir);
-  let eventCounter = lastId !== null ? parseInt(lastId.replace("evt-", ""), 10) : 0;
-  function getNextEventId(): string {
-    return formatEventId(++eventCounter);
+  function getNextEventId(): Promise<string> {
+    return nextSequentialEventId(runDir, eventWriter);
   }
 
   // ── 5. Check if max_attempts exceeded ─────────────────────────────────────
@@ -153,7 +151,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
       const lastAttempt = jobState.attempts[lastIdx]!;
       if (!lastAttempt.status) {
         const sealTime = clock.now();
-        const attemptFailedId = getNextEventId();
+        const attemptFailedId = await getNextEventId();
         const attemptFailedEvent: ZigmaFlowEvent = {
           id: attemptFailedId,
           run_id: runId,
@@ -186,7 +184,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
         ? "failed"
         : "blocked";
 
-    const terminalEventId = getNextEventId();
+    const terminalEventId = await getNextEventId();
     if (onExceededStatus === "failed") {
       const jobFailedEvent: ZigmaFlowEvent = {
         id: terminalEventId,
@@ -250,7 +248,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
         ended_at: sealTime,
       };
 
-      const attemptFailedId = getNextEventId();
+      const attemptFailedId = await getNextEventId();
       const attemptFailedEvent: ZigmaFlowEvent = {
         id: attemptFailedId,
         run_id: runId,
@@ -281,7 +279,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
   }
   const newAttempts = [...(sealedAttempts ?? jobState.attempts ?? []), newAttempt];
 
-  const attemptStartedId = getNextEventId();
+  const attemptStartedId = await getNextEventId();
   const attemptStartedEvent: ZigmaFlowEvent = {
     id: attemptStartedId,
     run_id: runId,
@@ -298,7 +296,7 @@ export async function retryJob(opts: RetryJobOpts): Promise<void> {
 
   // ── 7. Emit job_retrying event ─────────────────────────────────────────────
 
-  const jobRetryingId = getNextEventId();
+  const jobRetryingId = await getNextEventId();
   const jobRetryingEvent: ZigmaFlowEvent = {
     id: jobRetryingId,
     run_id: runId,

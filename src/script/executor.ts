@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { readFile } from "node:fs/promises";
 
-import { nextEventId } from "../events/index.js";
+import { nextSequentialEventId } from "../events/sequence.js";
 import type { ZigmaFlowEvent } from "../events/index.js";
 import { JsonlEventWriter, LocalStateStore } from "../run/index.js";
 import type { Clock, RunState } from "../run/index.js";
@@ -283,16 +283,16 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
   }
 
   // ── 3. Initialize in-process event counter from last persisted event id ─────
-  // Read once here; all subsequent IDs are generated in-process to avoid TOCTOU
-  // races and redundant disk reads between event appends.
+  // Share the run allocator with agents, retries and routing; local counters
+  // can reuse IDs after another executor or retry has appended events.
 
-  const initialLastId = await eventWriter.readLastEventId(runDir);
-  let eventCounter = initialLastId !== null ? parseInt(initialLastId.replace("evt-", ""), 10) : 0;
-  function getNextEventId(): string { return nextEventId(++eventCounter); }
+  function getNextEventId(): Promise<string> {
+    return nextSequentialEventId(runDir, eventWriter);
+  }
 
   // ── 4. Emit step_started; write state snapshot (ready → running) ─────────
 
-  const stepStartedId = getNextEventId();
+  const stepStartedId = await getNextEventId();
   const stepStartedEvent: ZigmaFlowEvent = {
     id: stepStartedId,
     run_id: runId,
@@ -448,7 +448,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
 
   // ── 9. Emit script_completed ──────────────────────────────────────────────
 
-  const scriptCompletedId = getNextEventId();
+  const scriptCompletedId = await getNextEventId();
   const scriptCompletedEvent: ZigmaFlowEvent = {
     id: scriptCompletedId,
     run_id: runId,
@@ -481,7 +481,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
   if (isSuccess) {
     // ── 10a. Success path ──────────────────────────────────────────────────
 
-    const stepCompletedId = getNextEventId();
+    const stepCompletedId = await getNextEventId();
     const stepCompletedEvent: ZigmaFlowEvent = {
       id: stepCompletedId,
       run_id: runId,
@@ -524,7 +524,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       if (!proceed) return;
 
       // Last step — emit job_completed and handle run completion
-      const jobCompletedId = getNextEventId();
+      const jobCompletedId = await getNextEventId();
       const jobCompletedEvent: ZigmaFlowEvent = {
         id: jobCompletedId,
         run_id: runId,
@@ -569,7 +569,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         const waitingJobState = finalState.jobs[readyId];
         if (waitingJobState?.status !== "waiting") continue;
 
-        const jobReadyId = getNextEventId();
+        const jobReadyId = await getNextEventId();
         const jobReadyEvent: ZigmaFlowEvent = {
           id: jobReadyId,
           run_id: runId,
@@ -602,7 +602,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         (js) => js.status === "completed"
       );
       if (allNonInactiveCompleted && hasCompletedJob) {
-        const runCompletedId = getNextEventId();
+        const runCompletedId = await getNextEventId();
         const runCompletedEvent: ZigmaFlowEvent = {
           id: runCompletedId,
           run_id: runId,
@@ -634,7 +634,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
         ? `expected non-zero exit but got exit code ${runnerResult.exitCode}`
         : `exit code ${runnerResult.exitCode}`;
 
-    const stepFailedId = getNextEventId();
+    const stepFailedId = await getNextEventId();
     const stepFailedEvent: ZigmaFlowEvent = {
       id: stepFailedId,
       run_id: runId,
@@ -685,12 +685,7 @@ export async function executeScriptStep(opts: ExecuteScriptStepOpts): Promise<vo
       if (isDelegateAction) {
         const postSnap = await stateStore.readSnapshot(runDir);
         if (postSnap?.jobs[jobId]?.status === "running") {
-          const lastPostId = await eventWriter.readLastEventId(runDir);
-          const postCounter =
-            lastPostId !== null
-              ? parseInt(lastPostId.replace("evt-", ""), 10)
-              : 0;
-          const blockedEventId = nextEventId(postCounter + 1);
+          const blockedEventId = await getNextEventId();
           const blockedEvent: ZigmaFlowEvent = {
             id: blockedEventId,
             run_id: runId,

@@ -485,7 +485,7 @@ async function runProgram(
     .option("--json", "Output result as JSON (for programmatic use).")
     .exitOverride()
     .action(async (options: { reason?: string; run?: string; latest?: boolean; json?: boolean }) => {
-      await abortAction({
+      const result = await abortAction({
         zigmaflowDir: cwd(),
         clock: new SystemClock(),
         ...(options.reason !== undefined ? { reason: options.reason } : {}),
@@ -493,6 +493,7 @@ async function runProgram(
         ...(options.latest !== undefined ? { latest: options.latest } : {}),
         ...(options.json !== undefined ? { json: options.json } : {}),
       });
+      if (result.status === "error") process.exitCode = 1;
     });
 
   program

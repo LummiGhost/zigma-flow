@@ -6,7 +6,8 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { access, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { constants } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -16,6 +17,51 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const cliPath = join(repositoryRoot, "dist", "cli.js");
+
+it("returns nonzero process status for abort JSON errors including failed quiescence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "zigma-abort-error-"));
+  const runId = "20261018-0001";
+  const invocationId = "test-invocation";
+  const server = createServer((socket) => {
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString();
+      if (!buffer.includes("\n")) return;
+      const request = JSON.parse(buffer.split("\n")[0]!);
+      socket.end(JSON.stringify({
+        version: 1, type: "cancel-ack", requestId: request.requestId,
+        runId, invocationId, status: "cancelled", quiescent: false,
+        cleanupErrors: ["synthetic callback delivery failure"],
+      }) + "\n");
+    });
+  });
+  try {
+    const missing = runCli(root, ["abort", "--run", runId, "--json"]);
+    const missingExit = await missing.exited;
+    expect(parseSingleJson(missing.stdout)).toMatchObject({command: "abort", status: "error"});
+    expect(missingExit).toEqual({code: 1, signal: null});
+
+    const control = join(root, ".zigma-flow", "runs", runId, ".control");
+    await mkdir(control, {recursive: true});
+    await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("Missing test owner port");
+    await writeFile(join(control, "invoke-owner.json"), JSON.stringify({
+      version: 1, phase: "active", runId, invocationId, pid: process.pid,
+      host: "127.0.0.1", port: address.port, token: "synthetic-test-token",
+      startedAt: new Date().toISOString(),
+    }));
+    const failed = runCli(root, ["abort", "--run", runId, "--json"]);
+    const failedExit = await failed.exited;
+    expect(parseSingleJson(failed.stdout)).toMatchObject({
+      command: "abort", status: "error", error: {code: "INTERNAL_ERROR"},
+    });
+    expect(failedExit).toEqual({code: 1, signal: null});
+  } finally {
+    if (server.listening) await new Promise<void>((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+    await rm(root, {recursive: true, force: true});
+  }
+}, 20_000);
 
 interface SpawnedCommand {
   child: ChildProcess;

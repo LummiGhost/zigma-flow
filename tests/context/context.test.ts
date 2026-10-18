@@ -42,6 +42,20 @@ import {
   type ContextBundle,
 } from "../../src/context/index.js";
 
+describe("prompt.file path resolution", () => {
+  let root: string;
+  beforeEach(async () => { root = join(tmpdir(), `zigma-prompt-${randomUUID()}`); await mkdir(join(root, "workflow"), { recursive: true }); });
+  afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+  it.each(["relative", "absolute", "absolute-forward-slashes"])("loads a %s prompt without prefixing the workflow directory twice", async (kind) => {
+    const path = join(root, "task.txt");
+    await writeFile(path, "host-owned acceptance task");
+    const file = kind === "relative" ? "../task.txt" : kind === "absolute" ? path : path.replaceAll("\\", "/");
+    const workflowDef = makeWorkflowDef({ jobs: { plan: { steps: [{ id: "draft", type: "agent", prompt: { file } }] } } });
+    const bundle = await buildContext({ runDir: root, zigmaflowDir: root, workflowDef, state: makeRunState({ jobs: { plan: { status: "running" } } }), jobId: "plan", workflowPath: join(root, "workflow", "workflow.yml") });
+    expect(bundle.primaryPrompt?.content).toBe("host-owned acceptance task");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Constants and helper builders
 // ---------------------------------------------------------------------------

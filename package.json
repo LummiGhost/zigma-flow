@@ -3,6 +3,10 @@
   "version": "0.8.15",
   "description": "Local Agent Workflow Runtime / Workflow Harness.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LummiGhost/zigma-flow.git"
+  },
   "type": "module",
   "bin": {
     "zigma-flow": "./dist/cli.js"

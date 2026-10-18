@@ -70,7 +70,11 @@ jobs:
           test -f dist/templates/system-prompt.md
 
       - name: Build package archive
-        run: npm pack
+        # Older tags predate repository metadata required by npm OIDC.
+        # Normalize only this metadata; the tagged runtime source is unchanged.
+        run: |
+          npm pkg set repository.type=git repository.url=git+https://github.com/LummiGhost/zigma-flow.git
+          npm pack
 
       - name: Upload package archive
         uses: actions/upload-artifact@v4

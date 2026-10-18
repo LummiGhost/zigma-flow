@@ -9,7 +9,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { discoverSkillPacks, loadSkillPack, resolveSkillLock, SkillLockSchema } from "../skill-pack/index.js";
 import { FilesystemError, WorkflowError } from "../utils/index.js";
@@ -465,7 +465,7 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
       );
     }
     const wfDir = dirname(opts.workflowPath);
-    const promptFilePath = join(wfDir, promptObj.file);
+    const promptFilePath = resolve(wfDir, promptObj.file);
     let rawContent: string;
     try {
       rawContent = await readFile(promptFilePath, "utf-8");

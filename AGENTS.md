@@ -1,66 +1,21 @@
-# Agent Instructions
+# Agent workflow
 
-These instructions apply to the entire repository. `AGENTS.md` and `CLAUDE.md` are for different agents and must remain identical. When updating either file, update the other in the same change.
+## Rapid iteration
 
-## Project Context
+- Deliver one small, reviewable behavior change at a time. Clarify the outcome, implement, validate by risk, and deliver. A small change needs no separate plan or phase report.
+- Inspect Git status and relevant code before editing. Preserve unrelated work. Use a task branch for code; isolate work when concurrent edits or user changes require it. Read design and history documents to resolve specific questions rather than as a fixed reading bundle.
+- Keep task progress in the existing issue/project when one is used, and keep validation evidence in the PR. Do not duplicate these in Markdown trackers or routine round reports.
+- Run the smallest sufficient checks, then broaden for cross-module or high-risk changes. Preserve executable gates for contracts, lifecycle, cancellation, cleanup and data integrity. Do not repeat successful checks unless the code changed or an unresolved concern warrants it.
+- Submit implementation through a scoped PR with behavior, validation and material limitations. Required CI must pass and an independent reviewer must check the change. Merge and publish only within the maintainer's current authorization; do not add per-step approvals where that authorization already exists.
+- With maintainer authorization, merge a reviewed change promptly and publish a patch for affected packages. Keep documentation in one authoritative location; direct-to-main documentation updates are allowed when the maintainer requests them. Documentation-only changes do not require a package release.
+- Use exact published suite identities for downstream dogfood runs. Stop admission on unknown or incompatible provider state. Separate execution completion, independent acceptance and delivery; do not rewrite runtime state to manufacture success.
+- Preserve failed evidence and report actual interventions. Keep candidate changes isolated from authoritative downstream repositories. Independent review, scientific/data contracts and rollback boundaries remain mandatory when applicable.
 
-- This repository is Zigma Flow, a local Agent Workflow Runtime / Workflow Harness.
-- Before implementation work, read `docs/prd.md`, `docs/architecture.md`, and `docs/mvp-contracts.md`.
-- Treat `docs/mvp-contracts.md` as the execution contract for MVP tasks. Do not introduce MVP out-of-scope features unless the user explicitly changes scope.
-- User instructions in the current conversation take priority over this file.
+These instructions replace older fixed phase paperwork, mandatory report bundles, bulk reading and worktree creation for every edit. Relevant product contracts and technical boundaries still apply. User instructions in the current conversation take precedence.
 
-## Task Tracking
+## Zigma Flow boundaries
 
-- Task assignment and status tracking depend on GitHub Project.
-- For Project-tracked work, confirm the relevant GitHub Project item before implementation when possible.
-- After each task is completed, update the GitHub Project status promptly.
-- Keep the PR, Project item, and completion evidence synchronized.
-
-## Workspace and PR Workflow
-
-For every task or request, use the independent worktree + PR workflow by default.
-
-Exceptions:
-
-- The user explicitly asks to work in the main workspace.
-- The request is only a simple code revision.
-- The request is only a simple documentation revision.
-
-Default workflow:
-
-1. Start from `origin/main`.
-2. Create an independent git worktree as the working directory.
-3. Use a meaningful branch prefix such as `feature/`, `doc/`, `hotfix/`, `test/`, or another prefix that matches the task.
-4. Make all changes only inside the task worktree. Do not modify or disturb the main workspace. Follow the atomic commit principle: each commit should represent a complete, self-contained change that can be reviewed and tested independently.
-5. Before opening the PR, run the necessary test or validation gates for the change.
-6. Submit the PR directly when the task is complete. Do not wait for additional confirmation unless the user explicitly asks for review before PR creation.
-7. After the PR is submitted, clean up the local worktree.
-8. If follow-up changes are requested, recreate a worktree from the PR branch and continue there.
-
-## Validation Gates
-
-- Run the smallest sufficient validation before PR creation.
-- For code changes, prefer focused tests first, then broader gates when the changed surface warrants it.
-- For documentation-only changes, run lightweight validation such as formatting, link checks, or repository-specific doc checks when available.
-- If a required gate cannot be run, record the reason and residual risk in the PR.
-
-## CI and Merge Policy
-
-- **Never merge a PR while CI is failing.** After pushing to a PR branch, always check CI status with `gh pr checks <N>` before merging. If CI is failing, investigate and fix before proceeding.
-- **Check CI before every merge**: run `gh pr checks <N>` and confirm the result shows `pass` (not `fail` or `pending`). A local gate pass does not substitute for CI — the CI environment (Linux, different Node version) may surface issues not caught locally.
-- **Check git state promptly**: before starting any new task, run `git log --oneline --all --graph` to understand the current branch and commit state. Confirm the working branch is based on a clean `origin/main`.
-- After merging, check CI on the main branch push as well: `gh run list --limit 3`.
-
-## Reports
-
-- If the user requests an implementation report, review report, fix report, or similar report, write the report directly as a PR comment.
-- If there is no corresponding PR, write the report to a temporary document, preferably under `docs/temp/`, and mention the path in the final response.
-- Reports should include scope, evidence, validation results, remaining risks, and links to relevant artifacts.
-
-## Repository Guardrails
-
-- Keep implementation aligned with the MVP architecture: Engine owns state transitions; Agent steps submit structured reports and signals; script, check, router, artifact, and event layers provide deterministic execution and audit evidence.
-- Do not let CLI, script, check, router, or adapters bypass Engine state transitions.
-- Do not let Skill Pack definitions own workflow state.
-- Preserve artifact and event auditability for new runtime behavior.
-- Keep changes scoped to the task and avoid opportunistic refactors.
+- Use pnpm and the package's pinned package manager. Check package.json for available commands; focused tests, typecheck and build cover ordinary changes. Use the lifecycle gate when changing process ownership, cancellation or provider integration.
+- Engine owns state transitions. Agent steps submit structured reports and signals; scripts, checks, routers, artifacts and events provide deterministic execution and audit evidence.
+- CLI, scripts, checks, routers and adapters must not bypass Engine transitions. Skill Pack definitions do not own workflow state. Preserve artifact and event auditability.
+- Consult docs/mvp-contracts.md when changing execution contracts and docs/architecture.md when changing boundaries. Keep changes within the requested scope.

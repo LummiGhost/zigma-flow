@@ -19,6 +19,17 @@ Zigma Flow follows semantic versioning for its release tags. Compatibility guara
 
 ---
 
+## [v0.9.0] — Focused Agent Handoffs (2026-11-23)
+
+### Agent Context and Lifecycle
+
+- [runtime] Scope agent handoff context to valuable predecessor data instead of the full run history. Prompts now receive structured outputs and artifact summaries from direct `needs` / `optional_needs` jobs at their latest attempt, plus the immediately preceding step in the current job; unrelated jobs, older attempts, and earlier same-job steps remain auditable without being injected into the next prompt.
+- [runtime] Reject signal-terminated Claude Code executions before accepting a report that was flushed during shutdown, preventing cancelled or terminated agents from being recorded as successful.
+- [runtime] Preserve canonical report instructions in Claude Code agent context and improve generated report handling.
+- [CLI] Propagate lifecycle execution failures through the CLI process exit status so automation can reliably detect failed runs.
+- [tests] Add regression coverage for focused handoffs, latest-attempt filtering, signal-terminated agents, report generation, lifecycle exit status, and cancellation behavior.
+- [docs] Document the focused handoff boundary in the architecture and artifact contracts.
+
 ## [v0.8.14] — Accepted Artifact Cost (2026-09-21)
 
 ### Model Routing

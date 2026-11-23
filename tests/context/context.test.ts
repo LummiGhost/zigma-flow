@@ -916,7 +916,8 @@ describe("buildContext artifact summaries", () => {
 
   it("projects artifacts.jsonl entries to ArtifactSummary (T-CTX-ART-1, UC-CTX-ART-1)", async () => {
     const m1 = makeArtifactMetadata({
-      id: "artifact://x/jobs/plan/attempts/1/steps/draft/n1",
+      id: "artifact://x/jobs/plan/attempts/1/steps/prepare/n1",
+      producer: { job: "plan", step: "prepare", attempt: 1 },
       kind: "note",
       path: "jobs/plan/attempts/1/steps/draft/n1.md",
       summary: "first",
@@ -924,7 +925,8 @@ describe("buildContext artifact summaries", () => {
       content_type: "text/markdown",
     });
     const m2 = makeArtifactMetadata({
-      id: "artifact://x/jobs/plan/attempts/1/steps/draft/log",
+      id: "artifact://x/jobs/plan/attempts/1/steps/prepare/log",
+      producer: { job: "plan", step: "prepare", attempt: 1 },
       kind: "log",
       path: "jobs/plan/attempts/1/steps/draft/log.txt",
       summary: "second",
@@ -936,8 +938,17 @@ describe("buildContext artifact summaries", () => {
     const bundle = await buildContext({
       runDir: sb.runDir,
       zigmaflowDir: sb.zigmaflowDir,
-      workflowDef: makeWorkflowDef(),
-      state: makeRunState(),
+      workflowDef: makeWorkflowDef({
+        jobs: {
+          plan: {
+            steps: [
+              { id: "prepare", type: "script", run: "echo prepare" },
+              { id: "draft", type: "agent", expose: { skills: ["code"] } },
+            ],
+          },
+        },
+      }),
+      state: makeRunState({ jobs: { plan: { status: "running", current_step: "draft", attempt: 1 } } }),
       jobId: "plan",
     });
 
@@ -954,6 +965,67 @@ describe("buildContext artifact summaries", () => {
     expect(bundle.artifacts[0]).not.toHaveProperty("producer");
     expect(bundle.artifacts[0]).not.toHaveProperty("run_id");
     expect(bundle.artifacts[0]).not.toHaveProperty("created_at");
+  });
+
+  it("passes only the immediate predecessor artifact, not full same-job history", async () => {
+    const old = makeArtifactMetadata({ producer: { job: "plan", step: "research", attempt: 1 } });
+    const handoff = makeArtifactMetadata({
+      id: "artifact://x/jobs/plan/attempts/1/steps/prepare/result",
+      producer: { job: "plan", step: "prepare", attempt: 1 },
+    });
+    await seedArtifactsJsonl(sb.runDir, [old, handoff]);
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef: makeWorkflowDef({
+        jobs: {
+          plan: {
+            steps: [
+              { id: "research", type: "script", run: "echo research" },
+              { id: "prepare", type: "script", run: "echo prepare" },
+              { id: "draft", type: "agent", expose: { skills: ["code"] } },
+            ],
+          },
+        },
+      }),
+      state: makeRunState({ jobs: { plan: { status: "running", current_step: "draft", attempt: 1 } } }),
+      jobId: "plan",
+    });
+
+    expect(bundle.artifacts.map((artifact) => artifact.id)).toEqual([handoff.id]);
+  });
+
+  it("passes only latest-attempt artifacts from direct dependency jobs", async () => {
+    const stale = makeArtifactMetadata({ producer: { job: "intake", step: "analyze", attempt: 1 } });
+    const current = makeArtifactMetadata({
+      id: "artifact://x/jobs/intake/attempts/2/steps/analyze/report",
+      producer: { job: "intake", step: "analyze", attempt: 2 },
+    });
+    const unrelated = makeArtifactMetadata({ producer: { job: "research", step: "scan", attempt: 1 } });
+    await seedArtifactsJsonl(sb.runDir, [stale, current, unrelated]);
+
+    const bundle = await buildContext({
+      runDir: sb.runDir,
+      zigmaflowDir: sb.zigmaflowDir,
+      workflowDef: makeWorkflowDef({
+        jobs: {
+          intake: { steps: [{ id: "analyze", type: "agent" }] },
+          research: { steps: [{ id: "scan", type: "agent" }] },
+          plan: { needs: ["intake"], steps: [{ id: "draft", type: "agent", expose: { skills: ["code"] } }] },
+        },
+      }),
+      state: makeRunState({
+        jobs: {
+          intake: { status: "completed", attempt: 2 },
+          research: { status: "completed", attempt: 1 },
+          plan: { status: "running" },
+        },
+      }),
+      jobId: "plan",
+    });
+
+    expect(bundle.artifacts.map((artifact) => artifact.id)).toEqual([current.id]);
   });
 
   it("returns empty artifacts when artifacts.jsonl is missing (T-CTX-ART-2, UC-CTX-ART-2)", async () => {
@@ -1172,6 +1244,7 @@ describe("buildContext upstream outputs", () => {
           steps: [{ id: "intake", type: "agent", uses: "zigma/intake" }],
         },
         plan: {
+          needs: ["intake"],
           steps: [
             {
               id: "draft",
@@ -1204,6 +1277,49 @@ describe("buildContext upstream outputs", () => {
 
     expect(bundle.upstreamOutputs).toBeDefined();
     expect(bundle.upstreamOutputs!["intake"]).toEqual({ summary: "intake done", risks: ["a", "b"] });
+  });
+
+  it("excludes completed jobs that are not direct dependencies", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        intake: { steps: [{ id: "intake", type: "agent" }] },
+        research: { steps: [{ id: "research", type: "agent" }] },
+        plan: { needs: ["intake"], steps: [{ id: "draft", type: "agent", expose: { skills: ["code"] } }] },
+      },
+    });
+    const state = makeRunState({
+      jobs: {
+        intake: { status: "completed", outputs: { summary: "needed" } },
+        research: { status: "completed", outputs: { notes: "unrelated history" } },
+        plan: { status: "running" },
+      },
+    });
+
+    const bundle = await buildContext({ runDir: sb.runDir, zigmaflowDir: sb.zigmaflowDir, workflowDef, state, jobId: "plan" });
+
+    expect(bundle.upstreamOutputs).toEqual({ intake: { summary: "needed" } });
+  });
+
+  it("uses current job outputs as the immediate in-job handoff", async () => {
+    const workflowDef = makeWorkflowDef({
+      jobs: {
+        plan: {
+          steps: [
+            { id: "analyze", type: "agent" },
+            { id: "draft", type: "agent", expose: { skills: ["code"] } },
+          ],
+        },
+      },
+    });
+    const state = makeRunState({
+      jobs: {
+        plan: { status: "running", current_step: "draft", outputs: { summary: "valuable findings" } },
+      },
+    });
+
+    const bundle = await buildContext({ runDir: sb.runDir, zigmaflowDir: sb.zigmaflowDir, workflowDef, state, jobId: "plan" });
+
+    expect(bundle.upstreamOutputs).toEqual({ plan: { summary: "valuable findings" } });
   });
 
   it("excludes the current job from upstreamOutputs (T-CTX-UPSTREAM-2)", async () => {

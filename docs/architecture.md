@@ -211,7 +211,7 @@ Runtime Core must not import CLI, commander, chalk, execa, simple-git, or concre
 | `skill-pack` | 加载 skill.yml，解析 skill-lock，校验 export path 和 hash | 不改变 workflow 状态 |
 | `dag` | 校验 needs、optional_needs、循环依赖，计算 ready jobs | 不访问文件系统 |
 | `engine` | 解释状态机，推进 step/job/run，处理 signal、router、retry、activation；**v0.2**：处理 status return（applyStatusReturn）、context patch（applyContextPatch）、step `if` 求值（evaluateStepCondition）、goto_step 跳转、max_visits 守门；**v0.7**：管理 Attempt 生命周期（createOpenAttempt/sealAttempt）、Job Group 迭代（advanceIteration）、concurrency group 过滤（applyConcurrencyPolicies）、failure policy 级联（evaluateFailurePolicy）、派生 job/iteration/run conclusion | 不直接调用 execa、simple-git 或 terminal 输出；**v0.2**：不允许 patch 触及状态机字段（jobs/signals/attempts/last_event_id 等）；**v0.7**：scheduler 保持纯函数 |
-| `context` | 根据当前 Agent Step、inputs、artifacts、expose 和 permissions 组装上下文；**v0.2**：根据 step 权限按白名单注入 variables 与 context_blocks（read），并标注可写性（write） | 不决定状态转移；**v0.2**：不绕过 step.permissions.variables / context_blocks 白名单 |
+| `context` | 根据当前 Agent Step、inputs、artifacts、expose 和 permissions 组装上下文；交接仅包含直接依赖 job 的最新 attempt 摘要，以及同 job 紧邻前一步的结构化输出和 artifact 摘要；**v0.2**：根据 step 权限按白名单注入 variables 与 context_blocks（read），并标注可写性（write） | 不决定状态转移，不把完整运行历史注入 prompt；**v0.2**：不绕过 step.permissions.variables / context_blocks 白名单 |
 | `prompt` | 将 context 渲染为 Markdown prompt | 不读取未授权资源 |
 | `script` | 执行 inline command 或 Skill Pack script，生成 ScriptResult | 不解释业务状态，只返回结果 |
 | `check` | 执行确定性检查，生成 CheckResult | 不调用 LLM Judge 作为基础 gate |

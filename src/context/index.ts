@@ -15,7 +15,7 @@ import { discoverSkillPacks, loadSkillPack, resolveSkillLock, SkillLockSchema } 
 import { FilesystemError, WorkflowError } from "../utils/index.js";
 import { resolveExpression, serializeExpressionValue } from "../expression/index.js";
 import type { ExpressionContext } from "../expression/index.js";
-import type { WorkflowDefinition } from "../workflow/index.js";
+import type { JobDefinition, WorkflowDefinition } from "../workflow/index.js";
 import type { RunState } from "../run/index.js";
 import type { ArtifactMetadata } from "../artifact/index.js";
 
@@ -278,10 +278,21 @@ async function readSkillLockVersion(
 }
 
 /**
- * Read <runDir>/artifacts.jsonl and project each line to ArtifactSummary.
- * Returns [] if the file is missing or empty.
+ * Read <runDir>/artifacts.jsonl and project relevant handoff records to
+ * ArtifactSummary. Full artifact history remains in the audit index; prompts
+ * receive only the latest direct dependencies and the immediately preceding
+ * step in the current job.
  */
-async function readArtifactSummaries(runDir: string): Promise<ArtifactSummary[]> {
+async function readArtifactSummaries(
+  runDir: string,
+  scope: {
+    dependencyJobs: ReadonlySet<string>;
+    dependencyAttempts: ReadonlyMap<string, number | undefined>;
+    currentJob: string;
+    currentAttempt: number;
+    previousStep?: string;
+  },
+): Promise<ArtifactSummary[]> {
   const artifactsPath = join(runDir, "artifacts.jsonl");
   let content: string;
   try {
@@ -294,7 +305,7 @@ async function readArtifactSummaries(runDir: string): Promise<ArtifactSummary[]>
   }
 
   const lines = content.split("\n").filter((l) => l.trim().length > 0);
-  const summaries: ArtifactSummary[] = [];
+  const metadata: ArtifactMetadata[] = [];
 
   for (const line of lines) {
     let meta: ArtifactMetadata;
@@ -306,17 +317,45 @@ async function readArtifactSummaries(runDir: string): Promise<ArtifactSummary[]>
         { cause: e }
       );
     }
-    summaries.push({
+    metadata.push(meta);
+  }
+
+  const latestAttempts = new Map<string, number>();
+  for (const meta of metadata) {
+    const latest = latestAttempts.get(meta.producer.job) ?? 0;
+    if (meta.producer.attempt > latest) {
+      latestAttempts.set(meta.producer.job, meta.producer.attempt);
+    }
+  }
+
+  return metadata.filter((meta) => {
+    if (
+      scope.previousStep !== undefined &&
+      meta.producer.job === scope.currentJob &&
+      meta.producer.step === scope.previousStep &&
+      meta.producer.attempt === scope.currentAttempt
+    ) {
+      return true;
+    }
+
+    if (!scope.dependencyJobs.has(meta.producer.job)) {
+      return false;
+    }
+    const expectedAttempt = scope.dependencyAttempts.get(meta.producer.job)
+      ?? latestAttempts.get(meta.producer.job);
+    return meta.producer.attempt === expectedAttempt;
+  }).map((meta) => ({
       id: meta.id,
       kind: meta.kind,
       path: meta.path,
       summary: meta.summary,
       size: meta.size,
       content_type: meta.content_type,
-    });
-  }
+    }));
+}
 
-  return summaries;
+function directHandoffJobIds(jobDef: JobDefinition): Set<string> {
+  return new Set([...(jobDef.needs ?? []), ...(jobDef.optional_needs ?? [])]);
 }
 
 function isEnoent(e: unknown): boolean {
@@ -447,6 +486,8 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
       { details: { jobId, stepId } }
     );
   }
+  const stepIndex = jobDef.steps.findIndex((candidate) => candidate.id === stepId);
+  const previousStep = stepIndex > 0 ? jobDef.steps[stepIndex - 1] : undefined;
 
   // -----------------------------------------------------------------------
   // 2. Prompt file resolution (prompt.file + prompt.vars)
@@ -787,18 +828,41 @@ export async function buildContext(opts: BuildContextOpts): Promise<ContextBundl
   // 4. Artifact summaries
   // -----------------------------------------------------------------------
 
-  const artifacts = await readArtifactSummaries(runDir);
+  const dependencyJobs = directHandoffJobIds(jobDef);
+  const dependencyAttempts = new Map<string, number | undefined>();
+  for (const dependencyJob of dependencyJobs) {
+    const dependencyState = state.jobs[dependencyJob];
+    if (dependencyState?.status === "completed") {
+      dependencyAttempts.set(dependencyJob, dependencyState.attempt);
+    } else {
+      dependencyJobs.delete(dependencyJob);
+    }
+  }
+  const artifacts = await readArtifactSummaries(runDir, {
+    dependencyJobs,
+    dependencyAttempts,
+    currentJob: jobId,
+    currentAttempt: jobState?.attempt ?? 1,
+    ...(previousStep !== undefined ? { previousStep: previousStep.id } : {}),
+  });
 
   // -----------------------------------------------------------------------
   // 4b. Collect upstream job outputs (for evidence bundle)
   // -----------------------------------------------------------------------
 
   const upstreamOutputs: Record<string, Record<string, unknown>> = {};
-  for (const [jid, jstate] of Object.entries(state.jobs)) {
-    if (jid === jobId) continue;
-    if (jstate.status !== "completed") continue;
+  for (const jid of dependencyJobs) {
+    const jstate = state.jobs[jid];
+    if (jstate === undefined) continue;
     if (jstate.outputs === undefined || Object.keys(jstate.outputs).length === 0) continue;
     upstreamOutputs[jid] = jstate.outputs;
+  }
+  if (
+    previousStep !== undefined &&
+    jobState?.outputs !== undefined &&
+    Object.keys(jobState.outputs).length > 0
+  ) {
+    upstreamOutputs[jobId] = jobState.outputs;
   }
 
   // -----------------------------------------------------------------------

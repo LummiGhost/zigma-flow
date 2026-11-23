@@ -197,7 +197,7 @@ Artifact 是上下文载体。MVP artifact metadata 至少包含：
 - artifact path 必须是相对 run directory 的安全路径。
 - 禁止绝对路径、`..` 越界和指向 run 外部的 symlink。
 - retry 不得覆盖历史 attempt artifact。
-- prompt 中只放 metadata 和摘要，大内容留在 artifact 文件。
+- prompt 中只放与当前步骤直接相关的 metadata 和摘要，大内容与非直接依赖的历史留在 artifact 文件。直接相关指当前 job 的紧邻前一步，以及 `needs` / `optional_needs` 声明的直接依赖 job 的最新 attempt。
 
 【v0.2 修订】新增 artifact kind：
 
